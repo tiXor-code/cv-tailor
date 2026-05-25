@@ -1,0 +1,18 @@
+{
+  "job_meta": {
+    "company": "TestCo",
+    "role": "Engineer",
+    "location": "Remote",
+    "jd_url": null,
+    "seniority_signal": "mid"
+  },
+  "chosen_summary_id": "default",
+  "summary_rewrite": "Tailored summary.",
+  "experience_ids_ordered": ["job1"],
+  "experience_bullets": {"job1": [0]},
+  "project_ids": [],
+  "skills_emphasis": ["Python"],
+  "jd_keywords_matched": ["python"],
+  "gaps_honest": [],
+  "one_line_pitch": "I am a fit."
+}
