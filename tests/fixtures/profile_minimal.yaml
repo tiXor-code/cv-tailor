@@ -1,0 +1,27 @@
+contact:
+  name: Test User
+  email: test@example.com
+  phone: "+1 555 555 5555"
+  location: Nowhere
+  linkedin: linkedin.com/in/test
+  github: github.com/test
+summary_pool:
+  - id: default
+    text: A test summary.
+experiences:
+  - id: job1
+    role: Engineer
+    company: TestCo
+    location: Remote
+    dates: Jan 2024 – Present
+    bullets:
+      - Did stuff.
+projects: []
+skills:
+  languages: [Python]
+education:
+  - degree: BSc Testing
+    institution: Test U
+    year: 2020
+languages_spoken:
+  - { language: English, level: native }
