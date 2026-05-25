@@ -43,13 +43,13 @@ experiences:
       - Own all infrastructure: domain, hosting, CI/CD, analytics.
   - id: ea
     role: Assistant Content Producer
-    company: Electronic Arts (Bucharest)
+    company: Electronic Arts Sports (EA FC 25 — Ultimate Team)
     location: Bucharest, Romania
-    dates: <fill in start> – Present
+    dates: Aug 2024 – Present
     bullets:
-      - <fill in concrete production bullets — shipped titles, cross-team coordination, etc.>
-      - Coordinated content delivery across engineering, art, and design teams.
-      - Drove production discipline (milestones, dependency tracking, risk surfacing).
+      - Developed and executed content strategies, significantly enhancing player engagement and retention.
+      - Facilitated seamless cross-functional collaboration, optimizing live service updates and content releases.
+      - Utilized data-driven insights to boost player satisfaction and key performance metrics.
   - id: jobmap
     role: Co-founder / Engineer
     company: JobMap (how-to-get-a-job.com)
@@ -61,6 +61,16 @@ experiences:
       - Built Council Step Pipeline (PR #5, merged 2026-03-09) — multi-agent admin workflow.
       - Hardened ingestion across 8+ job APIs (JSearch, Reed, Adzuna, etc.).
       - GEPA prompt optimization, security hardening, enrichment automation.
+  - id: play_for_democracy
+    role: Game Producer
+    company: Play For Democracy — Arden
+    location: Bucharest, Romania
+    dates: Sep 2023 – Aug 2024
+    bullets:
+      - Transitioned from Game Designer to Producer, successfully managing project milestones and launch.
+      - Streamlined development processes through Agile methodologies, achieving a 30% reduction in project timelines.
+      - Represented the project publicly, meeting all stakeholder KPIs and enhancing market visibility.
+      - Invited to Brussels by the European Commission to present the project.
 
 projects:
   - id: icp_agent
