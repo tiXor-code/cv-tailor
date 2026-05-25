@@ -1,0 +1,148 @@
+contact:
+  name: Teodor-Cristian Lutoiu
+  email: contact@teodorlutoiu.com
+  phone: "+40 725 697 859"
+  location: Bucharest, Romania
+  linkedin: linkedin.com/in/teodorlc
+  github: github.com/tiXor-code
+
+summary_pool:
+  - id: ai_automation_engineer
+    text: |
+      AI automation engineer who ships end-to-end systems: LLM orchestration,
+      RAG, retrieval pipelines, n8n workflows, and the production glue around
+      Azure OpenAI, Claude, and embeddings. Built and shipped the Instantly
+      support-agent stack (HMAC webhook -> classify -> embed -> pgvector ->
+      draft -> grade) and the icp-agent prospecting service on Vercel.
+  - id: founder_entrepreneur
+    text: |
+      Founder of Ministeru' Creativ (4-person agency, live since 2026-03-18)
+      and co-founder of JobMap. Builds revenue-generating systems end-to-end:
+      product, infra, content, sales pipeline.
+  - id: full_stack_engineer
+    text: |
+      Full-stack engineer (Python/Flask, Next.js/React, Postgres) with
+      production deployments on Azure App Services and Vercel. Shipped
+      JobMap.ro from zero to 9.3K live jobs and a paid product.
+  - id: content_producer_pivot
+    text: |
+      Assistant Content Producer at EA Bucharest pivoting full-time to
+      AI engineering. Combines games-industry production discipline with
+      hands-on AI/automation shipping.
+
+experiences:
+  - id: ministeru
+    role: Founder
+    company: Ministeru' Creativ
+    location: Bucharest, Romania (remote-first)
+    dates: Mar 2026 – Present
+    bullets:
+      - Founded and run a 4-person creative agency; live since 2026-03-18 at ministerucreativ.com / .ro.
+      - Built leads.ministerucreativ.com — internal AI prospecting dashboard with n8n side-pipeline (Q1 2026 experiment).
+      - Lead client delivery across web, branding, content, and automation.
+      - Own all infrastructure: domain, hosting, CI/CD, analytics.
+  - id: ea
+    role: Assistant Content Producer
+    company: Electronic Arts (Bucharest)
+    location: Bucharest, Romania
+    dates: <fill in start> – Present
+    bullets:
+      - <fill in concrete production bullets — shipped titles, cross-team coordination, etc.>
+      - Coordinated content delivery across engineering, art, and design teams.
+      - Drove production discipline (milestones, dependency tracking, risk surfacing).
+  - id: jobmap
+    role: Co-founder / Engineer
+    company: JobMap (how-to-get-a-job.com)
+    location: Remote
+    dates: <fill in start> – Present
+    bullets:
+      - Shipped how-to-get-a-job.com end-to-end: Next.js frontend, Flask backend, Azure Postgres.
+      - Live with 9.3K jobs, 504 skills, 247 admin tests, paid corrective-protocol product.
+      - Built Council Step Pipeline (PR #5, merged 2026-03-09) — multi-agent admin workflow.
+      - Hardened ingestion across 8+ job APIs (JSearch, Reed, Adzuna, etc.).
+      - GEPA prompt optimization, security hardening, enrichment automation.
+
+projects:
+  - id: icp_agent
+    name: ICP Agent
+    tagline: Ideal-customer-profile prospecting service
+    link: github.com/tiXor-code/icp-agent
+    tech: [Hono, Vercel, Azure OpenAI, Hunter, SerpAPI, Google Sheets]
+    bullets:
+      - Built as Task A of an AI Automation Engineer take-home (Instantly).
+      - One-shot prospecting agent: scrapes signals, scores ICP fit, returns enriched leads to Sheets.
+
+  - id: instantly_support_agent
+    name: Instantly Support Agent
+    tagline: AI customer-support draft generator with self-grading verdict gate
+    link: github.com/tiXor-code/instantly-support-agent
+    tech: [n8n, Azure OpenAI, Supabase pgvector, Claude CLI, HMAC]
+    bullets:
+      - End-to-end pipeline: HMAC webhook -> n8n -> classify -> embed -> pgvector RAG -> Claude draft -> self-grade -> multi-signal verdict gate.
+      - 136 tests across 5 layers including verdict-gate truth table extracted from the workflow JSON.
+      - 12/12 eval agreement, 6/12 auto-rate at calibrated thresholds.
+
+  - id: jobmap_platform
+    name: JobMap (how-to-get-a-job.com)
+    tagline: Job-search platform with multi-agent admin pipeline
+    link: how-to-get-a-job.com
+    tech: [Next.js, Flask, Azure Postgres, Azure App Services, GitHub Actions OIDC, Stripe]
+    bullets:
+      - 9.3K jobs, 504 skills, 247 admin tests, paid corrective-protocol product live.
+      - Council Step Pipeline shipped 2026-03-09 (PR #5).
+
+  - id: orb_trading_bot
+    name: ORB Trading Bot
+    tagline: Opening-range-breakout bot on IBKR micro-futures
+    tech: [Python, IBKR API, pandas, backtesting]
+    bullets:
+      - +$7,121 backtest P&L, 67.7% win rate on MNQ.
+      - Identified robust signals via pattern study (5mo + year-long datasets), filtered out small-sample noise.
+
+  - id: niche_sites
+    name: honestcalculator.com
+    tagline: AdSense content site, 15 US-finance calculators
+    link: honestcalculator.com
+    tech: [Next.js, Vercel, IndexNow, Google Search Console]
+    bullets:
+      - 15 cornerstone calculators (auto-loan-refi, coast-fire, SBA-loan, etc.) — combined TAM ~175K/mo.
+      - Lighthouse desktop 94+/96+/100/100 across sampled pages.
+
+  - id: portfolio
+    name: teodorlutoiu.com
+    tagline: AI-first WebGL editorial portfolio
+    link: teodorlutoiu.com
+    tech: [WebGL, Vite, Hostinger, Cloudflare]
+    bullets:
+      - Shipped redesign 2026-05-21 — root domain live with hashed assets, 200 OK across pages.
+
+skills:
+  languages: [Python, TypeScript, JavaScript, SQL]
+  frameworks: [Next.js, React, Flask, FastAPI, Hono]
+  ai:
+    - Azure OpenAI
+    - Claude API
+    - RAG
+    - pgvector
+    - agentic workflows
+    - prompt engineering
+    - eval design
+  data: [Postgres, Supabase, pgvector, Google Sheets]
+  devops:
+    - Azure App Services
+    - Vercel
+    - GitHub Actions (OIDC)
+    - n8n
+    - Docker
+    - Cloudflare
+  tools: [Git, Figma, Stripe, Playwright]
+
+education:
+  - degree: BSc Computer Games Design and Development
+    institution: University of Worcester
+    year: 2022
+    notes: Dissertation "AI in Games" (predates the LLM wave).
+
+languages_spoken:
+  - { language: Romanian, level: native }
+  - { language: English, level: C2 / fluent }
