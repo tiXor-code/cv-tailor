@@ -1,0 +1,9 @@
+Acme Corp is hiring a Senior Python Engineer.
+
+We are looking for someone with:
+- 3+ years of Python
+- API design experience
+- Familiarity with Postgres
+- Bonus: experience with LLM-based features
+
+Location: Remote (EU).
