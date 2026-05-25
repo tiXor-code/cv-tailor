@@ -1,0 +1,83 @@
+@page {
+  size: A4;
+  margin: 18mm;
+}
+
+body {
+  font-family: Inter, Arial, Helvetica, sans-serif;
+  font-size: 10.5pt;
+  line-height: 1.4;
+  color: #1a1a1a;
+  margin: 0;
+}
+
+h1 {
+  font-size: 18pt;
+  margin: 0 0 2pt 0;
+  font-weight: 700;
+}
+
+h2 {
+  font-size: 12pt;
+  margin: 14pt 0 4pt 0;
+  font-weight: 700;
+  text-transform: none;
+  border-bottom: 0.5pt solid #1a1a1a;
+  padding-bottom: 2pt;
+}
+
+h3 {
+  font-size: 10.5pt;
+  margin: 8pt 0 2pt 0;
+  font-weight: 700;
+}
+
+p {
+  margin: 2pt 0;
+}
+
+.contact-line {
+  font-size: 9pt;
+  color: #1a1a1a;
+}
+
+.meta {
+  font-size: 9pt;
+  color: #666;
+  margin: 0 0 4pt 0;
+}
+
+.tech {
+  font-weight: 400;
+  color: #666;
+  font-size: 9.5pt;
+}
+
+ul {
+  margin: 2pt 0 0 0;
+  padding-left: 14pt;
+}
+
+li {
+  margin: 1pt 0;
+}
+
+.skill-group {
+  font-weight: 700;
+  display: inline-block;
+  min-width: 70pt;
+}
+
+.skill-row {
+  margin: 2pt 0;
+}
+
+a {
+  color: #1a1a1a;
+  text-decoration: none;
+}
+
+article.experience,
+article.project {
+  margin-bottom: 6pt;
+}

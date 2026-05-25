@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>{{ profile.contact.name }} — CV</title>
+  <link rel="stylesheet" href="cv.css">
+</head>
+<body>
+
+<header class="contact">
+  <h1>{{ profile.contact.name }}</h1>
+  <p class="contact-line">
+    {{ profile.contact.location }}
+    &middot; <a href="mailto:{{ profile.contact.email }}">{{ profile.contact.email }}</a>
+    &middot; {{ profile.contact.phone }}
+    &middot; <a href="https://{{ profile.contact.linkedin }}">{{ profile.contact.linkedin }}</a>
+    &middot; <a href="https://{{ profile.contact.github }}">{{ profile.contact.github }}</a>
+  </p>
+</header>
+
+<section>
+  <h2>Summary</h2>
+  <p>{{ fields.summary_rewrite }}</p>
+</section>
+
+<section>
+  <h2>Experience</h2>
+  {% for exp_id in fields.experience_ids_ordered %}
+    {% set exp = experiences_by_id[exp_id] %}
+    <article class="experience">
+      <h3>{{ exp.company }} &mdash; {{ exp.role }}</h3>
+      <p class="meta">{{ exp.dates }} &middot; {{ exp.location }}</p>
+      <ul>
+        {% for idx in fields.experience_bullets.get(exp_id, []) %}
+          <li>{{ exp.bullets[idx] }}</li>
+        {% endfor %}
+      </ul>
+    </article>
+  {% endfor %}
+</section>
+
+{% if fields.project_ids %}
+<section>
+  <h2>Projects</h2>
+  {% for pid in fields.project_ids %}
+    {% set proj = projects_by_id[pid] %}
+    <article class="project">
+      <h3>{{ proj.name }} &mdash; <span class="tech">{{ proj.tech | join(', ') }}</span></h3>
+      <p class="meta">{{ proj.tagline }}{% if proj.link %} &middot; <a href="https://{{ proj.link }}">{{ proj.link }}</a>{% endif %}</p>
+      <ul>
+        {% for b in proj.bullets %}
+          <li>{{ b }}</li>
+        {% endfor %}
+      </ul>
+    </article>
+  {% endfor %}
+</section>
+{% endif %}
+
+<section>
+  <h2>Skills</h2>
+  {% for group, items in profile.skills.items() %}
+    <p class="skill-row">
+      <span class="skill-group">{{ group | title }}:</span>
+      {% for item in items %}
+        {% if item in fields.skills_emphasis %}<strong>{{ item }}</strong>{% else %}{{ item }}{% endif %}{% if not loop.last %}, {% endif %}
+      {% endfor %}
+    </p>
+  {% endfor %}
+</section>
+
+<section>
+  <h2>Education</h2>
+  {% for ed in profile.education %}
+    <p>{{ ed.degree }} &mdash; {{ ed.institution }} &middot; {{ ed.year }}{% if ed.notes %}<br><span class="meta">{{ ed.notes }}</span>{% endif %}</p>
+  {% endfor %}
+</section>
+
+</body>
+</html>
