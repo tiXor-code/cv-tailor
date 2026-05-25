@@ -1,0 +1,7 @@
+pyproject.toml
+src/cv_tailor/__init__.py
+src/cv_tailor.egg-info/PKG-INFO
+src/cv_tailor.egg-info/SOURCES.txt
+src/cv_tailor.egg-info/dependency_links.txt
+src/cv_tailor.egg-info/requires.txt
+src/cv_tailor.egg-info/top_level.txt
