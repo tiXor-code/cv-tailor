@@ -50,18 +50,30 @@ def find_row_by_company_role(worksheet, company: str, role: str) -> int | None:
 
 
 def get_pipeline_worksheet(sa_path: Path | str | None = None, sheet_id: str | None = None):
-    """Lazy import gspread + open the Pipeline worksheet."""
-    import gspread
-    from google.oauth2.service_account import Credentials
+    """Lazy import gspread + open the Pipeline worksheet.
 
-    sa_path = sa_path or os.environ["GOOGLE_SERVICE_ACCOUNT_PATH"]
+    Auth resolution: if a non-empty service-account JSON exists at sa_path
+    (or GOOGLE_SERVICE_ACCOUNT_PATH), use it. Otherwise fall back to
+    Application Default Credentials (set up via
+    `gcloud auth application-default login --scopes=...spreadsheets,drive`).
+    """
+    import gspread
+
+    sa_path = sa_path or os.environ.get("GOOGLE_SERVICE_ACCOUNT_PATH")
     sheet_id = sheet_id or os.environ["SHEET_ID"]
 
     scopes = [
         "https://www.googleapis.com/auth/spreadsheets",
         "https://www.googleapis.com/auth/drive",
     ]
-    creds = Credentials.from_service_account_file(str(sa_path), scopes=scopes)
+
+    if sa_path and Path(sa_path).exists() and Path(sa_path).stat().st_size > 0:
+        from google.oauth2.service_account import Credentials
+        creds = Credentials.from_service_account_file(str(sa_path), scopes=scopes)
+    else:
+        from google.auth import default
+        creds, _ = default(scopes=scopes)
+
     client = gspread.authorize(creds)
     spreadsheet = client.open_by_key(sheet_id)
     try:
