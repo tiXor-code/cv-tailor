@@ -50,17 +50,6 @@ experiences:
       - Developed and executed content strategies, significantly enhancing player engagement and retention.
       - Facilitated seamless cross-functional collaboration, optimizing live service updates and content releases.
       - Utilized data-driven insights to boost player satisfaction and key performance metrics.
-  - id: jobmap
-    role: Co-founder / Engineer
-    company: JobMap (how-to-get-a-job.com)
-    location: Remote
-    dates: <fill in start> – Present
-    bullets:
-      - Shipped how-to-get-a-job.com end-to-end: Next.js frontend, Flask backend, Azure Postgres.
-      - Live with 9.3K jobs, 504 skills, 247 admin tests, paid corrective-protocol product.
-      - Built Council Step Pipeline (PR #5, merged 2026-03-09) — multi-agent admin workflow.
-      - Hardened ingestion across 8+ job APIs (JSearch, Reed, Adzuna, etc.).
-      - GEPA prompt optimization, security hardening, enrichment automation.
   - id: play_for_democracy
     role: Game Producer
     company: Play For Democracy — Arden
