@@ -199,6 +199,9 @@ skills:
     - embeddings
     - pgvector
     - agentic workflows
+    - multi-agent systems
+    - AI system architecture
+    - AI automation
     - prompt engineering
     - eval design
   data: [Postgres, Supabase, pgvector, Google Sheets]
@@ -209,7 +212,13 @@ skills:
     - n8n
     - Docker
     - Cloudflare
-  tools: [Git, Figma, Stripe, Playwright, MCP, Agile, Scrum]
+  tools: [Git, Figma, Stripe, Playwright, MCP, Agile, Scrum, API design, API integration]
+  leadership:
+    - Technical leadership
+    - Client delivery
+    - Stakeholder communication
+    - Cross-functional collaboration
+    - Program management
 
 education:
   - degree: BSc Computer Games Design and Development
