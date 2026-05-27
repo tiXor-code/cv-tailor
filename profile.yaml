@@ -116,7 +116,7 @@ projects:
       - Shipped redesign 2026-05-21 — root domain live with hashed assets, 200 OK across pages.
 
 skills:
-  languages: [Python, TypeScript, JavaScript, SQL]
+  languages: [Python, TypeScript, JavaScript, Node.js, SQL]
   frameworks: [Next.js, React, Flask, FastAPI, Hono]
   ai:
     - Azure OpenAI
