@@ -55,6 +55,15 @@ def main(argv=None):
     if args.role:
         fields.setdefault("job_meta", {})["role"] = args.role
 
+    # Normalize skills_emphasis to canonical case from profile (LLMs often lowercase).
+    canonical_skills = {}
+    for group in profile.get("skills", {}).values():
+        for s in group:
+            canonical_skills[s.lower()] = s
+    fields["skills_emphasis"] = [
+        canonical_skills.get(s.lower(), s) for s in fields.get("skills_emphasis", [])
+    ]
+
     errors = validate(profile, fields)
     if errors:
         invalid_path = Path(args.jd_path).parent / "fields.invalid.json"
