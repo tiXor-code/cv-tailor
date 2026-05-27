@@ -13,6 +13,7 @@
     {{ profile.contact.location }}
     &middot; <a href="mailto:{{ profile.contact.email }}">{{ profile.contact.email }}</a>
     &middot; {{ profile.contact.phone }}
+    {% if profile.contact.website %}&middot; <a href="https://{{ profile.contact.website }}">{{ profile.contact.website }}</a>{% endif %}
     &middot; <a href="https://{{ profile.contact.linkedin }}">{{ profile.contact.linkedin }}</a>
     &middot; <a href="https://{{ profile.contact.github }}">{{ profile.contact.github }}</a>
   </p>
