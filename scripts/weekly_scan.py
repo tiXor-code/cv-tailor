@@ -30,6 +30,7 @@ from cv_tailor.job_sources import fetch_all
 from cv_tailor.match import score_job
 from cv_tailor.digest import format_digest
 from cv_tailor.sheets import get_pipeline_worksheet
+from cv_tailor.telegram import format_digest_for_telegram, send_text
 
 
 def already_tracked_keys(worksheet) -> set:
@@ -116,6 +117,13 @@ def main(argv=None):
     print(f"\ndigest written: {md_path}", file=sys.stderr)
     print(f"json written:   {json_path}", file=sys.stderr)
     print(f"\n{len(scored)} candidates passed threshold (score >= {args.min_score})", file=sys.stderr)
+
+    # 6. Telegram delivery (no-op if env vars not set)
+    tg_text = format_digest_for_telegram(scored, today.isoformat())
+    if send_text(tg_text):
+        print("telegram: sent", file=sys.stderr)
+    else:
+        print("telegram: skipped (not configured or send failed)", file=sys.stderr)
 
 
 if __name__ == "__main__":
