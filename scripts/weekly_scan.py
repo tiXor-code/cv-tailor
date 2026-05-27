@@ -33,14 +33,22 @@ from cv_tailor.sheets import get_pipeline_worksheet
 from cv_tailor.telegram import format_digest_for_telegram, send_text
 
 
+def _normalize(s: str) -> str:
+    """Lowercase, strip whitespace, and remove non-alphanumeric so titles like
+    'Full Stack Engineer Agent Tools' and 'Full Stack Engineer: Agent Tools'
+    dedupe to the same key."""
+    import re
+    return re.sub(r"[^a-z0-9]+", "", s.strip().lower())
+
+
 def already_tracked_keys(worksheet) -> set:
-    """Return set of (company.lower().strip(), role.lower().strip()) already in the Sheet."""
+    """Return set of (company-normalized, role-normalized) already in the Sheet."""
     rows = worksheet.get_all_values()
     keys = set()
     for i, row in enumerate(rows):
         if i == 0 or len(row) < 2:
             continue
-        keys.add((row[0].strip().lower(), row[1].strip().lower()))
+        keys.add((_normalize(row[0]), _normalize(row[1])))
     return keys
 
 
@@ -73,7 +81,7 @@ def main(argv=None):
             ws = get_pipeline_worksheet()
             tracked = already_tracked_keys(ws)
             before = len(jobs)
-            jobs = [j for j in jobs if (j.org.strip().lower(), j.title.strip().lower()) not in tracked]
+            jobs = [j for j in jobs if (_normalize(j.org), _normalize(j.title)) not in tracked]
             print(f"  dropped {before - len(jobs)} already-tracked; {len(jobs)} remain", file=sys.stderr)
         except Exception as e:
             print(f"warning: dedupe failed ({e}); continuing with all jobs", file=sys.stderr)
