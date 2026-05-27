@@ -1,0 +1,16 @@
+sources:
+  - kind: ashby
+    slug: xbowcareers
+    name: XBow
+  - kind: ashby
+    slug: constructor
+    name: Constructor
+  - kind: ashby
+    slug: Deel
+    name: Deel
+  - kind: ashby
+    slug: neurons-lab.com
+    name: Neurons Lab
+  - kind: ashby
+    slug: patrianna
+    name: Patrianna

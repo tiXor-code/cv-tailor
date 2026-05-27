@@ -11,7 +11,7 @@ def test_headers_match_spec():
 
 def test_statuses_match_spec():
     assert STATUSES == [
-        "Saved", "Applied", "Reply", "Interview", "Offer", "Rejected", "Ghosted",
+        "Saved", "Applied", "Reply", "Interview", "Offer", "Rejected", "Ghosted", "Skipped",
     ]
 
 def test_build_row_from_fields_uses_job_meta_and_cv_path():
