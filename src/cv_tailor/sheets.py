@@ -14,7 +14,7 @@ HEADERS = [
 ]
 
 STATUSES = [
-    "Saved", "Applied", "Reply", "Interview", "Offer", "Rejected", "Ghosted",
+    "Saved", "Applied", "Reply", "Interview", "Offer", "Rejected", "Ghosted", "Skipped",
 ]
 
 PIPELINE_TAB = "Pipeline"
