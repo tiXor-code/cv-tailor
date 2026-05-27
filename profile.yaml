@@ -209,7 +209,7 @@ skills:
     - n8n
     - Docker
     - Cloudflare
-  tools: [Git, Figma, Stripe, Playwright]
+  tools: [Git, Figma, Stripe, Playwright, MCP, Agile, Scrum]
 
 education:
   - degree: BSc Computer Games Design and Development
