@@ -39,7 +39,7 @@ experiences:
     dates: Mar 2026 – Present
     bullets:
       - Founded and run a 4-person creative agency; live since 2026-03-18 at ministerucreativ.com / .ro.
-      - Built leads.ministerucreativ.com — internal AI prospecting dashboard with n8n side-pipeline (Q1 2026 experiment).
+      - Built an internal AI prospecting dashboard with an n8n side-pipeline (Q1 2026 experiment).
       - Lead client delivery across web, branding, content, and automation.
       - "Own all infrastructure: domain, hosting, CI/CD, analytics."
   - id: ea
