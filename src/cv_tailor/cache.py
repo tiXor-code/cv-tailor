@@ -57,3 +57,30 @@ def mark_seen(conn: sqlite3.Connection, job, score: int, status: str = "scored")
          datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"), score, status),
     )
     conn.commit()
+
+
+def put_enrichment(conn, domain, is_smb, headcount, signal):
+    conn.execute(
+        "INSERT OR REPLACE INTO company_enrichment "
+        "(domain, is_smb, headcount, signal, fetched_at) VALUES (?,?,?,?,?)",
+        (domain.lower(), 1 if is_smb else 0, headcount, signal,
+         datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")),
+    )
+    conn.commit()
+
+
+def get_enrichment(conn, domain, max_age_days=30):
+    row = conn.execute(
+        "SELECT is_smb, headcount, signal, fetched_at FROM company_enrichment WHERE domain=?",
+        (domain.lower(),),
+    ).fetchone()
+    if not row:
+        return None
+    try:
+        fetched = datetime.strptime(row[3], "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+    except (ValueError, TypeError):
+        return None
+    age_days = (datetime.now(timezone.utc) - fetched).total_seconds() / 86400
+    if age_days > max_age_days:
+        return None
+    return {"is_smb": bool(row[0]), "headcount": row[1], "signal": row[2], "fetched_at": row[3]}
