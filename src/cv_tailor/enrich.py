@@ -7,7 +7,11 @@ HRIS => drop. Phase 2 adds a cached Hunter headcount lookup for ambiguous
 aggregator (serpapi) hits."""
 from __future__ import annotations
 import re
+import json
+import os
+import urllib.request
 from urllib.parse import urlparse
+from cv_tailor.cache import get_enrichment, put_enrichment
 
 JOB_BOARD_DOMAINS = {
     "greenhouse.io", "boards.greenhouse.io", "lever.co", "jobs.lever.co",
@@ -55,18 +59,53 @@ REMOTE_BOARDS = {"remotive", "remoteok", "wwr", "himalayas"}
 ENTERPRISE_HRIS = {"workday", "successfactors", "taleo", "icims", "brassring", "smartrecruiters"}
 
 
-def is_smb(job) -> bool:
+def hunter_headcount(domain, api_key=None):
+    """Return Hunter's employee-range string for a domain, or None on any failure."""
+    api_key = api_key or os.environ.get("HUNTER_API_KEY")
+    if not api_key:
+        return None
+    url = f"https://api.hunter.io/v2/companies/find?domain={domain}&api_key={api_key}"
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": "cv-tailor/0.2"})
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            data = json.load(resp)
+        return ((data or {}).get("data") or {}).get("metrics", {}).get("employees")
+    except Exception:
+        return None
+
+
+def _hunter_verdict(job, conn):
+    """SMB verdict for an ambiguous (serpapi/unknown) source via cached Hunter lookup.
+    Returns True/False, or None if undeterminable (caller falls back to pass)."""
+    domain = company_domain(job)
+    if not domain:
+        return None
+    cached = get_enrichment(conn, domain)
+    if cached is not None:
+        return cached["is_smb"]
+    headcount = hunter_headcount(domain)
+    verdict = classify_headcount(headcount)
+    if verdict is None:
+        return None
+    put_enrichment(conn, domain, is_smb=verdict, headcount=headcount, signal="hunter")
+    return verdict
+
+
+def is_smb(job, conn=None):
     src = (job.source or "").lower()
     if src in ENTERPRISE_HRIS:
         return False
     if src in STARTUP_ATS or src in REMOTE_BOARDS:
         return True
-    # Unknown provenance (e.g. serpapi in Phase 1) passes; Phase 2 Hunter refines.
-    return True
+    # Ambiguous (serpapi / unknown): use Hunter when a cache+conn is available.
+    if conn is not None:
+        v = _hunter_verdict(job, conn)
+        if v is not None:
+            return v
+    return True  # undeterminable -> pass; the LLM scorer is the final arbiter
 
 
-def smb_hint(job) -> str:
-    """A short company-size hint string to feed the LLM scorer."""
+def smb_hint(job, conn=None):
     src = (job.source or "").lower()
     if src in STARTUP_ATS:
         return "startup/scaleup (startup ATS)"
@@ -74,4 +113,10 @@ def smb_hint(job) -> str:
         return "likely startup/scaleup (remote board)"
     if src in ENTERPRISE_HRIS:
         return "enterprise (enterprise HRIS)"
+    if conn is not None:
+        domain = company_domain(job)
+        if domain:
+            cached = get_enrichment(conn, domain)
+            if cached and cached.get("headcount"):
+                return f"~{cached['headcount']} employees (Hunter)"
     return "unknown size"
