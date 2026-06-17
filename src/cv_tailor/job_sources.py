@@ -1,5 +1,6 @@
 """Fetch open jobs from external job sources (Ashby today; more later)."""
 from __future__ import annotations
+import html
 import re
 import urllib.request
 import json
@@ -54,13 +55,60 @@ def fetch_ashby_org(org_slug: str, display_name: str | None = None) -> list[JobP
     return out
 
 
+def _http_json(url: str):
+    req = urllib.request.Request(
+        url, headers={"Accept": "application/json", "User-Agent": "cv-tailor/0.2"})
+    with urllib.request.urlopen(req, timeout=15) as resp:
+        return json.load(resp)
+
+
+def fetch_greenhouse_org(org_slug: str, display_name: str | None = None) -> list[JobPosting]:
+    """Greenhouse public board API. content is HTML-entity-encoded -> unescape then strip."""
+    data = _http_json(f"https://boards-api.greenhouse.io/v1/boards/{org_slug}/jobs?content=true")
+    name = display_name or org_slug
+    out: list[JobPosting] = []
+    for j in data.get("jobs", []):
+        loc = (j.get("location") or {}).get("name", "") if isinstance(j.get("location"), dict) else ""
+        out.append(JobPosting(
+            source="greenhouse", org=name, title=j.get("title") or "",
+            location=loc, url=j.get("absolute_url") or "",
+            description=_strip_html(html.unescape(j.get("content") or "")),
+            raw_id=str(j.get("id") or ""),
+        ))
+    return out
+
+
+def fetch_lever_org(org_slug: str, display_name: str | None = None) -> list[JobPosting]:
+    """Lever public postings API (returns a JSON list)."""
+    data = _http_json(f"https://api.lever.co/v0/postings/{org_slug}?mode=json")
+    name = display_name or org_slug
+    out: list[JobPosting] = []
+    for j in data if isinstance(data, list) else []:
+        cats = j.get("categories") or {}
+        desc = j.get("descriptionPlain") or _strip_html(j.get("description") or "")
+        out.append(JobPosting(
+            source="lever", org=name, title=j.get("text") or "",
+            location=cats.get("location") or "", url=j.get("hostedUrl") or "",
+            description=desc, raw_id=j.get("id") or "",
+        ))
+    return out
+
+
 def fetch_all(sources: list[dict]) -> list[JobPosting]:
-    """sources = [{'kind': 'ashby', 'slug': 'xbowcareers', 'name': 'XBow'}, ...]"""
+    """sources = [{'kind': 'ashby'|'greenhouse'|'lever', 'slug': '...', 'name': '...'}, ...]"""
+    dispatch = {
+        "ashby": fetch_ashby_org,
+        "greenhouse": fetch_greenhouse_org,
+        "lever": fetch_lever_org,
+    }
     out: list[JobPosting] = []
     for s in sources:
-        if s["kind"] == "ashby":
-            try:
-                out.extend(fetch_ashby_org(s["slug"], s.get("name")))
-            except Exception as e:
-                print(f"warning: fetch failed for {s.get('name', s['slug'])}: {e}")
+        fn = dispatch.get(s["kind"])
+        if not fn:
+            print(f"warning: unknown source kind {s['kind']!r}; skipping")
+            continue
+        try:
+            out.extend(fn(s["slug"], s.get("name")))
+        except Exception as e:
+            print(f"warning: fetch failed for {s.get('name', s['slug'])}: {e}")
     return out
