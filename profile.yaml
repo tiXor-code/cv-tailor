@@ -1,3 +1,23 @@
+# Used by Gate 1 (gates.py) to cheaply pre-filter before LLM scoring.
+# Keep roughly in sync with the bias in match.py's scorer prompt.
+target_keywords:
+  - ai engineer
+  - ai automation
+  - agentic
+  - llm
+  - rag
+  - python
+  - typescript
+  - forward deployed
+  - solutions engineer
+  - automation engineer
+  - n8n
+  - prompt
+  - machine learning engineer
+  - backend engineer
+  - full stack
+  - platform engineer
+
 contact:
   name: Teodor-Cristian Lutoiu
   email: contact@teodorlutoiu.com

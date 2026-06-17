@@ -14,3 +14,9 @@ sources:
   - kind: ashby
     slug: patrianna
     name: Patrianna
+  - kind: greenhouse
+    slug: anthropic
+    name: Anthropic
+  - kind: lever
+    slug: lever
+    name: Lever
