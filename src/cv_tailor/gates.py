@@ -6,7 +6,6 @@ from __future__ import annotations
 import re
 
 _REMOTE_RE = re.compile(r"\bremote\b|work from home|\bwfh\b|distributed|work from anywhere", re.I)
-_ONSITE_RE = re.compile(r"on-?site|in-office|hybrid required", re.I)
 _GLOBAL_RE = re.compile(r"\bglobal(ly)?\b|\bworldwide\b|\banywhere\b|\bemea\b", re.I)
 _EU_RE = re.compile(
     r"\b(eu|europe|european|cet|cest|gmt|uk|united kingdom|ireland|germany|france|spain|"
