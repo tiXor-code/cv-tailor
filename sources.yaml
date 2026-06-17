@@ -20,12 +20,12 @@ sources:
   - kind: lever
     slug: lever
     name: Lever
+  # SerpAPI google_jobs rejects continent locations ("Europe") and city locations
+  # return 0; rely on the query text + ltype=1 (remote) and let Gate 1 + the LLM
+  # enforce EU-eligibility. No `location` param.
   - kind: serpapi
     query: "AI engineer remote europe"
-    location: "Europe"
   - kind: serpapi
-    query: "AI automation engineer remote"
-    location: "Europe"
+    query: "AI automation engineer remote europe"
   - kind: serpapi
     query: "forward deployed engineer remote europe"
-    location: "Europe"

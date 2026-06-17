@@ -25,6 +25,16 @@ def test_classify_headcount():
     assert classify_headcount("garbage") is None
 
 
+def test_classify_headcount_hunter_k_suffix():
+    # Real Hunter format uses K/M suffixes — these are the live values observed.
+    assert classify_headcount("51-250") is True       # linear.app — SMB
+    assert classify_headcount("251-1K") is True        # vercel.com — scaleup, kept (lower bound 251)
+    assert classify_headcount("1K-5K") is False         # mid-market — dropped
+    assert classify_headcount("10K-50K") is False       # stripe.com — enterprise, MUST drop
+    assert classify_headcount("100K+") is False         # megacorp — dropped
+    assert classify_headcount("1M") is False
+
+
 def test_is_smb_uses_hunter_for_serpapi(tmp_path, monkeypatch):
     import cv_tailor.enrich as enrich
     from cv_tailor.cache import connect, get_enrichment

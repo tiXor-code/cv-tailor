@@ -40,15 +40,32 @@ def company_domain(job):
     return host
 
 
+def _parse_count(token):
+    """Parse one Hunter count token to an int. Handles K/M suffixes:
+    '250'->250, '1K'->1000, '10K'->10000, '100K+'->100000, '1M'->1000000.
+    Returns None if the token has no number."""
+    t = token.strip().upper().replace("+", "").replace(",", "")
+    m = re.match(r"^(\d+(?:\.\d+)?)\s*([KM]?)$", t)
+    if not m:
+        return None
+    val = float(m.group(1))
+    mult = {"K": 1_000, "M": 1_000_000, "": 1}[m.group(2)]
+    return int(val * mult)
+
+
 def classify_headcount(employees):
-    """Hunter range string -> is_smb (True/False), or None if unknown/unparseable."""
+    """Hunter range string -> is_smb (True/False), or None if unknown/unparseable.
+
+    Hunter returns ranges like '51-250', '251-1K', '10K-50K', '100K+'. We classify
+    SMB on the LOWER bound vs the ceiling (recall-favoring: keep borderline scaleups,
+    drop only clear enterprises; the LLM scorer is the final arbiter)."""
     if not employees:
         return None
-    upper = re.findall(r"\d+", employees.replace(",", ""))
-    if not upper:
+    nums = [_parse_count(tok) for tok in re.split(r"[-–—to/]+", employees.strip(), flags=re.I)]
+    nums = [n for n in nums if n is not None]
+    if not nums:
         return None
-    top = int(upper[-1])  # use the upper bound of the range ("201-500" -> 500)
-    return top <= SMB_EMPLOYEE_CEILING
+    return min(nums) <= SMB_EMPLOYEE_CEILING
 
 
 # Boards/ATS used overwhelmingly by startups & scaleups.
