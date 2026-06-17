@@ -39,7 +39,7 @@ def run_gates(jobs, keywords, conn):
     for j in jobs:
         if not passes_gate1(j, keywords):
             continue
-        if not is_smb(j):
+        if not is_smb(j, conn):
             continue
         if not is_new(conn, j):
             continue
@@ -114,7 +114,7 @@ def main(argv=None):
     scored = []
     for j in survivors:
         try:
-            hint = smb_hint(j)
+            hint = smb_hint(j, conn)
             r = score_job(profile, j.title, f"{j.location} [{hint}]", j.description, client=client)
             s = int(r.get("score", 0))
             mark_seen(conn, j, score=s)

@@ -20,3 +20,12 @@ sources:
   - kind: lever
     slug: lever
     name: Lever
+  - kind: serpapi
+    query: "AI engineer remote europe"
+    location: "Europe"
+  - kind: serpapi
+    query: "AI automation engineer remote"
+    location: "Europe"
+  - kind: serpapi
+    query: "forward deployed engineer remote europe"
+    location: "Europe"
