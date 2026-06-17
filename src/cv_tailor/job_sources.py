@@ -1,10 +1,12 @@
 """Fetch open jobs from external job sources (Ashby today; more later)."""
 from __future__ import annotations
 import html
+import os
 import re
 import urllib.request
 import json
 from dataclasses import dataclass
+from urllib.parse import urlparse, quote_plus
 
 
 @dataclass
@@ -94,6 +96,46 @@ def fetch_lever_org(org_slug: str, display_name: str | None = None) -> list[JobP
     return out
 
 
+_SERP_JOB_BOARDS = ("linkedin.com", "indeed.com", "glassdoor.com", "ziprecruiter.com",
+                    "google.com", "serpapi.com")
+
+
+def _best_company_url(apply_options, share_link):
+    """Prefer an apply link that is NOT a big job board (likelier a company domain),
+    so Hunter can resolve a real company domain later. Fall back to share_link."""
+    for opt in apply_options or []:
+        link = (opt or {}).get("link") or ""
+        host = urlparse(link).netloc.lower()
+        if link and not any(b in host for b in _SERP_JOB_BOARDS):
+            return link
+    if apply_options and apply_options[0].get("link"):
+        return apply_options[0]["link"]
+    return share_link or ""
+
+
+def fetch_serpapi(query: str, location: str | None = None, api_key: str | None = None,
+                  hl: str = "en") -> list[JobPosting]:
+    """Google Jobs via SerpAPI. Remote-only (ltype=1). One page (~10 results)."""
+    api_key = api_key or os.environ.get("SERPAPI_API_KEY")
+    if not api_key:
+        print("warning: SERPAPI_API_KEY not set; skipping serpapi source")
+        return []
+    params = [f"engine=google_jobs", f"q={quote_plus(query)}", f"hl={hl}", "ltype=1",
+              f"api_key={api_key}"]
+    if location:
+        params.append(f"location={quote_plus(location)}")
+    data = _http_json("https://serpapi.com/search?" + "&".join(params))
+    out: list[JobPosting] = []
+    for j in data.get("jobs_results", []):
+        out.append(JobPosting(
+            source="serpapi", org=j.get("company_name") or "",
+            title=j.get("title") or "", location=j.get("location") or "",
+            url=_best_company_url(j.get("apply_options"), j.get("share_link")),
+            description=j.get("description") or "", raw_id=j.get("job_id") or "",
+        ))
+    return out
+
+
 def fetch_all(sources: list[dict]) -> list[JobPosting]:
     """sources = [{'kind': 'ashby'|'greenhouse'|'lever', 'slug': '...', 'name': '...'}, ...]"""
     dispatch = {
@@ -103,6 +145,12 @@ def fetch_all(sources: list[dict]) -> list[JobPosting]:
     }
     out: list[JobPosting] = []
     for s in sources:
+        if s["kind"] == "serpapi":
+            try:
+                out.extend(fetch_serpapi(s["query"], s.get("location")))
+            except Exception as e:
+                print(f"warning: serpapi fetch failed for {s.get('query')!r}: {e}")
+            continue
         fn = dispatch.get(s["kind"])
         if not fn:
             print(f"warning: unknown source kind {s['kind']!r}; skipping")
