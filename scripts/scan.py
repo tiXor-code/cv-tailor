@@ -10,6 +10,7 @@ Usage: python scripts/scan.py [--min-score 7] [--max-results 10] [--dry-run]
 """
 import argparse
 import json
+import re
 import sys
 from datetime import date
 from pathlib import Path
@@ -50,6 +51,34 @@ def should_send(scored):
     return len(scored) > 0
 
 
+def _norm(s):
+    return re.sub(r"[^a-z0-9]+", "", (s or "").strip().lower())
+
+
+def drop_crm_tracked(jobs, tracked_keys):
+    """Gate 3's CRM half (SQLite is the other). Drop jobs whose (company, role)
+    already appears in the Sheets CRM. tracked_keys is a set of
+    (norm_company, norm_role) tuples."""
+    return [j for j in jobs if (_norm(j.org), _norm(j.title)) not in tracked_keys]
+
+
+def crm_tracked_keys():
+    """Read (norm_company, norm_role) pairs already tracked in the Sheets CRM.
+    Returns an empty set on any failure so the scan degrades to SQLite-only dedup."""
+    try:
+        from cv_tailor.sheets import get_pipeline_worksheet
+        rows = get_pipeline_worksheet().get_all_values()
+    except Exception as e:
+        print(f"warning: CRM dedup unavailable ({e}); SQLite-only", file=sys.stderr)
+        return set()
+    keys = set()
+    for i, row in enumerate(rows):
+        if i == 0 or len(row) < 2:
+            continue
+        keys.add((_norm(row[0]), _norm(row[1])))
+    return keys
+
+
 def parse_args(argv):
     p = argparse.ArgumentParser()
     p.add_argument("--min-score", type=int, default=7)
@@ -74,6 +103,12 @@ def main(argv=None):
 
     survivors = run_gates(jobs, keywords, conn)
     print(f"  {len(survivors)} passed gates (remote/EU/SMB/new)", file=sys.stderr)
+
+    tracked = crm_tracked_keys()
+    if tracked:
+        before = len(survivors)
+        survivors = drop_crm_tracked(survivors, tracked)
+        print(f"  {len(survivors)} after CRM dedup (dropped {before - len(survivors)})", file=sys.stderr)
 
     client = build_azure_client()
     scored = []

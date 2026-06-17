@@ -33,3 +33,16 @@ def test_funnel_filters_and_dedupes(tmp_path):
 def test_quiet_digest_decides_send():
     assert scan.should_send([]) is False
     assert scan.should_send([{"score": 8}]) is True
+
+
+def test_drop_crm_tracked():
+    jobs = [
+        _job("greenhouse", "1", "AI Engineer", "Remote - EU"),
+        _job("lever", "2", "Backend Engineer", "Remote - EU"),
+    ]
+    # "Co1" / "AI Engineer" already tracked (normalized) -> dropped; whitespace/case-insensitive.
+    tracked = {("co1", "aiengineer")}
+    kept = scan.drop_crm_tracked(jobs, tracked)
+    assert [j.raw_id for j in kept] == ["2"]
+    # empty tracked set keeps everything
+    assert len(scan.drop_crm_tracked(jobs, set())) == 2

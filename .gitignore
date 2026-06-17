@@ -5,6 +5,10 @@
 # Job artifacts (per-application output)
 jobs/
 
+# Runtime data + scan outputs (SQLite dedup cache, dated digests, logs)
+data/
+scans/
+
 # Python
 __pycache__/
 *.py[cod]
