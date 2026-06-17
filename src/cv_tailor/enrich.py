@@ -6,6 +6,46 @@ free signal. Startup ATSs and remote-startup boards => SMB-likely; enterprise
 HRIS => drop. Phase 2 adds a cached Hunter headcount lookup for ambiguous
 aggregator (serpapi) hits."""
 from __future__ import annotations
+import re
+from urllib.parse import urlparse
+
+JOB_BOARD_DOMAINS = {
+    "greenhouse.io", "boards.greenhouse.io", "lever.co", "jobs.lever.co",
+    "ashbyhq.com", "jobs.ashbyhq.com", "workable.com", "linkedin.com",
+    "indeed.com", "glassdoor.com", "google.com", "ziprecruiter.com",
+    "remotive.com", "remoteok.com", "weworkremotely.com", "himalayas.app",
+    "wellfound.com", "builtin.com", "smartrecruiters.com",
+}
+SMB_EMPLOYEE_CEILING = 500  # startups & scaleups up to ~500
+
+
+def _registrable(host: str) -> str:
+    host = (host or "").lower().lstrip(".")
+    if host.startswith("www."):
+        host = host[4:]
+    return host
+
+
+def company_domain(job):
+    """Best-effort company domain from the posting URL; None for job-board URLs."""
+    host = _registrable(urlparse(job.url or "").netloc)
+    if not host:
+        return None
+    if host in JOB_BOARD_DOMAINS or any(host.endswith("." + b) for b in JOB_BOARD_DOMAINS):
+        return None
+    return host
+
+
+def classify_headcount(employees):
+    """Hunter range string -> is_smb (True/False), or None if unknown/unparseable."""
+    if not employees:
+        return None
+    upper = re.findall(r"\d+", employees.replace(",", ""))
+    if not upper:
+        return None
+    top = int(upper[-1])  # use the upper bound of the range ("201-500" -> 500)
+    return top <= SMB_EMPLOYEE_CEILING
+
 
 # Boards/ATS used overwhelmingly by startups & scaleups.
 STARTUP_ATS = {"ashby", "greenhouse", "lever", "workable"}
