@@ -26,6 +26,7 @@ from cv_tailor.job_sources import fetch_all
 from cv_tailor.match import score_job
 from cv_tailor.digest import format_digest
 from cv_tailor.telegram import format_digest_for_telegram, send_text
+from cv_tailor.scout_queue import write_jobs_queue
 from cv_tailor.cache import connect, is_new, mark_seen
 from cv_tailor.gates import passes_gate1
 from cv_tailor.enrich import is_smb, smb_hint
@@ -137,6 +138,9 @@ def main(argv=None):
           "job": {"source": s["job"].source, "org": s["job"].org, "title": s["job"].title,
                   "location": s["job"].location, "url": s["job"].url, "raw_id": s["job"].raw_id}}
          for s in scored], indent=2))
+
+    queue_path = write_jobs_queue(scored, today)
+    print(f"scout queue: {queue_path}", file=sys.stderr)
 
     print(f"\n{len(scored)} candidates >= {args.min_score}", file=sys.stderr)
     if args.dry_run:
