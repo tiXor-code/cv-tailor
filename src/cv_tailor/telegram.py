@@ -76,5 +76,5 @@ def format_digest_for_telegram(scored: list[dict], scan_date) -> str:
         lines.append(f"   Why: {item['reason']}")
         lines.append(f"   {job.url}")
         lines.append("")
-    lines.append(f"Process: python scripts/process_approved.py {scan_date} <rows>")
+    lines.append("Review & apply: https://admin.teodorlutoiu.com/scout")
     return "\n".join(lines)
