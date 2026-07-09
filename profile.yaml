@@ -87,8 +87,9 @@ experiences:
   - Produce short-form Instagram video content end-to-end, delivering up to 40 videos per week, with videos
     regularly reaching millions of views.
   - Own scripting and copy, concept direction, quality review, and final selection of what is publishable.
-  - 'Run an AI-assisted production pipeline (Higgsfield, Kling): reference-driven prompt design, batch
-    styled variants, and an internal production web tool I built, including a fine-tuned compose model.'
+  - 'Run an AI-assisted production pipeline (Higgsfield, Kling, ElevenLabs for voice creation): reference-driven
+    prompt design, batch styled variants, and an internal production web tool I built, including a fine-tuned
+    compose model.'
 - id: ea
   role: Assistant Content Producer
   company: Electronic Arts Sports (EA FC — Ultimate Team)
@@ -349,6 +350,7 @@ skills:
   - Editorial review
   - Video production
   - Cross-functional collaboration
+  - Voice creation (ElevenLabs)
 education:
 - degree: BSc Computer Games Design and Development
   institution: University of Worcester
