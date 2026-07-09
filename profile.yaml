@@ -80,15 +80,15 @@ experiences:
   - 'Own all infrastructure: domain, hosting, CI/CD, analytics.'
 - id: wolff
   role: Content Producer (freelance, ongoing)
-  company: Wolff
+  company: Wolff Digital Marketing
   location: Remote
-  dates: 2026 – Present
+  dates: Jan 2026 – Present
   bullets:
-  - 'Produce AI-generated video and image content end-to-end: concept development, reference-driven prompt
-    design, styled variants, and final render selection (Higgsfield, Kling).'
-  - 'Built the team''s internal production web tool: reference video and action brief in, ready-to-use
-    generation prompts and motion descriptions out, with a fine-tuned compose model.'
-  - Automated batch variant production (10 styled variants per concept) with quality and spend gates.
+  - Produce short-form Instagram video content end-to-end, delivering up to 40 videos per week, with videos
+    regularly reaching millions of views.
+  - Own scripting and copy, concept direction, quality review, and final selection of what is publishable.
+  - 'Run an AI-assisted production pipeline (Higgsfield, Kling): reference-driven prompt design, batch
+    styled variants, and an internal production web tool I built, including a fine-tuned compose model.'
 - id: ea
   role: Assistant Content Producer
   company: Electronic Arts Sports (EA FC — Ultimate Team)
