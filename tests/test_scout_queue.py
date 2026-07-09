@@ -2,7 +2,7 @@ import json
 from datetime import date
 from types import SimpleNamespace
 
-from cv_tailor.scout_queue import write_jobs_queue, _job_id
+from cv_tailor.scout_queue import write_jobs_queue, read_description, _job_id
 
 
 def _job(**kw):
@@ -37,3 +37,20 @@ def test_job_id_stable_and_distinct():
 def test_empty_scored_writes_empty_array(tmp_path):
     out = write_jobs_queue([], date(2026, 6, 24), queue_dir=tmp_path)
     assert json.loads(out.read_text()) == []
+
+
+def test_descriptions_sidecar_written_and_read(tmp_path):
+    jd = "Build LLM agents. Python, async, evals."
+    scored = [{"job": _job(description=jd), "score": 9, "reason": "", "keywords": []}]
+    out = write_jobs_queue(scored, date(2026, 6, 24), queue_dir=tmp_path)
+    # sidecar exists alongside jobs.json, keyed by the same id, JD kept out of jobs.json
+    entry = json.loads(out.read_text())[0]
+    assert "description" not in entry
+    sidecar = tmp_path / "2026-06-24" / "descriptions.json"
+    assert json.loads(sidecar.read_text())[entry["id"]] == jd
+    assert read_description("2026-06-24", entry["id"], queue_dir=tmp_path) == jd
+
+
+def test_read_description_missing_is_empty(tmp_path):
+    # older scans predate the sidecar -> empty string, no crash
+    assert read_description("2020-01-01", "deadbeef", queue_dir=tmp_path) == ""
