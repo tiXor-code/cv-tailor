@@ -1,251 +1,350 @@
-# Used by Gate 1 (gates.py) to cheaply pre-filter before LLM scoring.
-# Keep roughly in sync with the bias in match.py's scorer prompt.
 target_keywords:
-  - ai engineer
-  - ai automation
-  - agentic
-  - llm
-  - rag
-  - python
-  - typescript
-  - forward deployed
-  - solutions engineer
-  - automation engineer
-  - n8n
-  - prompt
-  - machine learning engineer
-  - backend engineer
-  - full stack
-  - platform engineer
-
+- ai engineer
+- ai automation
+- agentic
+- llm
+- rag
+- python
+- typescript
+- forward deployed
+- solutions engineer
+- automation engineer
+- n8n
+- prompt
+- machine learning engineer
+- backend engineer
+- full stack
+- platform engineer
 contact:
   name: Teodor-Cristian Lutoiu
   email: contact@teodorlutoiu.com
-  phone: "+40 725 697 859"
+  phone: +40 725 697 859
   location: Bucharest, Romania
   website: teodorlutoiu.com
   linkedin: linkedin.com/in/teodorlc
   github: github.com/tiXor-code
-
 summary_pool:
-  - id: ai_automation_engineer
-    text: |
-      AI automation engineer who ships end-to-end systems: LLM orchestration,
-      RAG, retrieval pipelines, n8n workflows, and the production glue around
-      Azure OpenAI, Claude, and embeddings. Built and shipped a customer-support
-      draft agent (HMAC webhook -> classify -> embed -> pgvector -> draft ->
-      grade) and the icp-agent prospecting service on Vercel.
-  - id: founder_entrepreneur
-    text: |
-      Founder of Ministeru' Creativ (4-person agency, live since 2026-03-18)
-      and co-founder of JobMap. Builds revenue-generating systems end-to-end:
-      product, infra, content, sales pipeline.
-  - id: full_stack_engineer
-    text: |
-      Full-stack engineer (Python/Flask, Next.js/React, Postgres) with
-      production deployments on Azure App Services and Vercel. Shipped
-      JobMap.ro from zero to 9.3K live jobs and a paid product.
-  - id: content_producer_pivot
-    text: |
-      Assistant Content Producer at EA Bucharest pivoting full-time to
-      AI engineering. Combines games-industry production discipline with
-      hands-on AI/automation shipping.
+- id: ai_automation_engineer
+  text: 'AI automation engineer who ships end-to-end systems: LLM orchestration,
 
+    RAG, retrieval pipelines, n8n workflows, and the production glue around
+
+    Azure OpenAI, Claude, and embeddings. Built and shipped a customer-support
+
+    draft agent (HMAC webhook -> classify -> embed -> pgvector -> draft ->
+
+    grade) and the icp-agent prospecting service on Vercel.
+
+    '
+- id: founder_entrepreneur
+  text: 'Founder of Ministeru'' Creativ (4-person agency, live since 2026-03-18)
+
+    and co-founder of JobMap. Builds revenue-generating systems end-to-end:
+
+    product, infra, content, sales pipeline.
+
+    '
+- id: full_stack_engineer
+  text: 'Full-stack engineer (Python/Flask, Next.js/React, Postgres) with
+
+    production deployments on Azure App Services and Vercel. Shipped
+
+    JobMap.ro from zero to 9.3K live jobs and a paid product.
+
+    '
+- id: content_producer_pivot
+  text: 'Assistant Content Producer at EA Bucharest pivoting full-time to
+
+    AI engineering. Combines games-industry production discipline with
+
+    hands-on AI/automation shipping.
+
+    '
+- id: content_producer
+  text: 'Content producer at EA (EA FC 25 Ultimate Team) developing and executing content strategies for
+    a live service with millions of players, and founder of a 4-person creative agency delivering web,
+    branding, and content for clients. Deep working knowledge of AI systems (LLM pipelines, prompt engineering,
+    eval design) - understands how training data and editorial quality shape model behaviour.
+
+    '
 experiences:
-  - id: ministeru
-    role: Founder
-    company: Ministeru' Creativ
-    location: Bucharest, Romania (remote-first)
-    dates: Mar 2026 – Present
-    bullets:
-      - Founded and run a 4-person creative agency; live since 2026-03-18 at ministerucreativ.com / .ro.
-      - Built an internal AI prospecting dashboard with an n8n side-pipeline (Q1 2026 experiment).
-      - Lead client delivery across web, branding, content, and automation.
-      - "Own all infrastructure: domain, hosting, CI/CD, analytics."
-  - id: ea
-    role: Assistant Content Producer
-    company: Electronic Arts Sports (EA FC 25 — Ultimate Team)
-    location: Bucharest, Romania
-    dates: Aug 2024 – Present
-    bullets:
-      - Developed and executed content strategies, significantly enhancing player engagement and retention.
-      - Facilitated seamless cross-functional collaboration, optimizing live service updates and content releases.
-      - Utilized data-driven insights to boost player satisfaction and key performance metrics.
-  - id: play_for_democracy
-    role: Game Producer
-    company: Play For Democracy — Arden
-    location: Bucharest, Romania
-    dates: Sep 2023 – Aug 2024
-    bullets:
-      - Transitioned from Game Designer to Producer, successfully managing project milestones and launch.
-      - Streamlined development processes through Agile methodologies, achieving a 30% reduction in project timelines.
-      - Represented the project publicly, meeting all stakeholder KPIs and enhancing market visibility.
-      - Invited to Brussels by the European Commission to present the project.
-
+- id: ministeru
+  role: Founder
+  company: Ministeru' Creativ
+  location: Bucharest, Romania (remote-first)
+  dates: Mar 2026 – Present
+  bullets:
+  - Founded and run a 4-person creative agency; live since 2026-03-18 at ministerucreativ.com / .ro.
+  - Built an internal AI prospecting dashboard with an n8n side-pipeline (Q1 2026 experiment).
+  - Lead client delivery across web, branding, content, and automation.
+  - 'Own all infrastructure: domain, hosting, CI/CD, analytics.'
+- id: ea
+  role: Assistant Content Producer
+  company: Electronic Arts Sports (EA FC 25 — Ultimate Team)
+  location: Bucharest, Romania
+  dates: Aug 2024 – Present
+  bullets:
+  - Developed and executed content strategies, significantly enhancing player engagement and retention.
+  - Facilitated seamless cross-functional collaboration, optimizing live service updates and content releases.
+  - Utilized data-driven insights to boost player satisfaction and key performance metrics.
+- id: play_for_democracy
+  role: Game Producer
+  company: Play For Democracy — Arden
+  location: Bucharest, Romania
+  dates: Sep 2023 – Aug 2024
+  bullets:
+  - Transitioned from Game Designer to Producer, successfully managing project milestones and launch.
+  - Streamlined development processes through Agile methodologies, achieving a 30% reduction in project
+    timelines.
+  - Represented the project publicly, meeting all stakeholder KPIs and enhancing market visibility.
+  - Invited to Brussels by the European Commission to present the project.
 projects:
-  - id: icp_agent
-    name: ICP Agent
-    tagline: Ideal-customer-profile prospecting service deployed on Vercel
-    link: icp-agent-ten.vercel.app
-    tech: [Hono, Vercel, Azure OpenAI, Hunter, SerpAPI, Google Sheets]
-    bullets:
-      - "One-shot prospecting agent: scrapes signals, scores ICP fit, returns enriched leads to Sheets."
-      - Built with Hono on Vercel; integrates Hunter and SerpAPI for enrichment and Azure OpenAI for scoring.
-
-  - id: support_draft_agent
-    name: Customer Support Draft Agent
-    tagline: AI customer-support draft generator with self-grading verdict gate
-    tech: [n8n, Azure OpenAI, Supabase pgvector, Claude CLI, HMAC]
-    bullets:
-      - "End-to-end pipeline: HMAC webhook -> n8n -> classify -> embed -> pgvector RAG -> Claude draft -> self-grade -> multi-signal verdict gate."
-      - 136 tests across 5 layers including verdict-gate truth table extracted from the workflow JSON.
-      - 12/12 eval agreement, 6/12 auto-rate at calibrated thresholds.
-
-  - id: council_of_agents
-    name: Council of Agents
-    tagline: Multi-provider AI thinking partner for high-stakes decisions
-    link: github.com/tiXor-code/council
-    tech: [Mastra, TypeScript, Claude API, OpenAI, Azure OpenAI]
-    bullets:
-      - Orchestrates multi-model debate (Claude, GPT-4, Gemini) to surface blind spots before code is written.
-      - Built on Mastra TypeScript agent framework with structured outputs and persona-based reasoning.
-      - Active development; partial implementation shipping.
-
-  - id: agent_hq
-    name: Agent HQ
-    tagline: 21-agent autonomous system designed for local-first execution on Apple Silicon
-    tech: [Python, MCP, Claude Code, Mac mini M4]
-    bullets:
-      - Architected a 21-agent autonomous system targeting the Mac mini M4 (24GB) as local AI workstation.
-      - Specialist agents per domain (research, frontend, backend, infra, ops) coordinated via shared file-based memory.
-      - Architecture and orchestration design complete; selective agent rollout in progress.
-
-  - id: cv_tailor
-    name: cv-tailor
-    tagline: JD-to-PDF tailored CV generator with Sheets-backed application CRM
-    tech: [Python, Azure OpenAI, WeasyPrint, Jinja2, gspread]
-    bullets:
-      - Single Azure OpenAI call returns structured JSON that drives a deterministic CV renderer.
-      - Honesty guard in the system prompt prevents the LLM from inventing experience, projects, or skills.
-      - ATS-safety pipeline runs pdftotext extraction plus six sanity checks (headings order, contact placement, mangling, etc.).
-      - Built TDD-style; 33 tests across 9 modules; full subagent-driven implementation workflow.
-
-  - id: gepa_prompt_lab
-    name: GEPA Prompt Lab
-    tagline: Prompt-optimization tooling for JobMap LLM pipelines
-    link: github.com/tiXor-code/gepa-prompt-lab
-    tech: [Python, Azure OpenAI, GEPA, eval design]
-    bullets:
-      - Iteratively optimizes prompts driving JobMap's admin and ingestion pipelines.
-      - GEPA-style genetic prompt evolution with per-prompt eval scoring.
-      - Measurable lift on enrichment accuracy and corrective-protocol output quality.
-
-  - id: wiki_qmd
-    name: Personal Knowledge Substrate (~/wiki + qmd)
-    tagline: Custom BM25 + vector hybrid search over ~700 markdown pages, MCP-integrated
-    tech: [Python, MCP, BM25, vector embeddings, Obsidian]
-    bullets:
-      - Custom hybrid search index combining BM25 full-text and vector semantic search across ~700 markdown pages.
-      - Entity / concept / synthesis page schema with strict status gates and ingest workflow.
-      - MCP-integrated so AI agents can query the second brain directly in any Claude Code session.
-
-  - id: ai_audit
-    name: AI Audit Landing
-    tagline: Lead-gen funnel for Ministeru' "Invisible to ChatGPT" Meta Ad campaign
-    tech: [Next.js, Meta Ads, AI audit pipeline]
-    bullets:
-      - Landing page plus stubbed end-to-end audit engine for the US small-business AI-visibility campaign.
-      - Demonstrates how ChatGPT and Gemini perceive a client's website; generates a personalized audit report.
-      - Designed for paid traffic capture from Meta Ads.
-
-  - id: reddit_dashboard
-    name: Reddit Dashboard
-    tagline: Next.js analytics dashboard for Reddit signal tracking
-    tech: [Next.js, Reddit API, Vercel]
-    bullets:
-      - Tracks subreddit engagement, trending posts, and sentiment signals.
-      - Internal tool for content and prospecting opportunity research.
-
-  - id: mc_intro
-    name: Ministeru' Creativ Intro Video
-    tagline: 30-second brand intro video created end-to-end with AI
-    tech: [Higgsfield, Kling, AI image-to-video, AI voiceover]
-    bullets:
-      - 30-second brand intro video for Ministeru' Creativ, produced entirely with AI tools (no live shoot).
-      - Image-to-video generation, AI voiceover, and AI-assisted editing pipeline.
-      - Demonstrates production-grade AI creative workflow for agency deliverables.
-
-  - id: jobmap_platform
-    name: JobMap (how-to-get-a-job.com)
-    tagline: Job-search platform with multi-agent admin pipeline
-    link: how-to-get-a-job.com
-    tech: [Next.js, Flask, Azure Postgres, Azure App Services, GitHub Actions OIDC, Stripe]
-    bullets:
-      - 9.3K jobs, 504 skills, 247 admin tests, paid corrective-protocol product live.
-      - Council Step Pipeline shipped 2026-03-09 (PR #5).
-
-  - id: orb_trading_bot
-    name: ORB Trading Bot
-    tagline: Opening-range-breakout bot on IBKR micro-futures
-    tech: [Python, IBKR API, pandas, backtesting]
-    bullets:
-      - +$7,121 backtest P&L, 67.7% win rate on MNQ.
-      - Identified robust signals via pattern study (5mo + year-long datasets), filtered out small-sample noise.
-
-  - id: niche_sites
-    name: honestcalculator.com
-    tagline: AdSense content site, 15 US-finance calculators
-    link: honestcalculator.com
-    tech: [Next.js, Vercel, IndexNow, Google Search Console]
-    bullets:
-      - 15 cornerstone calculators (auto-loan-refi, coast-fire, SBA-loan, etc.) — combined TAM ~175K/mo.
-      - Lighthouse desktop 94+/96+/100/100 across sampled pages.
-
-  - id: portfolio
-    name: teodorlutoiu.com
-    tagline: AI-first WebGL editorial portfolio
-    link: teodorlutoiu.com
-    tech: [WebGL, Vite, Hostinger, Cloudflare]
-    bullets:
-      - Shipped redesign 2026-05-21 — root domain live with hashed assets, 200 OK across pages.
-
+- id: icp_agent
+  name: ICP Agent
+  tagline: Ideal-customer-profile prospecting service deployed on Vercel
+  link: icp-agent-ten.vercel.app
+  tech:
+  - Hono
+  - Vercel
+  - Azure OpenAI
+  - Hunter
+  - SerpAPI
+  - Google Sheets
+  bullets:
+  - 'One-shot prospecting agent: scrapes signals, scores ICP fit, returns enriched leads to Sheets.'
+  - Built with Hono on Vercel; integrates Hunter and SerpAPI for enrichment and Azure OpenAI for scoring.
+- id: support_draft_agent
+  name: Customer Support Draft Agent
+  tagline: AI customer-support draft generator with self-grading verdict gate
+  tech:
+  - n8n
+  - Azure OpenAI
+  - Supabase pgvector
+  - Claude CLI
+  - HMAC
+  bullets:
+  - 'End-to-end pipeline: HMAC webhook -> n8n -> classify -> embed -> pgvector RAG -> Claude draft ->
+    self-grade -> multi-signal verdict gate.'
+  - 136 tests across 5 layers including verdict-gate truth table extracted from the workflow JSON.
+  - 12/12 eval agreement, 6/12 auto-rate at calibrated thresholds.
+- id: council_of_agents
+  name: Council of Agents
+  tagline: Multi-provider AI thinking partner for high-stakes decisions
+  link: github.com/tiXor-code/council
+  tech:
+  - Mastra
+  - TypeScript
+  - Claude API
+  - OpenAI
+  - Azure OpenAI
+  bullets:
+  - Orchestrates multi-model debate (Claude, GPT-4, Gemini) to surface blind spots before code is written.
+  - Built on Mastra TypeScript agent framework with structured outputs and persona-based reasoning.
+  - Active development; partial implementation shipping.
+- id: agent_hq
+  name: Agent HQ
+  tagline: 21-agent autonomous system designed for local-first execution on Apple Silicon
+  tech:
+  - Python
+  - MCP
+  - Claude Code
+  - Mac mini M4
+  bullets:
+  - Architected a 21-agent autonomous system targeting the Mac mini M4 (24GB) as local AI workstation.
+  - Specialist agents per domain (research, frontend, backend, infra, ops) coordinated via shared file-based
+    memory.
+  - Architecture and orchestration design complete; selective agent rollout in progress.
+- id: cv_tailor
+  name: cv-tailor
+  tagline: JD-to-PDF tailored CV generator with Sheets-backed application CRM
+  tech:
+  - Python
+  - Azure OpenAI
+  - WeasyPrint
+  - Jinja2
+  - gspread
+  bullets:
+  - Single Azure OpenAI call returns structured JSON that drives a deterministic CV renderer.
+  - Honesty guard in the system prompt prevents the LLM from inventing experience, projects, or skills.
+  - ATS-safety pipeline runs pdftotext extraction plus six sanity checks (headings order, contact placement,
+    mangling, etc.).
+  - Built TDD-style; 33 tests across 9 modules; full subagent-driven implementation workflow.
+- id: gepa_prompt_lab
+  name: GEPA Prompt Lab
+  tagline: Prompt-optimization tooling for JobMap LLM pipelines
+  link: github.com/tiXor-code/gepa-prompt-lab
+  tech:
+  - Python
+  - Azure OpenAI
+  - GEPA
+  - eval design
+  bullets:
+  - Iteratively optimizes prompts driving JobMap's admin and ingestion pipelines.
+  - GEPA-style genetic prompt evolution with per-prompt eval scoring.
+  - Measurable lift on enrichment accuracy and corrective-protocol output quality.
+- id: wiki_qmd
+  name: Personal Knowledge Substrate (~/wiki + qmd)
+  tagline: Custom BM25 + vector hybrid search over ~700 markdown pages, MCP-integrated
+  tech:
+  - Python
+  - MCP
+  - BM25
+  - vector embeddings
+  - Obsidian
+  bullets:
+  - Custom hybrid search index combining BM25 full-text and vector semantic search across ~700 markdown
+    pages.
+  - Entity / concept / synthesis page schema with strict status gates and ingest workflow.
+  - MCP-integrated so AI agents can query the second brain directly in any Claude Code session.
+- id: ai_audit
+  name: AI Audit Landing
+  tagline: Lead-gen funnel for Ministeru' "Invisible to ChatGPT" Meta Ad campaign
+  tech:
+  - Next.js
+  - Meta Ads
+  - AI audit pipeline
+  bullets:
+  - Landing page plus stubbed end-to-end audit engine for the US small-business AI-visibility campaign.
+  - Demonstrates how ChatGPT and Gemini perceive a client's website; generates a personalized audit report.
+  - Designed for paid traffic capture from Meta Ads.
+- id: reddit_dashboard
+  name: Reddit Dashboard
+  tagline: Next.js analytics dashboard for Reddit signal tracking
+  tech:
+  - Next.js
+  - Reddit API
+  - Vercel
+  bullets:
+  - Tracks subreddit engagement, trending posts, and sentiment signals.
+  - Internal tool for content and prospecting opportunity research.
+- id: mc_intro
+  name: Ministeru' Creativ Intro Video
+  tagline: 30-second brand intro video created end-to-end with AI
+  tech:
+  - Higgsfield
+  - Kling
+  - AI image-to-video
+  - AI voiceover
+  bullets:
+  - 30-second brand intro video for Ministeru' Creativ, produced entirely with AI tools (no live shoot).
+  - Image-to-video generation, AI voiceover, and AI-assisted editing pipeline.
+  - Demonstrates production-grade AI creative workflow for agency deliverables.
+- id: jobmap_platform
+  name: JobMap (how-to-get-a-job.com)
+  tagline: Job-search platform with multi-agent admin pipeline
+  link: how-to-get-a-job.com
+  tech:
+  - Next.js
+  - Flask
+  - Azure Postgres
+  - Azure App Services
+  - GitHub Actions OIDC
+  - Stripe
+  bullets:
+  - 9.3K jobs, 504 skills, 247 admin tests, paid corrective-protocol product live.
+  - Council Step Pipeline shipped 2026-03-09 (PR
+- id: orb_trading_bot
+  name: ORB Trading Bot
+  tagline: Opening-range-breakout bot on IBKR micro-futures
+  tech:
+  - Python
+  - IBKR API
+  - pandas
+  - backtesting
+  bullets:
+  - +$7,121 backtest P&L, 67.7% win rate on MNQ.
+  - Identified robust signals via pattern study (5mo + year-long datasets), filtered out small-sample
+    noise.
+- id: niche_sites
+  name: honestcalculator.com
+  tagline: AdSense content site, 15 US-finance calculators
+  link: honestcalculator.com
+  tech:
+  - Next.js
+  - Vercel
+  - IndexNow
+  - Google Search Console
+  bullets:
+  - 15 cornerstone calculators (auto-loan-refi, coast-fire, SBA-loan, etc.) — combined TAM ~175K/mo.
+  - Lighthouse desktop 94+/96+/100/100 across sampled pages.
+- id: portfolio
+  name: teodorlutoiu.com
+  tagline: AI-first WebGL editorial portfolio
+  link: teodorlutoiu.com
+  tech:
+  - WebGL
+  - Vite
+  - Hostinger
+  - Cloudflare
+  bullets:
+  - Shipped redesign 2026-05-21 — root domain live with hashed assets, 200 OK across pages.
 skills:
-  languages: [Python, TypeScript, JavaScript, Node.js, SQL]
-  frameworks: [Next.js, React, Flask, FastAPI, Hono]
+  languages:
+  - Python
+  - TypeScript
+  - JavaScript
+  - Node.js
+  - SQL
+  frameworks:
+  - Next.js
+  - React
+  - Flask
+  - FastAPI
+  - Hono
   ai:
-    - Azure OpenAI
-    - Claude API
-    - RAG
-    - embeddings
-    - pgvector
-    - agentic workflows
-    - multi-agent systems
-    - AI system architecture
-    - AI automation
-    - prompt engineering
-    - eval design
-  data: [Postgres, Supabase, pgvector, Google Sheets]
+  - Azure OpenAI
+  - Claude API
+  - RAG
+  - embeddings
+  - pgvector
+  - agentic workflows
+  - multi-agent systems
+  - AI system architecture
+  - AI automation
+  - prompt engineering
+  - eval design
+  data:
+  - Postgres
+  - Supabase
+  - pgvector
+  - Google Sheets
   devops:
-    - Azure App Services
-    - Vercel
-    - GitHub Actions (OIDC)
-    - n8n
-    - Docker
-    - Cloudflare
-  tools: [Git, Figma, Stripe, Playwright, MCP, Agile, Scrum, API design, API integration]
+  - Azure App Services
+  - Vercel
+  - GitHub Actions (OIDC)
+  - n8n
+  - Docker
+  - Cloudflare
+  tools:
+  - Git
+  - Figma
+  - Stripe
+  - Playwright
+  - MCP
+  - Agile
+  - Scrum
+  - API design
+  - API integration
   leadership:
-    - Technical leadership
-    - Client delivery
-    - Stakeholder communication
-    - Cross-functional collaboration
-    - Program management
-
+  - Technical leadership
+  - Client delivery
+  - Stakeholder communication
+  - Cross-functional collaboration
+  - Program management
+  content:
+  - Content strategy
+  - Content production
+  - Editing
+  - Editorial review
+  - Video production
+  - Cross-functional collaboration
 education:
-  - degree: BSc Computer Games Design and Development
-    institution: University of Worcester
-    year: 2022
-    notes: Dissertation "AI in Games" (predates the LLM wave).
-
+- degree: BSc Computer Games Design and Development
+  institution: University of Worcester
+  year: 2022
+  notes: Dissertation "AI in Games" (predates the LLM wave).
 languages_spoken:
-  - { language: Romanian, level: native }
-  - { language: English, level: C2 / fluent }
+- language: Romanian
+  level: native
+- language: English
+  level: C2 / fluent
