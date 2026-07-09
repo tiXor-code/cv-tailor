@@ -27,6 +27,19 @@ from cv_tailor.match import score_job
 from cv_tailor.digest import format_digest
 from cv_tailor.telegram import format_digest_for_telegram, send_text
 from cv_tailor.scout_queue import write_jobs_queue
+
+
+def _is_auth_error(exc: Exception) -> bool:
+    """True for a 401/invalid-key failure. Checked by shape, not by importing the
+    openai SDK's exception classes, so it survives SDK changes."""
+    if exc.__class__.__name__ in ("AuthenticationError", "PermissionDeniedError"):
+        return True
+    if getattr(exc, "status_code", None) == 401:
+        return True
+    blob = str(exc).lower()
+    return "401" in blob and ("invalid subscription key" in blob
+                             or "access denied" in blob
+                             or "incorrect api key" in blob)
 from cv_tailor.cache import connect, is_new, mark_seen
 from cv_tailor.gates import passes_gate1
 from cv_tailor.enrich import is_smb, smb_hint
@@ -113,6 +126,7 @@ def main(argv=None):
 
     client = build_azure_client()
     scored = []
+    failures = 0
     for j in survivors:
         try:
             hint = smb_hint(j, conn)
@@ -123,7 +137,27 @@ def main(argv=None):
                 scored.append({"job": j, "score": s, "reason": r.get("reason", ""),
                                "keywords": r.get("key_keywords_matched", [])})
         except Exception as e:
+            # A bad/expired credential fails EVERY job identically. Abort loudly instead
+            # of grinding through the whole list and writing an empty queue.
+            if _is_auth_error(e):
+                sys.exit(
+                    f"FATAL: Azure auth rejected while scoring ({e}). The scan cannot score any "
+                    f"job, so it is aborting WITHOUT writing a queue (an empty queue is "
+                    f"indistinguishable from 'no good jobs today'). Check AZURE_OPENAI_API_KEY "
+                    f"in {ROOT / '.env'} -- the key was rotated on 2026-07-09."
+                )
+            failures += 1
             print(f"  score failed {j.org}/{j.title}: {e}", file=sys.stderr)
+
+    # An empty output is not evidence of an empty input. If we scored nothing AND
+    # everything we tried threw, this is an outage, not a quiet day.
+    if survivors and not scored and failures == len(survivors):
+        sys.exit(
+            f"FATAL: all {failures} job(s) failed to score. Refusing to write an empty queue "
+            f"that would look like a normal no-results day. See the errors above."
+        )
+    if failures:
+        print(f"  WARNING: {failures} job(s) failed to score (kept {len(scored)})", file=sys.stderr)
 
     scored.sort(key=lambda s: s["score"], reverse=True)
     scored = scored[: args.max_results]
