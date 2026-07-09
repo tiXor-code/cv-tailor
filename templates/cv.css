@@ -1,6 +1,6 @@
 @page {
   size: A4;
-  margin: 18mm;
+  margin: 15mm 18mm; /* was 18mm all round; tighter top/bottom buys ~5 lines so a 4-role CV stays one page */
 }
 
 body {

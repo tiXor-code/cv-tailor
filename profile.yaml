@@ -78,9 +78,20 @@ experiences:
   - Built an internal AI prospecting dashboard with an n8n side-pipeline (Q1 2026 experiment).
   - Lead client delivery across web, branding, content, and automation.
   - 'Own all infrastructure: domain, hosting, CI/CD, analytics.'
+- id: wolff
+  role: Content Producer (freelance, ongoing)
+  company: Wolff
+  location: Remote
+  dates: 2026 – Present
+  bullets:
+  - 'Produce AI-generated video and image content end-to-end: concept development, reference-driven prompt
+    design, styled variants, and final render selection (Higgsfield, Kling).'
+  - 'Built the team''s internal production web tool: reference video and action brief in, ready-to-use
+    generation prompts and motion descriptions out, with a fine-tuned compose model.'
+  - Automated batch variant production (10 styled variants per concept) with quality and spend gates.
 - id: ea
   role: Assistant Content Producer
-  company: Electronic Arts Sports (EA FC 25 — Ultimate Team)
+  company: Electronic Arts Sports (EA FC — Ultimate Team)
   location: Bucharest, Romania
   dates: Aug 2024 – Present
   bullets:
