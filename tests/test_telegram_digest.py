@@ -17,6 +17,23 @@ def test_empty_digest_unchanged():
     assert "0 new candidates" in format_digest_for_telegram([], "2026-06-24")
 
 
+def test_digest_tile_includes_each_job_url():
+    job1 = SimpleNamespace(org="Acme", title="AI Engineer", location="Remote", url="https://acme.example/jobs/1")
+    job2 = SimpleNamespace(org="Beta", title="ML Engineer", location="Remote", url="https://beta.example/jobs/2")
+    scored = [
+        {"job": job1, "score": 9, "reason": "fit"},
+        {"job": job2, "score": 8, "reason": "also fit"},
+    ]
+    out = format_digest_for_telegram(scored, "2026-07-10")
+    assert "https://acme.example/jobs/1" in out
+    assert "https://beta.example/jobs/2" in out
+    # each tile carries its OWN job's url, not just the footer link
+    tile1, tile2 = out.split("2. ")
+    assert "https://acme.example/jobs/1" in tile1
+    assert "https://beta.example/jobs/2" in tile2
+    assert "https://acme.example/jobs/1" not in tile2
+
+
 class _FakeResponse:
     def __init__(self, body: bytes):
         self._body = body
