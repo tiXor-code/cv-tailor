@@ -38,6 +38,20 @@ def test_write_jobs_queue_schema(tmp_path):
     assert e["id"] == _job_id(_job())
 
 
+def test_track_persisted_on_entry(tmp_path):
+    scored = [{"job": _job(), "score": 9, "reason": "", "keywords": [], "track": "content"}]
+    out = write_jobs_queue(scored, date(2026, 6, 24), queue_dir=tmp_path)
+    entry = json.loads(out.read_text())[0]
+    assert entry["track"] == "content"
+
+
+def test_track_defaults_to_ai_when_missing(tmp_path):
+    scored = [{"job": _job(), "score": 9, "reason": "", "keywords": []}]  # no "track" key
+    out = write_jobs_queue(scored, date(2026, 6, 24), queue_dir=tmp_path)
+    entry = json.loads(out.read_text())[0]
+    assert entry["track"] == "ai"
+
+
 def test_job_id_stable_and_distinct():
     assert _job_id(_job(raw_id="abc")) == _job_id(_job(raw_id="abc"))
     assert _job_id(_job(raw_id="abc")) != _job_id(_job(raw_id="xyz"))

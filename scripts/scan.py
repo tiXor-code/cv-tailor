@@ -41,18 +41,22 @@ def _is_auth_error(exc: Exception) -> bool:
                              or "access denied" in blob
                              or "incorrect api key" in blob)
 from cv_tailor.cache import connect, is_new, mark_seen
-from cv_tailor.gates import passes_gate1
+from cv_tailor.gates import passes_gate1_tracks
 from cv_tailor.enrich import is_smb, smb_hint
 
 DB_PATH = ROOT / "data" / "jobs.db"
 
 
-def run_gates(jobs, keywords, conn):
-    """Gate 1 (rules) -> Gate 2 (SMB) -> Gate 3 (dedup). Returns survivors."""
+def run_gates(jobs, tracks, conn):
+    """Gate 1 (track-aware rules) -> Gate 2 (SMB) -> Gate 3 (dedup). Each
+    survivor gains a `.track` attribute set to its winning track id (see
+    gates.passes_gate1_tracks). Returns survivors."""
     survivors = []
     for j in jobs:
-        if not passes_gate1(j, keywords):
+        track = passes_gate1_tracks(j, tracks)
+        if track is None:
             continue
+        j.track = track
         if not is_smb(j, conn):
             continue
         if not is_new(conn, j):
@@ -104,7 +108,10 @@ def parse_args(argv):
 def main(argv=None):
     args = parse_args(argv)
     profile = load_profile("profile.yaml")
-    keywords = profile.get("target_keywords", [])
+    # tracks: {} config drives Gate 1 track tagging. Falls back to a single
+    # 'ai' track built from the legacy target_keywords list so an older
+    # profile.yaml (missing the tracks: block) doesn't crash the scan.
+    tracks = profile.get("tracks") or {"ai": {"keywords": profile.get("target_keywords", [])}}
     with open(ROOT / "sources.yaml") as f:
         sources = yaml.safe_load(f)["sources"]
 
@@ -115,7 +122,7 @@ def main(argv=None):
     jobs = fetch_all(sources)
     print(f"  {len(jobs)} postings", file=sys.stderr)
 
-    survivors = run_gates(jobs, keywords, conn)
+    survivors = run_gates(jobs, tracks, conn)
     print(f"  {len(survivors)} passed gates (remote/EU/SMB/new)", file=sys.stderr)
 
     tracked = crm_tracked_keys()
@@ -135,7 +142,8 @@ def main(argv=None):
             mark_seen(conn, j, score=s)
             if s >= args.min_score:
                 scored.append({"job": j, "score": s, "reason": r.get("reason", ""),
-                               "keywords": r.get("key_keywords_matched", [])})
+                               "keywords": r.get("key_keywords_matched", []),
+                               "track": getattr(j, "track", "ai")})
         except Exception as e:
             # A bad/expired credential fails EVERY job identically. Abort loudly instead
             # of grinding through the whole list and writing an empty queue.

@@ -43,6 +43,7 @@ def _to_entry(item) -> dict:
         "score": int(item["score"]),
         "why": item.get("reason", ""),
         "matched": list(item.get("keywords", []) or []),
+        "track": item.get("track", "ai"),
         "package_dir": None,
         "cv_path": None,
         "cover_letter_path": None,

@@ -47,3 +47,28 @@ def passes_gate1(job, keywords: list[str]) -> bool:
     if not is_eu_eligible(job.location, job.description):
         return False
     return has_target_keyword(f"{job.title} {job.description}", keywords)
+
+
+def matched_tracks(job, tracks: dict) -> list[str]:
+    """Track ids (from `tracks`, e.g. profile.yaml's `tracks:` block) whose
+    keyword list matches the job's title+description. Order follows the
+    dict's iteration order (config order), so a job matching multiple
+    tracks lists them in that order -- the caller decides how to break
+    ties."""
+    text = f"{job.title} {job.description}"
+    return [tid for tid, cfg in tracks.items()
+            if has_target_keyword(text, cfg.get("keywords", []))]
+
+
+def passes_gate1_tracks(job, tracks: dict) -> str | None:
+    """Track-aware Gate 1. Remote/EU eligibility gates are shared with
+    passes_gate1 and unchanged; on top of them, returns the winning track id
+    (the first match in config order, so ties favor whichever track is
+    declared first in `tracks`) or None if the job fails geo/remote or
+    matches no track's keywords."""
+    if not is_remote(job.location, job.description):
+        return None
+    if not is_eu_eligible(job.location, job.description):
+        return None
+    matches = matched_tracks(job, tracks)
+    return matches[0] if matches else None

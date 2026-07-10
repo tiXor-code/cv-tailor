@@ -15,6 +15,33 @@ target_keywords:
 - backend engineer
 - full stack
 - platform engineer
+tracks:
+  ai:
+    summary_id: ai_automation_engineer
+    skill_groups: [languages, frameworks, ai, data, devops, tools]
+    keywords:
+    - ai engineer
+    - ai automation
+    - agentic
+    - llm
+    - rag
+    - python
+    - typescript
+    - forward deployed
+    - solutions engineer
+    - automation engineer
+    - n8n
+    - prompt
+    - machine learning engineer
+    - backend engineer
+    - full stack
+    - platform engineer
+  content:
+    summary_id: content_producer
+    skill_groups: [content, tools, leadership]
+    keywords: [content producer, content creator, content strategist, video editor,
+               video producer, editorial, copywriter, social media manager,
+               social media content, youtube, short-form video, content marketing]
 contact:
   name: Teodor-Cristian Lutoiu
   email: contact@teodorlutoiu.com
