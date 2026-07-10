@@ -379,8 +379,14 @@ def run_portal_application(entry: dict, package: dict, profile: dict, answers: d
                 blocker = detect_blockers(page)
                 if blocker:
                     stage = blocker
-                    return PortalResult(status="needs_human", reason=blocker,
-                                         evidence_dir=str(evidence_dir))
+                    # Same semantics as the adapters' in-flow checks: handoff
+                    # waits for the human to clear the blocker (None -> keep
+                    # going to dispatch); non-handoff aborts immediately.
+                    blocked = resolve_blocker(page, blocker, evidence_dir,
+                                              stage=blocker, handoff=handoff,
+                                              notify=notify)
+                    if blocked is not None:
+                        return blocked
 
                 stage = "dispatch"
                 try:

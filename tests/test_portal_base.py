@@ -725,3 +725,66 @@ def test_run_portal_application_needs_human_timeout_on_slow_navigation(tmp_path,
     evidence_dir = Path(result.evidence_dir)
     assert evidence_dir.is_dir()
     assert (evidence_dir / "form_state.json").exists()
+
+
+def test_run_portal_application_handoff_waits_on_predispatch_blocker(monkeypatch, tmp_path):
+    """A blocker visible right at page load must engage the handoff wait, not
+    abort -- the live wire-test bug: base's pre-dispatch check ignored handoff."""
+    import cv_tailor.portal.base as base
+
+    calls = {"n": 0}
+
+    def fake_detect(page):
+        calls["n"] += 1
+        return "captcha" if calls["n"] <= 2 else None  # clears on 3rd poll
+
+    monkeypatch.setattr(base, "detect_blockers", fake_detect)
+    monkeypatch.setenv("APPLY_HANDOFF_TIMEOUT", "10")
+
+    dispatched = {}
+
+    class DummyAdapter(base.PortalAdapter):
+        hosts = ("example-handoff.test",)
+        name = "dummy-handoff"
+
+        def apply(self, page, entry, package, profile, answers, *, dry_run,
+                  client=None, deployment=None, handoff=False, notify=None):
+            dispatched["yes"] = True
+            return base.PortalResult("filled", "", str(tmp_path))
+
+    monkeypatch.setattr(base, "_REGISTRY", [DummyAdapter()])
+    monkeypatch.setattr(base.time, "sleep", lambda s: None)
+
+    class FakePage:
+        url = "https://example-handoff.test/job"
+        def goto(self, *a, **k): pass
+        def set_default_timeout(self, *a, **k): pass
+        def screenshot(self, *a, **k): pass
+        def evaluate(self, *a, **k): return {}
+        def wait_for_timeout(self, ms): pass
+
+    class FakeCtx:
+        def new_page(self): return FakePage()
+        def close(self): pass
+
+    class FakeBrowser:
+        def new_context(self, **k): return FakeCtx()
+        def new_page(self): return FakePage()
+        def close(self): pass
+
+    class FakeChromium:
+        def launch(self, **k): return FakeBrowser()
+
+    class FakePW:
+        chromium = FakeChromium()
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+
+    monkeypatch.setattr(base, "sync_playwright", lambda: FakePW())
+
+    entry = {"apply_target": "https://example-handoff.test/job", "id": "x", "company": "X", "title": "T"}
+    package = {"package_dir": str(tmp_path), "cv_path": str(tmp_path / "cv.pdf"),
+               "cover_letter_path": str(tmp_path / "cl.md")}
+    result = base.run_portal_application(entry, package, {}, {}, dry_run=True, handoff=True)
+    assert dispatched.get("yes"), "adapter must be dispatched after the blocker clears"
+    assert result.status == "filled"
