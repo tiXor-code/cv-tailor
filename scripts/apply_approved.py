@@ -39,7 +39,7 @@ sys.path.insert(0, str(ROOT / "src"))
 from cv_tailor.assemble import AssembleError, assemble_package
 from cv_tailor.cache import connect
 from cv_tailor.profile import load_profile
-from cv_tailor.scout_queue import queue_root, update_entry
+from cv_tailor.scout_queue import StatusConflict, queue_root, update_entry
 from cv_tailor.sender import send_application
 from cv_tailor.sheets import crm_mark_applied
 from cv_tailor.telegram import send_document, send_text
@@ -85,7 +85,20 @@ def main(argv=None) -> int:
         )
         return 2
 
-    update_entry(args.scan_date, args.job_id, lambda e: e.update(status="assembling"))
+    # Compare-and-swap the FIRST transition: the pre-check above reads the
+    # entry OUTSIDE the flock, so two concurrent spawns for the same job can
+    # both pass it before either has written anything. expect_status
+    # re-checks the status INSIDE the flock right before the write, so only
+    # one spawn wins; the loser gets StatusConflict with the entry untouched.
+    expect_status = "needs_review" if args.force else "approved"
+    try:
+        update_entry(
+            args.scan_date, args.job_id, lambda e: e.update(status="assembling"),
+            expect_status=expect_status,
+        )
+    except StatusConflict as exc:
+        print(f"status conflict, another spawn already claimed this job: {exc}", file=sys.stderr)
+        return 2
 
     try:
         meta = assemble_package(entry, args.scan_date)
@@ -133,7 +146,22 @@ def main(argv=None) -> int:
     profile = load_profile(profile_path, strict=True)
     conn = connect(_db_path())
     pkg_dir = Path(meta["package_dir"])
-    result = send_application(entry, pkg_dir, profile, conn=conn)
+    try:
+        result = send_application(entry, pkg_dir, profile, conn=conn)
+    except Exception as exc:  # noqa: BLE001 -- an SMTP/network failure must land
+        # in the queue as `failed`, mirroring the assemble failure path above.
+        # Without this the job wedges at `sending` forever: no error recorded,
+        # no Telegram note, and the detached process just dies silently.
+        error = f"{type(exc).__name__}: {exc}"
+        update_entry(args.scan_date, args.job_id, lambda e: e.update(status="failed", error=error))
+        print(f"send failed: {error}", file=sys.stderr)
+        try:
+            send_text(
+                f"{entry.get('company')} / {entry.get('title')}: send failed ({error})"
+            )
+        except Exception:  # noqa: BLE001 -- Telegram delivery is best-effort here
+            pass
+        return 1
 
     if result.status == "sent":
         now = datetime.now(timezone.utc).isoformat()

@@ -96,13 +96,32 @@ def get_enrichment(conn, domain, max_age_days=30):
 
 
 def record_application(conn: sqlite3.Connection, *, job_id: str, company: str, role: str,
-                        url: str, channel: str) -> None:
-    conn.execute(
-        "INSERT OR REPLACE INTO applications "
-        "(job_id, company, role, norm_key, url, channel, sent_at) VALUES (?,?,?,?,?,?,?)",
-        (job_id, company, role, norm_pair(company, role), url, channel,
-         datetime.now().strftime("%Y-%m-%dT%H:%M:%S")),
-    )
+                        url: str, channel: str) -> bool:
+    """Insert the ledger row for a sent/sending application.
+
+    Plain INSERT (not INSERT OR REPLACE): the PRIMARY KEY(job_id) constraint
+    is what arbitrates a same-job_id race between two concurrent senders --
+    the loser's insert raises IntegrityError, caught here and reported as
+    False so the caller can block instead of double-sending. Returns True on
+    a successful insert."""
+    try:
+        conn.execute(
+            "INSERT INTO applications "
+            "(job_id, company, role, norm_key, url, channel, sent_at) VALUES (?,?,?,?,?,?,?)",
+            (job_id, company, role, norm_pair(company, role), url, channel,
+             datetime.now().strftime("%Y-%m-%dT%H:%M:%S")),
+        )
+        conn.commit()
+        return True
+    except sqlite3.IntegrityError:
+        conn.rollback()
+        return False
+
+
+def delete_application(conn: sqlite3.Connection, *, job_id: str) -> None:
+    """Roll back a ledger row recorded before an SMTP send that then failed,
+    so the job can be retried without tripping the duplicate gate forever."""
+    conn.execute("DELETE FROM applications WHERE job_id=?", (job_id,))
     conn.commit()
 
 

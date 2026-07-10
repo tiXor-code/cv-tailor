@@ -70,8 +70,8 @@ def _spy_update_entry(mod, monkeypatch):
     real = mod.update_entry
     trail = []
 
-    def spy(scan_date_iso, job_id, mutator, *, queue_dir=None):
-        result = real(scan_date_iso, job_id, mutator, queue_dir=queue_dir)
+    def spy(scan_date_iso, job_id, mutator, *, queue_dir=None, expect_status=None):
+        result = real(scan_date_iso, job_id, mutator, queue_dir=queue_dir, expect_status=expect_status)
         status = result.get("status")
         if not trail or trail[-1] != status:
             trail.append(status)
@@ -302,3 +302,91 @@ def test_needs_review_without_force_is_a_wrong_start_status(mod, monkeypatch, tm
 
     assert rc == 2
     assert trail == []
+
+
+def test_send_application_raises_marks_failed_not_wedged_in_sending(mod, monkeypatch, tmp_path):
+    """Finding 1: an SMTP exception must not leave the job wedged at
+    'sending' forever -- it must land as 'failed' with the error recorded,
+    and a best-effort Telegram note must be attempted."""
+    _write_queue(tmp_path, "2026-07-10", _entry())
+    trail = _spy_update_entry(mod, monkeypatch)
+
+    monkeypatch.setattr(mod, "assemble_package", _fake_assemble(package_dir=tmp_path / "pkg"))
+
+    def boom(*a, **kw):
+        raise RuntimeError("smtp connection reset")
+
+    monkeypatch.setattr(mod, "send_application", boom)
+    monkeypatch.setattr(mod, "crm_mark_applied", lambda *a, **kw: pytest.fail("must not be called"))
+    texts = []
+    monkeypatch.setattr(mod, "send_text", lambda *a, **kw: texts.append(a) or True)
+    monkeypatch.setattr(mod, "send_document", lambda *a, **kw: pytest.fail("must not be called"))
+
+    rc = mod.main(["2026-07-10", "job-1"])
+
+    assert rc == 1
+    assert trail == ["assembling", "sending", "failed"]
+    entry = _read_entry(tmp_path, "2026-07-10", "job-1")
+    assert entry["status"] == "failed"
+    assert "smtp connection reset" in entry["error"]
+    assert len(texts) == 1  # best-effort failure notification attempted
+
+
+def test_send_application_raises_telegram_also_failing_still_returns_1(mod, monkeypatch, tmp_path):
+    """The Telegram failure note is best-effort: if it too raises, the
+    orchestrator must still report failure (not crash uncaught)."""
+    _write_queue(tmp_path, "2026-07-10", _entry())
+    _spy_update_entry(mod, monkeypatch)
+
+    monkeypatch.setattr(mod, "assemble_package", _fake_assemble(package_dir=tmp_path / "pkg"))
+
+    def boom(*a, **kw):
+        raise RuntimeError("smtp connection reset")
+
+    monkeypatch.setattr(mod, "send_application", boom)
+
+    def text_boom(*a, **kw):
+        raise RuntimeError("telegram down")
+
+    monkeypatch.setattr(mod, "send_text", text_boom)
+
+    rc = mod.main(["2026-07-10", "job-1"])
+
+    assert rc == 1
+    entry = _read_entry(tmp_path, "2026-07-10", "job-1")
+    assert entry["status"] == "failed"
+
+
+def test_concurrent_double_spawn_second_gets_status_conflict(mod, monkeypatch, tmp_path):
+    """Finding 2a: the first status transition is a compare-and-swap. If the
+    entry's status has already moved off 'approved' by the time this process
+    reaches the flock (simulated here by mutating the queue file directly,
+    standing in for a concurrent winner), main() must exit 2 without
+    clobbering the winner's state."""
+    _write_queue(tmp_path, "2026-07-10", _entry())
+
+    monkeypatch.setattr(mod, "assemble_package", lambda *a, **kw: pytest.fail("must not assemble"))
+
+    # Simulate a concurrent winner: flip the on-disk status to 'assembling'
+    # right before this process's own CAS write, by monkeypatching
+    # update_entry to mutate the file out from under expect_status first.
+    from cv_tailor.scout_queue import update_entry as real_update_entry_fn
+
+    def racing_update_entry(scan_date_iso, job_id, mutator, *, queue_dir=None, expect_status=None):
+        if expect_status == "approved":
+            # A concurrent winner already claimed it.
+            real_update_entry_fn(
+                scan_date_iso, job_id, lambda e: e.update(status="assembling"),
+                queue_dir=queue_dir,
+            )
+        return real_update_entry_fn(
+            scan_date_iso, job_id, mutator, queue_dir=queue_dir, expect_status=expect_status
+        )
+
+    monkeypatch.setattr(mod, "update_entry", racing_update_entry)
+
+    rc = mod.main(["2026-07-10", "job-1"])
+
+    assert rc == 2
+    entry = _read_entry(tmp_path, "2026-07-10", "job-1")
+    assert entry["status"] == "assembling"  # the "winner's" state, untouched by the loser

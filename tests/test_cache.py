@@ -3,7 +3,7 @@ import sys, pathlib
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent / "src"))
 from cv_tailor.cache import (
     connect, is_new, mark_seen,
-    record_application, application_exists, applications_sent_today,
+    record_application, delete_application, application_exists, applications_sent_today,
 )
 from cv_tailor.job_sources import JobPosting
 
@@ -77,3 +77,45 @@ def test_applications_sent_today_counts_todays_rows(tmp_path):
     record_application(conn, job_id="job-1", company="Acme", role="AI Engineer",
                         url="https://x/1", channel="email")
     assert applications_sent_today(conn) == 1
+
+
+def test_record_application_returns_true_on_first_insert(tmp_path):
+    conn = connect(tmp_path / "jobs.db")
+    assert record_application(
+        conn, job_id="job-1", company="Acme", role="AI Engineer",
+        url="https://x/1", channel="email",
+    ) is True
+
+
+def test_record_application_second_insert_same_job_id_returns_false(tmp_path):
+    """PRIMARY KEY(job_id) arbitrates a same-job_id race: the second insert
+    for the same job_id must not silently overwrite the first (no more
+    INSERT OR REPLACE) -- it must fail and report False so the caller can
+    block instead of double-sending."""
+    conn = connect(tmp_path / "jobs.db")
+    assert record_application(
+        conn, job_id="job-1", company="Acme", role="AI Engineer",
+        url="https://x/1", channel="email",
+    ) is True
+    assert record_application(
+        conn, job_id="job-1", company="Acme", role="AI Engineer",
+        url="https://x/1", channel="email",
+    ) is False
+    row = conn.execute("SELECT COUNT(*) FROM applications WHERE job_id='job-1'").fetchone()
+    assert row[0] == 1
+
+
+def test_delete_application_removes_the_row(tmp_path):
+    conn = connect(tmp_path / "jobs.db")
+    record_application(conn, job_id="job-1", company="Acme", role="AI Engineer",
+                        url="https://x/1", channel="email")
+    assert application_exists(conn, job_id="job-1", company="Acme", role="AI Engineer") is True
+
+    delete_application(conn, job_id="job-1")
+
+    assert application_exists(conn, job_id="job-1", company="Acme", role="AI Engineer") is False
+
+
+def test_delete_application_missing_job_id_is_a_noop(tmp_path):
+    conn = connect(tmp_path / "jobs.db")
+    delete_application(conn, job_id="does-not-exist")  # must not raise

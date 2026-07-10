@@ -8,6 +8,8 @@ import email
 import sys
 import pathlib
 
+import pytest
+
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent / "src"))
 
 from cv_tailor.cache import connect, record_application
@@ -34,6 +36,15 @@ class FakeSMTP:
 
     def quit(self):
         self.quit_calls += 1
+
+
+class RaisingSMTP(FakeSMTP):
+    """Like FakeSMTP but sendmail raises -- simulates an SMTP failure after
+    login/starttls succeeded, to exercise the record-then-send rollback."""
+
+    def sendmail(self, from_addr, to_addrs, msg):
+        super().sendmail(from_addr, to_addrs, msg)
+        raise RuntimeError("smtp connection reset")
 
 
 def _profile():
@@ -197,6 +208,59 @@ def test_unarmed_preview_is_not_subject_to_daily_cap(tmp_path, monkeypatch):
 
     assert result.status == "preview_sent"
     assert len(fake.sendmail_calls) == 1
+
+
+def test_armed_happy_path_records_exactly_one_row(tmp_path, monkeypatch):
+    """Record-then-send must still leave exactly one ledger row on a
+    successful send -- not two (one pre-send, one post-send)."""
+    _set_env(monkeypatch, armed="1")
+    conn = connect(tmp_path / "jobs.db")
+    pkg_dir = _pkg_dir(tmp_path)
+    fake = FakeSMTP()
+
+    result = send_application(
+        _entry(), pkg_dir, _profile(), conn=conn, smtp_factory=lambda: fake
+    )
+
+    assert result.status == "sent"
+    row = conn.execute("SELECT COUNT(*) FROM applications WHERE job_id='job-1'").fetchone()
+    assert row[0] == 1
+
+
+def test_armed_smtp_raise_leaves_ledger_empty_and_reraises(tmp_path, monkeypatch):
+    """Finding 2b: record-then-send inserts the ledger row BEFORE the SMTP
+    call. If the send then fails, the row must be rolled back (so the job is
+    retryable, not permanently blocked as a 'duplicate') and the exception
+    must propagate so the caller (apply_approved.py) can mark the job
+    failed."""
+    _set_env(monkeypatch, armed="1")
+    conn = connect(tmp_path / "jobs.db")
+    pkg_dir = _pkg_dir(tmp_path)
+    fake = RaisingSMTP()
+
+    with pytest.raises(RuntimeError, match="smtp connection reset"):
+        send_application(_entry(), pkg_dir, _profile(), conn=conn, smtp_factory=lambda: fake)
+
+    from cv_tailor.cache import application_exists
+    assert application_exists(conn, job_id="job-1", company="Acme Inc.", role="AI Engineer") is False
+    row = conn.execute("SELECT COUNT(*) FROM applications").fetchone()
+    assert row[0] == 0
+
+
+def test_unarmed_smtp_raise_does_not_touch_ledger(tmp_path, monkeypatch):
+    """Preview sends never touch the ledger either way, but confirm an SMTP
+    failure on the unarmed path still propagates cleanly (no record/delete
+    dance since armed is False)."""
+    _set_env(monkeypatch, armed="0")
+    conn = connect(tmp_path / "jobs.db")
+    pkg_dir = _pkg_dir(tmp_path)
+    fake = RaisingSMTP()
+
+    with pytest.raises(RuntimeError, match="smtp connection reset"):
+        send_application(_entry(), pkg_dir, _profile(), conn=conn, smtp_factory=lambda: fake)
+
+    row = conn.execute("SELECT COUNT(*) FROM applications").fetchone()
+    assert row[0] == 0
 
 
 def test_missing_apply_target_blocks_with_reason(tmp_path, monkeypatch):

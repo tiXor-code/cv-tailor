@@ -5,7 +5,13 @@ from types import SimpleNamespace
 
 import pytest
 
-from cv_tailor.scout_queue import write_jobs_queue, read_description, update_entry, _job_id
+from cv_tailor.scout_queue import (
+    StatusConflict,
+    write_jobs_queue,
+    read_description,
+    update_entry,
+    _job_id,
+)
 
 
 def _job(**kw):
@@ -98,6 +104,39 @@ def test_update_entry_only_touches_the_matching_entry(tmp_path):
     by_id = {e["id"]: e for e in entries}
     assert by_id[target_id]["status"] == "approved"
     assert by_id[other_id]["status"] == "pending"
+
+
+def test_update_entry_expect_status_mismatch_raises_status_conflict(tmp_path):
+    scored = [{"job": _job(), "score": 9, "reason": "", "keywords": []}]
+    write_jobs_queue(scored, date(2026, 6, 24), queue_dir=tmp_path)
+    job_id = _job_id(_job())
+    update_entry("2026-06-24", job_id, lambda e: e.update(status="assembling"), queue_dir=tmp_path)
+
+    with pytest.raises(StatusConflict):
+        update_entry(
+            "2026-06-24", job_id, lambda e: e.update(status="sending"),
+            queue_dir=tmp_path, expect_status="approved",
+        )
+
+    # entry untouched by the failed CAS
+    entries = json.loads((tmp_path / "2026-06-24" / "jobs.json").read_text())
+    assert entries[0]["status"] == "assembling"
+
+
+def test_update_entry_expect_status_matching_passes(tmp_path):
+    scored = [{"job": _job(), "score": 9, "reason": "", "keywords": []}]
+    write_jobs_queue(scored, date(2026, 6, 24), queue_dir=tmp_path)
+    job_id = _job_id(_job())
+    update_entry("2026-06-24", job_id, lambda e: e.update(status="approved"), queue_dir=tmp_path)
+
+    result = update_entry(
+        "2026-06-24", job_id, lambda e: e.update(status="assembling"),
+        queue_dir=tmp_path, expect_status="approved",
+    )
+
+    assert result["status"] == "assembling"
+    entries = json.loads((tmp_path / "2026-06-24" / "jobs.json").read_text())
+    assert entries[0]["status"] == "assembling"
 
 
 def test_update_entry_unknown_id_raises_key_error(tmp_path):

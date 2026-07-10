@@ -7,8 +7,14 @@ company+role) blocks, an armed send over the daily cap blocks. Unarmed runs
 always preview to the sender's own inbox and never touch the dedupe ledger,
 so a job stays truly sendable once armed.
 
-Gate order: apply_target present -> duplicate -> (armed only) daily cap ->
-compose -> send -> (armed only) record_application.
+Gate order: apply_target present -> duplicate pre-check -> (armed only) daily
+cap -> compose -> (armed only) record-then-send: the ledger row is INSERTed
+BEFORE the SMTP call, and the PRIMARY KEY(job_id) constraint -- not the
+pre-check, which is check-then-act and can't close a same-job_id race on its
+own -- is what arbitrates two concurrent senders for the same job. If the
+SMTP send then raises, the just-inserted row is deleted before the exception
+is re-raised, so a failed send never leaves a phantom "already applied" row
+and can be retried.
 """
 from __future__ import annotations
 
@@ -21,7 +27,12 @@ from email.mime.text import MIMEText
 from pathlib import Path
 from typing import Callable, NamedTuple, Optional
 
-from cv_tailor.cache import application_exists, applications_sent_today, record_application
+from cv_tailor.cache import (
+    application_exists,
+    applications_sent_today,
+    delete_application,
+    record_application,
+)
 
 SIGNATURE_FIELDS = ("name", "phone", "email", "website", "linkedin", "github")
 DEFAULT_SMTP_HOST = "smtp.gmail.com"
@@ -102,16 +113,30 @@ def send_application(entry: dict, pkg_dir: Path, profile: dict, *, conn,
     msg = _compose_message(entry=entry, pkg_dir=pkg_dir, profile=profile,
                             from_addr=smtp_user, recipient=recipient, preview=not armed)
 
+    if armed:
+        # Record BEFORE sending: the atomic insert (not the pre-check above)
+        # is the real gate against two concurrent senders racing this same
+        # job_id. Losing this insert means another sender already claimed it.
+        recorded = record_application(
+            conn, job_id=job_id, company=company, role=role,
+            url=entry.get("url", ""), channel=entry.get("apply_method", "email"),
+        )
+        if not recorded:
+            return SendResult(status="blocked", recipient="", reason="duplicate")
+
     factory = smtp_factory or _default_smtp_factory
     smtp = factory()
-    smtp.starttls()
-    smtp.login(smtp_user, smtp_password)
-    smtp.sendmail(smtp_user, [recipient], msg.as_string())
-    smtp.quit()
+    try:
+        smtp.starttls()
+        smtp.login(smtp_user, smtp_password)
+        smtp.sendmail(smtp_user, [recipient], msg.as_string())
+        smtp.quit()
+    except Exception:
+        if armed:
+            delete_application(conn, job_id=job_id)
+        raise
 
     if armed:
-        record_application(conn, job_id=job_id, company=company, role=role,
-                            url=entry.get("url", ""), channel=entry.get("apply_method", "email"))
         return SendResult(status="sent", recipient=recipient, reason="")
 
     return SendResult(status="preview_sent", recipient=recipient, reason="")
