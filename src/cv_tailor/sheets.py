@@ -5,6 +5,7 @@ Workbook layout: one tab named 'Pipeline' with the columns in HEADERS.
 """
 from __future__ import annotations
 import os
+from datetime import date
 from pathlib import Path
 from typing import Any
 
@@ -93,3 +94,22 @@ def update_status(worksheet, company: str, role: str, status: str, date_applied:
     if date_applied is not None:
         worksheet.update_cell(row, 6, date_applied)
     return row
+
+
+def crm_mark_applied(company: str, role: str, url: str) -> bool:
+    """Mark a CRM row Applied with today's date after a real send.
+
+    Updates the existing row via find_row_by_company_role/update_status when
+    one exists; otherwise appends a minimal row (company, role, url, status
+    Applied, date). Never raises -- a Sheets hiccup must not fail a send that
+    already happened. Returns True on success, False on any failure."""
+    try:
+        worksheet = get_pipeline_worksheet()
+        today = date.today().isoformat()
+        try:
+            update_status(worksheet, company, role, "Applied", date_applied=today)
+        except LookupError:
+            worksheet.append_row([company, role, "", url, "", today, "Applied", "", ""])
+        return True
+    except Exception:
+        return False

@@ -2,7 +2,9 @@ import json
 from datetime import date
 from types import SimpleNamespace
 
-from cv_tailor.scout_queue import write_jobs_queue, read_description, _job_id
+import pytest
+
+from cv_tailor.scout_queue import write_jobs_queue, read_description, update_entry, _job_id
 
 
 def _job(**kw):
@@ -63,3 +65,53 @@ def test_email_apply_detection_in_queue(tmp_path):
     entry = json.loads(out.read_text())[0]
     assert entry["apply_method"] == "email"
     assert entry["apply_target"] == "jobs@acme.dev"
+
+
+def test_update_entry_mutates_and_returns_it(tmp_path):
+    scored = [{"job": _job(), "score": 9, "reason": "", "keywords": []}]
+    write_jobs_queue(scored, date(2026, 6, 24), queue_dir=tmp_path)
+    job_id = _job_id(_job())
+
+    result = update_entry(
+        "2026-06-24", job_id, lambda e: e.update(status="approved"), queue_dir=tmp_path
+    )
+
+    assert result["status"] == "approved"
+    entries = json.loads((tmp_path / "2026-06-24" / "jobs.json").read_text())
+    assert entries[0]["status"] == "approved"
+    assert entries[0]["id"] == job_id
+
+
+def test_update_entry_only_touches_the_matching_entry(tmp_path):
+    scored = [
+        {"job": _job(raw_id="one"), "score": 9, "reason": "", "keywords": []},
+        {"job": _job(raw_id="two"), "score": 5, "reason": "", "keywords": []},
+    ]
+    write_jobs_queue(scored, date(2026, 6, 24), queue_dir=tmp_path)
+    target_id = _job_id(_job(raw_id="one"))
+    other_id = _job_id(_job(raw_id="two"))
+
+    update_entry("2026-06-24", target_id, lambda e: e.update(status="approved"), queue_dir=tmp_path)
+
+    entries = json.loads((tmp_path / "2026-06-24" / "jobs.json").read_text())
+    by_id = {e["id"]: e for e in entries}
+    assert by_id[target_id]["status"] == "approved"
+    assert by_id[other_id]["status"] == "pending"
+
+
+def test_update_entry_unknown_id_raises_key_error(tmp_path):
+    write_jobs_queue([], date(2026, 6, 24), queue_dir=tmp_path)
+    with pytest.raises(KeyError):
+        update_entry("2026-06-24", "no-such-id", lambda e: None, queue_dir=tmp_path)
+
+
+def test_update_entry_write_is_atomic_no_tmp_residue(tmp_path):
+    scored = [{"job": _job(), "score": 9, "reason": "", "keywords": []}]
+    write_jobs_queue(scored, date(2026, 6, 24), queue_dir=tmp_path)
+    job_id = _job_id(_job())
+
+    update_entry("2026-06-24", job_id, lambda e: e.update(status="approved"), queue_dir=tmp_path)
+
+    day_dir = tmp_path / "2026-06-24"
+    assert list(day_dir.glob("*.tmp")) == []
+    assert (day_dir / "jobs.json").exists()

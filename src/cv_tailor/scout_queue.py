@@ -84,3 +84,30 @@ def read_description(scan_date_iso: str, job_id: str, *, queue_dir=None) -> str:
         return (json.loads(p.read_text()).get(job_id) or "").strip()
     except (json.JSONDecodeError, OSError):
         return ""
+
+
+def update_entry(scan_date_iso: str, job_id: str, mutator, *, queue_dir=None) -> dict:
+    """Atomic read-modify-write of one jobs.json entry.
+
+    `mutator(entry_dict)` mutates the matching entry in place (return value
+    ignored). Every post-approval writer (scripts/apply_approved.py, the
+    scripts/assemble.py CLI) goes through this so jobs.json never has a
+    torn/partial write visible to a concurrent reader (the sidecar, the
+    admin UI poll): write `<file>.tmp`, then os.rename onto the real path.
+
+    Raises KeyError(job_id) if no entry with that id exists in the day's
+    queue -- the caller decides how to report that (print + exit 2 for the
+    orchestrator).
+    """
+    path = queue_root(queue_dir) / scan_date_iso / "jobs.json"
+    entries = json.loads(path.read_text())
+    entry = next((e for e in entries if e.get("id") == job_id), None)
+    if entry is None:
+        raise KeyError(job_id)
+
+    mutator(entry)
+
+    tmp_path = path.with_name(path.name + ".tmp")
+    tmp_path.write_text(json.dumps(entries, indent=2, ensure_ascii=False))
+    os.rename(tmp_path, path)
+    return entry
