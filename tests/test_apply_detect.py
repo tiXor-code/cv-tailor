@@ -31,3 +31,16 @@ def test_noreply_filtered():
 
 def test_empty():
     assert detect_apply_channel("") == ("portal", None)
+
+def test_applications_to_two_or_joined_is_ambiguous():
+    assert detect_apply_channel("Applications to careers@acme.dev or hr@acme.dev.") == ("portal", None)
+
+def test_cc_address_is_not_a_candidate():
+    m, t = detect_apply_channel(
+        "Send your CV to jobs@thirdparty.com, cc info@acme.dev for visibility.",
+        company_domain="acme.dev")
+    assert (m, t) == ("email", "jobs@thirdparty.com")
+
+def test_single_line_second_sentence_email_does_not_downgrade():
+    d = "Send your CV to jobs@acme.dev to apply. Questions? reach out to hello@acme.dev anytime."
+    assert detect_apply_channel(d) == ("email", "jobs@acme.dev")
