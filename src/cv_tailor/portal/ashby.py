@@ -9,10 +9,13 @@ real posting's DOM -- see tests/fixtures/portal/ashby_form.html for the
 provenance note and the documented simplifications.
 
 Flow: detect_blockers (in case the posting page itself is walled) -> open
-the Application tab -> detect_blockers again (a captcha can appear only
-once the form panel renders) -> upload the CV (real Ashby re-renders the
-form on resume selection, so this happens before any typed field to avoid
-losing it to that re-render) -> fill contact fields from profile.contact
+the Application tab (and wait for the SPA to settle -- see
+_open_application_tab, a real posting swaps the whole panel's DOM,
+including the resume file input, in a re-render shortly after the tab
+click) -> detect_blockers again (a captcha can appear only once the form
+panel renders) -> upload the CV (real Ashby re-renders the form again on
+resume selection, so this happens before any typed field to avoid losing
+it to that re-render) -> fill contact fields from profile.contact
 -> paste the cover letter if the form has that field -> enumerate
 remaining screening questions -> answer_question each (a
 REQUIRED question with no grounded answer aborts to needs_human before
@@ -51,6 +54,11 @@ CONFIRMATION_TIMEOUT_MS = 30_000
 
 _APPLICATION_TAB_SELECTOR = "#job-application-form"
 _RESUME_SELECTOR = "#_systemfield_resume"
+# Ashby's real resume field is a custom drag-drop widget: a hidden
+# input[type=file] behind a styled "Upload File" button. Board configs
+# can differ per org, so if the known id ever misses, fall back to any
+# file input on the page (see _find_resume_locator).
+_RESUME_FALLBACK_SELECTOR = "input[type='file']"
 _COVER_LETTER_SELECTOR = "#_systemfield_cover_letter"
 _SUBMIT_SELECTOR = "#submit-btn"
 
@@ -127,14 +135,18 @@ class AshbyAdapter(PortalAdapter):
         # silently wiping any values typed beforehand. Uploading first
         # means later fills land on the settled, post-parse DOM.
         #
-        # The upload is write-VERIFIED (el.files length) -- a missing cv_path,
-        # a selector that matches nothing, an upload error, or a file that
-        # never actually attached must abort to needs_human BEFORE any field is
-        # typed and long before any armed submit, rather than silently applying
-        # with no resume.
-        if not self._upload_and_verify_resume(page, package.get("cv_path")):
+        # The upload is write-VERIFIED (el.files length, or the dropzone's
+        # post-upload UI state -- see _upload_and_verify_resume) -- a missing
+        # cv_path, a selector that matches nothing, an upload error, or a file
+        # that never actually attached must abort to needs_human BEFORE any
+        # field is typed and long before any armed submit, rather than
+        # silently applying with no resume. The failure reason carries a
+        # diagnostic (what was checked, what was observed) so a live abort is
+        # a one-read triage.
+        uploaded, upload_detail = self._upload_and_verify_resume(page, package.get("cv_path"))
+        if not uploaded:
             capture_evidence(page, evidence_dir, "aborted")
-            return PortalResult(status="needs_human", reason="resume-upload-failed",
+            return PortalResult(status="needs_human", reason=f"resume-upload-failed: {upload_detail}",
                                  evidence_dir=str(evidence_dir))
 
         contact = (profile or {}).get("contact", {}) or {}
@@ -167,48 +179,165 @@ class AshbyAdapter(PortalAdapter):
     # --- navigation ---------------------------------------------------------
 
     def _open_application_tab(self, page) -> None:
-        """Click into the Application tab if present. Never raises -- some
-        postings may already be on the application route (e.g. a direct
-        apply_target URL), in which case the tab selector legitimately
-        matches nothing and filling proceeds against the current page."""
+        """Click into the Application tab if present, then wait for the SPA
+        to settle. Never raises -- some postings may already be on the
+        application route (e.g. a direct apply_target URL), in which case
+        the tab selector legitimately matches nothing and filling proceeds
+        against the current page.
+
+        The settle wait is load-bearing, not cosmetic: live-verified against
+        a real posting, the Application panel's DOM -- including the resume
+        file input -- gets swapped out by a React re-render ~150-300ms after
+        the tab click (confirmed by tagging the pre-click input node and
+        polling for the tag to survive). Uploading before that re-render
+        settles attaches the file to a node that gets discarded moments
+        later, which was silently losing the resume with no error anywhere
+        (this is the root cause of the resume-upload-failed abort seen on a
+        live XBow/Ashby run before this fix). A timeout here just means the
+        network never went idle (nothing else in flight) -- proceed anyway
+        rather than blocking the whole apply on it."""
         try:
             tab = page.locator(_APPLICATION_TAB_SELECTOR)
             if tab.count() > 0:
                 tab.first.click()
+                try:
+                    page.wait_for_load_state("networkidle", timeout=15_000)
+                except PlaywrightError:
+                    pass
         except PlaywrightError:
             pass
 
     # --- filling --------------------------------------------------------------
 
-    def _upload_and_verify_resume(self, page, cv_path) -> bool:
-        """Upload the resume and confirm it actually attached. Returns False on
-        any failure (no cv_path, selector miss, upload error, or a file that
-        never landed) so the caller can abort to resume-upload-failed."""
-        if not self._upload_resume(page, cv_path):
-            return False
-        return verify_file_attached(page, _RESUME_SELECTOR)
+    def _upload_and_verify_resume(self, page, cv_path) -> tuple[bool, str]:
+        """Upload the resume and confirm it actually attached. Returns
+        (True, "") on success or (False, diagnostic) where diagnostic names
+        what was checked and what was observed -- so a live abort is a
+        one-read triage instead of the bare "resume-upload-failed" this used
+        to return.
 
-    def _upload_resume(self, page, cv_path) -> bool:
+        Verification ORs three signals, all re-read fresh AFTER the upload
+        settles (never from a handle captured before it): verify_file_attached
+        on the known systemfield selector, the resolved locator's own `files`
+        property (covers the fallback-selector case, where the known
+        selector legitimately matches nothing), and the dropzone's
+        post-upload UI state (uploaded filename text, or a remove/delete
+        control). The UI-state signal exists because a custom uploader can
+        swap its underlying <input> node for a fresh, unfilled one right
+        after an upload while keeping the "uploaded" state in its own
+        component state -- files.length on the fresh node would read 0 even
+        though the widget correctly registered the upload."""
         if not cv_path:
-            return False
+            return False, "no cv_path provided"
+
+        locator = self._find_resume_locator(page)
+        if locator is None:
+            return False, (
+                f"no file input found ({_RESUME_SELECTOR} and "
+                f"{_RESUME_FALLBACK_SELECTOR} fallback both matched 0 elements)"
+            )
+
         try:
-            locator = page.locator(_RESUME_SELECTOR)
-            if locator.count() == 0:
-                return False
             locator.set_input_files(cv_path)
-        except PlaywrightError:
-            return False
+        except PlaywrightError as exc:
+            return False, f"set_input_files raised {type(exc).__name__}: {exc}"
+
         # Ashby's real form kicks off an async resume-parse on upload and
         # re-renders the form when it completes, silently wiping anything
-        # typed in that window. Give it a moment to settle before the
-        # caller starts filling other fields; a timeout here just means
-        # the network never went idle (nothing else in-flight) -- proceed
-        # anyway rather than blocking the whole apply on it.
+        # typed in that window. Give it a moment to settle before reading
+        # back or letting the caller fill other fields; a timeout here just
+        # means the network never went idle (nothing else in-flight) --
+        # proceed anyway rather than blocking the whole apply on it.
         try:
             page.wait_for_load_state("networkidle", timeout=15_000)
         except PlaywrightError:
             pass
-        return True
+
+        filename = Path(cv_path).name
+        files_attached = verify_file_attached(page, _RESUME_SELECTOR) or self._locator_has_files(locator)
+        if files_attached or self._resume_filename_visible(page, filename):
+            return True, ""
+
+        return False, (
+            f"set_input_files ran against a matched file input but neither "
+            f"files.length>0 nor the filename '{filename}' appeared anywhere "
+            f"on the page after settling to networkidle"
+        )
+
+    def _find_resume_locator(self, page):
+        """Return a Locator for the resume file input: the known systemfield
+        id when present, else any input[type=file] on the page (Ashby board
+        configs can differ per org) -- preferring one whose accept attribute
+        mentions pdf, then one whose nearby container mentions resume, else
+        just the first candidate. None when nothing matches at all. Never
+        raises -- a selector engine error on one candidate just skips it and
+        tries the next."""
+        try:
+            primary = page.locator(_RESUME_SELECTOR)
+            if primary.count() > 0:
+                return primary.first
+        except PlaywrightError:
+            pass
+
+        try:
+            fallback = page.locator(_RESUME_FALLBACK_SELECTOR)
+            count = fallback.count()
+        except PlaywrightError:
+            return None
+        if count == 0:
+            return None
+        if count == 1:
+            return fallback.first
+
+        for i in range(count):
+            candidate = fallback.nth(i)
+            try:
+                accept = (candidate.get_attribute("accept") or "").lower()
+            except PlaywrightError:
+                continue
+            if "pdf" in accept:
+                return candidate
+        for i in range(count):
+            candidate = fallback.nth(i)
+            try:
+                container_text = candidate.evaluate(
+                    "el => (el.closest('div, form') || el.parentElement || el).innerText || ''"
+                )
+            except PlaywrightError:
+                continue
+            if "resume" in container_text.lower():
+                return candidate
+        return fallback.first
+
+    @staticmethod
+    def _locator_has_files(locator) -> bool:
+        """Re-query `locator` (never a stale handle -- Locators resolve the
+        live DOM on every call) for a non-empty `files` list. False on any
+        error, never raises."""
+        try:
+            return bool(locator.evaluate("el => !!(el.files && el.files.length > 0)"))
+        except PlaywrightError:
+            return False
+
+    @staticmethod
+    def _resume_filename_visible(page, filename: str) -> bool:
+        """True if the uploaded filename is visibly rendered anywhere on the
+        page, or a remove/delete control is present -- the dropzone's
+        post-upload UI state, used as an alternate confirmation signal to
+        files.length (see _upload_and_verify_resume's docstring for why)."""
+        try:
+            if page.get_by_text(filename, exact=False).count() > 0:
+                return True
+        except PlaywrightError:
+            pass
+        try:
+            remove_control = page.locator(
+                "button:has-text('Remove'), button:has-text('Delete'), "
+                "[aria-label*='remove' i], [aria-label*='delete' i]"
+            )
+            return remove_control.count() > 0
+        except PlaywrightError:
+            return False
 
     @staticmethod
     def _verify_contact(page, contact: dict) -> str | None:

@@ -161,7 +161,11 @@ def test_apply_resume_missing_cv_path_aborts_to_resume_upload_failed(chromium_pa
         result = AshbyAdapter().apply(page, entry, package_no_cv, _PROFILE, _ANSWERS, dry_run=True)
 
     assert result.status == "needs_human"
-    assert result.reason == "resume-upload-failed"
+    # Diagnostic reason: bare "resume-upload-failed" is now a prefix, with a
+    # ": <what was checked and observed>" suffix so a live abort is a
+    # one-read triage.
+    assert result.reason.startswith("resume-upload-failed:")
+    assert "no cv_path provided" in result.reason
     evidence_dir = Path(result.evidence_dir)
     assert (evidence_dir / "aborted.png").exists()
     # never reaches "filled" -> never submits with a missing resume
@@ -177,7 +181,66 @@ def test_apply_resume_input_absent_aborts_to_resume_upload_failed(chromium_page,
         result = AshbyAdapter().apply(page, entry, package, _PROFILE, _ANSWERS, dry_run=True)
 
     assert result.status == "needs_human"
-    assert result.reason == "resume-upload-failed"
+    # Genuinely-missing input (task's own selector AND the input[type=file]
+    # fallback both find nothing): the diagnostic says so explicitly.
+    assert result.reason.startswith("resume-upload-failed:")
+    assert "no file input found" in result.reason
+
+
+# --- custom-uploader resume attach + verification (C345-followup) --------------
+#
+# Root cause of a live abort (jobs.ashbyhq.com/xbowcareers/09439fdb-a556-4d34-9043-
+# eb9928bece8d, 2026-07-10): the real resume field is a custom drag-drop widget
+# whose hidden <input type=file> node gets swapped by a React re-render shortly
+# after the Application tab opens -- uploading before that settles silently loses
+# the file with no error anywhere. _open_application_tab now waits for the SPA
+# to settle before anything touches the form; these tests cover the widget shape
+# itself (hidden input, dual verification signal) that motivated the fix.
+
+def test_apply_hidden_resume_input_upload_succeeds(chromium_page, package):
+    """The default fixture's resume input is visually hidden behind a styled
+    dropzone button (mirrors the real widget's clip-path-off-screen trick --
+    same technique confirmed live on the real jobs.ashbyhq.com DOM) -- proves
+    the upload+verify path does not depend on the input having any on-screen
+    footprint."""
+    page = chromium_page
+    entry = {"id": "job-1"}
+
+    with serve_fixtures() as base_url:
+        _goto(page, base_url)
+        result = AshbyAdapter().apply(page, entry, package, _PROFILE, _ANSWERS, dry_run=True)
+
+        resume_input = page.locator("#_systemfield_resume")
+        box = resume_input.bounding_box()
+        uploaded = resume_input.evaluate("el => el.files.length")
+
+    # Playwright's own is_visible() still reports True for a 1x1px clipped
+    # box (it only checks display/visibility/opacity, not clip-path), so the
+    # real assertion of "visually hidden" is the negligible bounding box.
+    assert box is not None and box["width"] <= 1 and box["height"] <= 1
+    assert result.status == "filled"
+    assert uploaded == 1
+
+
+def test_apply_resume_swapped_input_node_verifies_via_filename(chromium_page, package):
+    """?variant=resumeswap: the widget swaps the <input> for a fresh, unfilled
+    clone right after the upload lands (same id), so a re-read of
+    files.length is 0 -- the filename appearing in the dropzone is the only
+    signal proving the upload actually landed, and the adapter must accept it."""
+    page = chromium_page
+    entry = {"id": "job-1"}
+
+    with serve_fixtures() as base_url:
+        _goto(page, base_url, variant="resumeswap")
+        result = AshbyAdapter().apply(page, entry, package, _PROFILE, _ANSWERS, dry_run=True)
+
+        # Ground truth: the live input node genuinely has 0 files post-swap --
+        # proves this test exercises the filename-fallback path, not files.length.
+        post_swap_files = page.locator("#_systemfield_resume").evaluate("el => el.files.length")
+
+    assert post_swap_files == 0
+    assert result.status == "filled"
+    assert result.reason == ""
 
 
 # --- write-verified required screening answer (C345) ---------------------------

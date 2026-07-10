@@ -15,6 +15,18 @@
   - Ashby's client router serves Overview/Application as separate routes;
     here both panels live in one static page and a JS click handler on the
     "Application" tab toggles which is visible.
+  - The Resume field is a custom drag-drop widget on the real form: a
+    dashed dropzone with a styled "Upload File" button and "or drag and
+    drop here" text, backed by a visually-hidden input[type=file] (clipped
+    off-screen via inline style, exactly like the live DOM). This fixture
+    mirrors that shape (hidden input inside `.resume-dropzone`, JS-driven
+    filename display + "Replace" button text on change) instead of the
+    plain visible file input earlier fixture revisions used, so tests
+    exercise the real hidden-input path (task C345-followup, live-verified
+    against jobs.ashbyhq.com/xbowcareers/09439fdb-a556-4d34-9043-eb9928bece8d
+    2026-07-10: the input node itself gets swapped by a React re-render
+    ~150-300ms after the Application tab opens -- confirmed by tagging the
+    pre-click node with a probe attribute and polling for it to survive).
   - Ashby's Yes/No questions render as a custom button pair backed by a
     hidden checkbox, and there is no native <select> anywhere in the real
     form. This fixture's screening "select question" uses a native
@@ -42,8 +54,14 @@
   - ?variant=locked        -- the required screening text field silently
     reverts any typed value (an input listener clears it), so a fill "runs"
     but nothing lands -- exercises the write-verified unwritable-required path.
-  - ?variant=noresume      -- removes the resume file input entirely, so the
-    resume upload has no target -- exercises the resume-upload-failed path.
+  - ?variant=noresume      -- removes the resume file input entirely (and
+    every other input[type=file] on the page), so the resume upload has no
+    target at all -- exercises the genuinely-missing-input diagnostic path.
+  - ?variant=resumeswap    -- on the resume input's change event, the widget
+    swaps the underlying <input> node for a fresh, unfilled clone (same id)
+    right after the upload lands, while still showing the filename in the
+    dropzone -- exercises the files.length-is-unreliable fallback (success
+    via the filename-visible signal, not verify_file_attached).
   - ?variant=altconfirm    -- on submit the form panel is removed and a
     success panel with text that does NOT contain "submitted"/"thank you"
     appears (no error banner) -- exercises the broadened confirmation
@@ -85,7 +103,13 @@
 
     <div class="ashby-application-form-field-entry" data-field-path="_systemfield_resume">
       <label for="_systemfield_resume">Resume</label>
-      <input type="file" id="_systemfield_resume" required>
+      <div class="resume-dropzone" role="presentation" style="border:1px dashed #999; padding:16px; display:flex; align-items:center; gap:12px;">
+        <input type="file" id="_systemfield_resume" required
+               accept="application/pdf,.pdf,application/msword,.doc"
+               style="border:0; clip:rect(0,0,0,0); clip-path:inset(50%); height:1px; margin:0 -1px -1px 0; overflow:hidden; padding:0; position:absolute; width:1px; white-space:nowrap;">
+        <button type="button" class="resume-upload-btn">Upload File</button>
+        <span class="resume-drag-text">or drag and drop here</span>
+      </div>
     </div>
 
     <div class="ashby-application-form-field-entry" data-field-path="_systemfield_cover_letter">
@@ -147,6 +171,48 @@
   if (variant === "noresume") {
     var resumeEntry = document.querySelector("[data-field-path='_systemfield_resume']");
     if (resumeEntry) { resumeEntry.parentNode.removeChild(resumeEntry); }
+  }
+
+  var resumeInput = document.getElementById("_systemfield_resume");
+  if (resumeInput) {
+    var resumeBtn = document.querySelector(".resume-upload-btn");
+    if (resumeBtn) {
+      resumeBtn.addEventListener("click", function () { resumeInput.click(); });
+    }
+
+    resumeInput.addEventListener("change", function () {
+      if (!(resumeInput.files && resumeInput.files.length > 0)) { return; }
+      var filename = resumeInput.files[0].name;
+      var dropzone = resumeInput.closest(".resume-dropzone");
+
+      if (variant === "resumeswap") {
+        // Live-verified widget behavior: the underlying <input> node gets
+        // swapped for a fresh, unfilled node (same id) right after the
+        // upload lands, while the dropzone's own filename UI state (set
+        // below) is kept independently -- so files.length re-read after
+        // this point is 0 even though the upload genuinely landed. Built
+        // via createElement (not cloneNode -- Chromium's cloneNode(true)
+        // carries the live FileList over to the clone, which would defeat
+        // the point of this variant) so the fresh node genuinely starts
+        // with an empty file list.
+        var freshInput = document.createElement("input");
+        freshInput.type = "file";
+        freshInput.id = resumeInput.id;
+        freshInput.setAttribute("accept", resumeInput.getAttribute("accept") || "");
+        freshInput.setAttribute("style", resumeInput.getAttribute("style") || "");
+        freshInput.required = resumeInput.required;
+        dropzone.replaceChild(freshInput, resumeInput);
+      }
+
+      var nameSpan = dropzone.querySelector(".resume-filename");
+      if (!nameSpan) {
+        nameSpan = document.createElement("span");
+        nameSpan.className = "resume-filename";
+        dropzone.appendChild(nameSpan);
+      }
+      nameSpan.textContent = filename;
+      if (resumeBtn) { resumeBtn.textContent = "Replace"; }
+    });
   }
 
   var appTab = document.getElementById("job-application-form");
