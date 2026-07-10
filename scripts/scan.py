@@ -27,6 +27,7 @@ from cv_tailor.match import score_job
 from cv_tailor.digest import format_digest
 from cv_tailor.telegram import format_digest_for_telegram, send_text
 from cv_tailor.scout_queue import write_jobs_queue
+from cv_tailor.budget import SerpBudget
 
 
 def _is_auth_error(exc: Exception) -> bool:
@@ -45,6 +46,7 @@ from cv_tailor.gates import passes_gate1_tracks
 from cv_tailor.enrich import is_smb, smb_hint
 
 DB_PATH = ROOT / "data" / "jobs.db"
+BUDGET_PATH = ROOT / "data" / "serpapi_budget.json"
 
 
 def run_gates(jobs, tracks, conn):
@@ -118,9 +120,21 @@ def main(argv=None):
     db = ":memory:" if args.dry_run else DB_PATH
     conn = connect(db)
 
+    # dry-run gets a throwaway budget file (a temp dir, deleted with the OS
+    # temp cleanup) so exploratory/test runs never consume from the real
+    # monthly counter -- same spirit as db=":memory:" above.
+    if args.dry_run:
+        import tempfile
+        budget_path = Path(tempfile.mkdtemp()) / "serpapi_budget.json"
+    else:
+        budget_path = BUDGET_PATH
+    serp_budget = SerpBudget(path=budget_path)
+
     print(f"fetching {len(sources)} sources...", file=sys.stderr)
-    jobs = fetch_all(sources)
+    jobs = fetch_all(sources, serp_budget=serp_budget)
     print(f"  {len(jobs)} postings", file=sys.stderr)
+    print(f"  serpapi budget: {serp_budget.used()}/{serp_budget.monthly_cap} used this month",
+          file=sys.stderr)
 
     survivors = run_gates(jobs, tracks, conn)
     print(f"  {len(survivors)} passed gates (remote/EU/SMB/new)", file=sys.stderr)

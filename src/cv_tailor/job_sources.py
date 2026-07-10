@@ -116,8 +116,19 @@ def _best_company_url(apply_options, share_link):
 
 
 def fetch_serpapi(query: str, location: str | None = None, api_key: str | None = None,
-                  hl: str = "en") -> list[JobPosting]:
-    """Google Jobs via SerpAPI. Remote-only (ltype=1). One page (~10 results)."""
+                  hl: str = "en", budget=None) -> list[JobPosting]:
+    """Google Jobs via SerpAPI. Remote-only (ltype=1). One page (~10 results).
+
+    `budget`, when given, is a budget.SerpBudget consulted BEFORE the network
+    call. A spent budget blocks the query and returns [] without hitting the
+    network -- loudly logged so a silently-empty scan is never mistaken for
+    "no good jobs today". `budget=None` (the default) preserves old
+    unlimited/unbudgeted behavior, so existing callers are unaffected."""
+    if budget is not None and not budget.take():
+        print(f"serpapi budget exhausted (cap {budget.monthly_cap}/mo, "
+              f"{budget.used()} used this month); skipping remaining queries "
+              f"-- dropped {query!r}")
+        return []
     api_key = api_key or os.environ.get("SERPAPI_API_KEY")
     if not api_key:
         print("warning: SERPAPI_API_KEY not set; skipping serpapi source")
@@ -241,8 +252,15 @@ def fetch_wwr(category: str) -> list[JobPosting]:
     return _parse_wwr_rss(root)
 
 
-def fetch_all(sources: list[dict]) -> list[JobPosting]:
-    """sources = [{'kind': 'ashby'|'greenhouse'|'lever', 'slug': '...', 'name': '...'}, ...]"""
+def fetch_all(sources: list[dict], serp_budget=None) -> list[JobPosting]:
+    """sources = [{'kind': 'ashby'|'greenhouse'|'lever', 'slug': '...', 'name': '...'}, ...]
+
+    `serp_budget`, when given (a budget.SerpBudget), is the ONE shared
+    instance threaded through every serpapi source below, so the counter
+    reflects queries actually taken across the whole scan rather than each
+    source re-reading a stale file. `serp_budget=None` (the default) means
+    unbudgeted -- every serpapi source fires -- matching pre-budget behavior
+    for callers (including existing tests) that do not pass one."""
     dispatch = {
         "ashby": fetch_ashby_org,
         "greenhouse": fetch_greenhouse_org,
@@ -259,7 +277,7 @@ def fetch_all(sources: list[dict]) -> list[JobPosting]:
         kind = s["kind"]
         if kind == "serpapi":
             try:
-                out.extend(fetch_serpapi(s["query"], s.get("location")))
+                out.extend(fetch_serpapi(s["query"], s.get("location"), budget=serp_budget))
             except Exception as e:
                 print(f"warning: serpapi fetch failed for {s.get('query')!r}: {e}")
             continue

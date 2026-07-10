@@ -48,9 +48,18 @@ sources:
   # SerpAPI google_jobs rejects continent locations ("Europe") and city locations
   # return 0; rely on the query text + ltype=1 (remote) and let Gate 1 + the LLM
   # enforce EU-eligibility. No `location` param.
+  #
+  # 5 serpapi queries/day = ~150/mo, which EXCEEDS budget.SerpBudget's 90/mo cap
+  # by design -- the counter is what stops serpapi fetches once the month's 90
+  # are spent, rather than sources.yaml self-limiting to a number nobody would
+  # ever revisit as content-track coverage grows.
   - kind: serpapi
     query: "AI engineer remote europe"
   - kind: serpapi
     query: "AI automation engineer remote europe"
   - kind: serpapi
     query: "forward deployed engineer remote europe"
+  - kind: serpapi
+    query: "content producer remote part-time"
+  - kind: serpapi
+    query: "freelance video editor remote europe"
