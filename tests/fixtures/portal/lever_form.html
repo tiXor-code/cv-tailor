@@ -1,0 +1,145 @@
+<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>Apply to Acme Corp - Lever</title></head>
+<body>
+  <!-- Faithful structural snapshot of a real Lever apply form (fetched from
+       jobs.lever.co/ro/<posting>/apply and localized/stripped: same
+       li.application-question / .application-label / .application-field
+       shape, same name attributes -- name, email, phone, location, org,
+       urls[LinkedIn], urls[GitHub], resume, eeo[gender] -- as the live
+       markup. "comments" is Lever's documented additional-info/cover-letter
+       field name; the confirmation flow and captcha toggle below are
+       fixture-only JS since no real backend exists here. -->
+  <form id="application-form" enctype="multipart/form-data" method="POST">
+    <div class="section page-centered application-form">
+      <h4>Submit your application</h4>
+      <ul>
+        <li class="application-question resume">
+          <label>
+            <div class="application-label">Resume/CV <span class="required">✱</span></div>
+            <div class="application-field">
+              <input class="application-file-input" data-qa="input-resume" id="resume-upload-input" name="resume" type="file">
+            </div>
+          </label>
+        </li>
+        <li class="application-question">
+          <label>
+            <div class="application-label">Full name<span class="required">✱</span></div>
+            <div class="application-field"><input type="text" data-qa="name-input" name="name" required></div>
+          </label>
+        </li>
+        <li class="application-question">
+          <label>
+            <div class="application-label">Email<span class="required">✱</span></div>
+            <div class="application-field"><input name="email" data-qa="email-input" type="email" required></div>
+          </label>
+        </li>
+        <li class="application-question">
+          <label>
+            <div class="application-label">Phone <span class="required">✱</span></div>
+            <div class="application-field"><input type="text" data-qa="phone-input" name="phone" required></div>
+          </label>
+        </li>
+        <li class="application-question" data-qa="structured-contact-location-question">
+          <label>
+            <div class="application-label">Current location</div>
+            <div class="application-field"><input class="location-input" data-qa="location-input" id="location-input" type="text" name="location"></div>
+          </label>
+        </li>
+        <li class="application-question">
+          <label>
+            <div class="application-label">Current company <span class="required">✱</span></div>
+            <div class="application-field"><input type="text" data-qa="org-input" name="org" required></div>
+          </label>
+        </li>
+      </ul>
+    </div>
+    <div class="section page-centered application-form">
+      <h4>Links</h4>
+      <ul>
+        <li class="application-question">
+          <label>
+            <div class="application-label">LinkedIn URL</div>
+            <div class="application-field"><input type="text" name="urls[LinkedIn]"></div>
+          </label>
+        </li>
+        <li class="application-question">
+          <label>
+            <div class="application-label">GitHub URL</div>
+            <div class="application-field"><input type="text" name="urls[GitHub]"></div>
+          </label>
+        </li>
+      </ul>
+    </div>
+    <div class="section page-centered application-form" data-qa="additional-cards">
+      <h4 data-qa="card-name">Additional Information</h4>
+      <ul>
+        <li class="application-question custom-question">
+          <div>
+            <div class="application-label full-width textarea"><div class="text">Additional information</div></div>
+            <div class="application-field full-width"><textarea class="card-field-input" id="additional-information" name="comments"></textarea></div>
+          </div>
+        </li>
+      </ul>
+    </div>
+    <div class="section eeo-section page-centered application-form" data-qa="eeo-section">
+      <div class="application-question">
+        <label>
+          <div class="application-label">Gender</div>
+          <div class="application-field">
+            <div class="application-dropdown">
+              <select name="eeo[gender]">
+                <option value="">Select ...</option>
+                <option value="Male">Male</option>
+                <option value="Female">Female</option>
+                <option value="Decline to self-identify">Decline to self-identify</option>
+              </select>
+            </div>
+          </div>
+        </label>
+      </div>
+    </div>
+    <div class="section page-centered application-form last-section-apply">
+      <button id="btn-submit" type="button" class="postings-btn template-btn-submit hex-color" data-qa="btn-submit">Submit application</button>
+    </div>
+  </form>
+
+  <script>
+    // Fixture-only: no real Lever backend exists here, so the captcha
+    // wall and post-submit confirmation are simulated via query-string
+    // toggles on this same file rather than separate pages/endpoints.
+    document.addEventListener('DOMContentLoaded', function () {
+      var params = new URLSearchParams(location.search);
+
+      if (params.get('captcha') === '1') {
+        var wall = document.createElement('div');
+        wall.className = 'h-captcha';
+        wall.setAttribute('data-sitekey', 'test-sitekey');
+        document.body.insertBefore(wall, document.body.firstChild);
+      }
+
+      if (params.get('submitted') === '1') {
+        document.body.innerHTML =
+          '<div class="confirmation-page" data-qa="confirmation">' +
+          '<h2>Application submitted</h2>' +
+          '<p>Thanks for applying -- we have received your application.</p>' +
+          '</div>';
+        return;
+      }
+
+      // nosubmit=1: the submit button is wired to nothing, so a click
+      // never produces a confirmation -- exercises the 30s timeout path.
+      if (params.get('nosubmit') === '1') {
+        return;
+      }
+
+      var btn = document.getElementById('btn-submit');
+      if (btn) {
+        btn.addEventListener('click', function () {
+          window.location.href = location.pathname + '?submitted=1';
+        });
+      }
+    });
+  </script>
+</body>
+</html>

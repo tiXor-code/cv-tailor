@@ -1,0 +1,278 @@
+# tests/test_portal_lever.py
+"""Lever portal adapter: field mapping, required-question abort, blocker
+detection, and dry_run/armed submit semantics -- exercised with real
+headless chromium against the local fixture
+(tests/fixtures/portal/lever_form.html) served over http.server.
+"""
+from __future__ import annotations
+
+import json
+import sys
+from pathlib import Path
+from types import SimpleNamespace
+from urllib.parse import urlencode
+
+import pytest
+from playwright.sync_api import sync_playwright
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
+sys.path.insert(0, str(Path(__file__).resolve().parent / "fixtures" / "portal"))
+
+import cv_tailor.portal.base as portal_base
+import cv_tailor.portal.lever as lever
+from cv_tailor.portal import adapter_for, run_portal_application
+from cv_tailor.portal.base import register_adapter
+from cv_tailor.portal.lever import LeverAdapter
+from serve import serve_fixtures
+
+_PROFILE = {
+    "contact": {
+        "name": "Teodor-Cristian Lutoiu",
+        "email": "contact@teodorlutoiu.com",
+        "phone": "+40 725 697 859",
+        "location": "Bucharest, Romania",
+        "linkedin": "linkedin.com/in/teodorlc",
+        "github": "github.com/tiXor-code",
+    },
+}
+_ANSWERS = {
+    "notice_period": "approximately 20 working days",
+}
+
+
+class _FakeClient:
+    """Returns queued replies; records call count. Mirrors
+    test_screening.py's fake -- screening.answer_question only cares about
+    client.chat.completions.create(...).choices[0].message.content."""
+
+    def __init__(self, replies):
+        self._replies = list(replies)
+        self.calls = 0
+        self.chat = SimpleNamespace(completions=SimpleNamespace(create=self._create))
+
+    def _create(self, **kw):
+        self.calls += 1
+        text = self._replies.pop(0)
+        msg = SimpleNamespace(content=text)
+        return SimpleNamespace(choices=[SimpleNamespace(message=msg)])
+
+
+@pytest.fixture
+def package(tmp_path):
+    package_dir = tmp_path / "pkg"
+    package_dir.mkdir()
+    cv_path = package_dir / "cv.pdf"
+    cv_path.write_bytes(b"%PDF-1.4 fake\n")
+    cover_letter_path = package_dir / "cover_letter.md"
+    cover_letter_path.write_text("I would be a strong fit for this role.\n")
+    return {
+        "package_dir": str(package_dir),
+        "cv_path": str(cv_path),
+        "cover_letter_path": str(cover_letter_path),
+    }
+
+
+@pytest.fixture
+def chromium_page():
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        try:
+            yield browser.new_page()
+        finally:
+            browser.close()
+
+
+def _goto(page, base_url, **params):
+    url = f"{base_url}/lever_form.html"
+    if params:
+        url += "?" + urlencode(params)
+    page.goto(url, wait_until="load")
+
+
+# --- registry -----------------------------------------------------------------
+
+def test_lever_adapter_registered_for_jobs_lever_co_host():
+    found = adapter_for("https://jobs.lever.co/ro/bde27362-0652-4d1a-bb8e-d6100ca20654")
+
+    assert isinstance(found, LeverAdapter)
+
+
+def test_lever_adapter_hosts_and_name():
+    adapter = LeverAdapter()
+
+    assert adapter.hosts == ("jobs.lever.co",)
+    assert adapter.name == "lever"
+
+
+def test_lever_adapter_default_client_is_none_deterministic_only():
+    adapter = LeverAdapter()
+
+    assert adapter.client is None
+    assert adapter.deployment is None
+
+
+# --- happy path: dry_run fill --------------------------------------------------
+
+def test_apply_dry_run_fills_contact_links_resume_cover_letter_and_eeo_decline(chromium_page, package):
+    page = chromium_page
+    entry = {"id": "job-1"}
+    client = _FakeClient(["Ministeru' Creativ"])
+    adapter = LeverAdapter(client=client)
+
+    with serve_fixtures() as base_url:
+        _goto(page, base_url)
+        result = adapter.apply(page, entry, package, _PROFILE, _ANSWERS, dry_run=True)
+
+        # File input values never show up in form_state.json (browsers
+        # never expose them via .value) -- assert while the page is open.
+        uploaded = page.locator("input[name='resume']").evaluate("el => el.files.length")
+
+    assert result.status == "filled"
+    assert result.reason == ""
+    assert uploaded == 1
+    # Only "Current company" needs the LLM tier -- Gender resolves via the
+    # deterministic EEO-decline policy, everything else is direct-filled.
+    assert client.calls == 1
+
+    evidence_dir = Path(result.evidence_dir)
+    assert (evidence_dir / "filled.png").exists()
+    state = json.loads((evidence_dir / "form_state.json").read_text())
+    assert state["name"] == "Teodor-Cristian Lutoiu"
+    assert state["email"] == "contact@teodorlutoiu.com"
+    assert state["phone"] == "+40 725 697 859"
+    assert state["location"] == "Bucharest, Romania"
+    assert state["urls[LinkedIn]"] == "linkedin.com/in/teodorlc"
+    assert state["urls[GitHub]"] == "github.com/tiXor-code"
+    assert state["comments"] == "I would be a strong fit for this role.\n"
+    assert state["org"] == "Ministeru' Creativ"
+    assert state["eeo[gender]"] == "Decline to self-identify"
+
+
+def test_apply_dry_run_never_clicks_submit(chromium_page, package):
+    page = chromium_page
+    entry = {"id": "job-1"}
+    adapter = LeverAdapter(client=_FakeClient(["Ministeru' Creativ"]))
+
+    with serve_fixtures() as base_url:
+        _goto(page, base_url)
+        adapter.apply(page, entry, package, _PROFILE, _ANSWERS, dry_run=True)
+        confirmation_present = page.locator("[data-qa='confirmation']").count()
+
+    assert confirmation_present == 0
+
+
+# --- required-unanswerable ------------------------------------------------------
+
+def test_apply_required_unanswerable_question_aborts_to_needs_human(chromium_page, package):
+    page = chromium_page
+    entry = {"id": "job-1"}
+    adapter = LeverAdapter()  # no client -- deterministic tier only
+
+    with serve_fixtures() as base_url:
+        _goto(page, base_url)
+        result = adapter.apply(page, entry, package, _PROFILE, _ANSWERS, dry_run=True)
+
+    assert result.status == "needs_human"
+    assert result.reason == "unanswerable-required:Current company"
+
+    evidence_dir = Path(result.evidence_dir)
+    assert (evidence_dir / "aborted.png").exists()
+    # "filled" is never reached on the abort path.
+    assert not (evidence_dir / "filled.png").exists()
+
+
+# --- captcha ---------------------------------------------------------------------
+
+def test_apply_captcha_wall_aborts_to_needs_human(chromium_page, package):
+    page = chromium_page
+    entry = {"id": "job-1"}
+    adapter = LeverAdapter()
+
+    with serve_fixtures() as base_url:
+        _goto(page, base_url, captcha="1")
+        result = adapter.apply(page, entry, package, _PROFILE, _ANSWERS, dry_run=True)
+
+    assert result.status == "needs_human"
+    assert result.reason == "captcha"
+
+    evidence_dir = Path(result.evidence_dir)
+    assert (evidence_dir / "blocked.png").exists()
+
+
+# --- armed submit ------------------------------------------------------------------
+
+def test_apply_armed_submit_returns_submitted_with_confirmation_evidence(chromium_page, package):
+    page = chromium_page
+    entry = {"id": "job-1"}
+    adapter = LeverAdapter(client=_FakeClient(["Ministeru' Creativ"]))
+
+    with serve_fixtures() as base_url:
+        _goto(page, base_url)
+        result = adapter.apply(page, entry, package, _PROFILE, _ANSWERS, dry_run=False)
+
+    assert result.status == "submitted"
+    assert result.reason == ""
+
+    evidence_dir = Path(result.evidence_dir)
+    assert (evidence_dir / "filled.png").exists()
+    assert (evidence_dir / "submitted.png").exists()
+
+
+def test_apply_armed_no_confirmation_within_timeout_returns_needs_human(chromium_page, package, monkeypatch):
+    monkeypatch.setattr(lever, "_CONFIRMATION_TIMEOUT_MS", 500)
+    page = chromium_page
+    entry = {"id": "job-1"}
+    adapter = LeverAdapter(client=_FakeClient(["Ministeru' Creativ"]))
+
+    with serve_fixtures() as base_url:
+        _goto(page, base_url, nosubmit="1")
+        result = adapter.apply(page, entry, package, _PROFILE, _ANSWERS, dry_run=False)
+
+    assert result.status == "needs_human"
+    assert result.reason == "no-confirmation"
+
+
+# --- end-to-end via run_portal_application (registry + dispatch wiring) ----------
+
+class _LocalLeverAdapter(LeverAdapter):
+    """Same adapter, but claiming 127.0.0.1 instead of jobs.lever.co, so the
+    dispatch-wiring smoke test can run against the local fixture server (the
+    real host substring never matches an http://127.0.0.1 URL)."""
+
+    hosts = ("127.0.0.1",)
+
+
+def test_smoke_run_portal_application_dispatches_to_lever_adapter(package, monkeypatch):
+    monkeypatch.setattr(portal_base, "_REGISTRY", [])
+    register_adapter(_LocalLeverAdapter(client=_FakeClient(["Ministeru' Creativ"])))
+    entry_base = {"id": "job-1"}
+
+    with serve_fixtures() as base_url:
+        entry = {**entry_base, "apply_target": f"{base_url}/lever_form.html"}
+        result = run_portal_application(entry, package, _PROFILE, _ANSWERS, dry_run=True)
+
+    assert result.status == "filled"
+    evidence_dir = Path(result.evidence_dir)
+    state = json.loads((evidence_dir / "form_state.json").read_text())
+    assert state["name"] == "Teodor-Cristian Lutoiu"
+
+
+# --- discover_questions (pure DOM enumeration) ------------------------------------
+
+def test_discover_questions_skips_direct_fill_fields_and_finds_org_and_gender(chromium_page):
+    page = chromium_page
+
+    with serve_fixtures() as base_url:
+        _goto(page, base_url)
+        found = lever.discover_questions(page)
+
+    labels = {label: (kind, required, options) for (label, kind, required, options), _name in found}
+    assert "Full name" not in labels  # direct-filled, never re-discovered
+    assert "Email" not in labels
+    assert "Phone" not in labels
+    assert "Current location" not in labels
+
+    assert labels["Current company"] == ("text", True, ())
+    assert labels["Gender"][0] == "select"
+    assert labels["Gender"][1] is False
+    assert "Decline to self-identify" in labels["Gender"][2]
