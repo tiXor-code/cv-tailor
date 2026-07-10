@@ -68,6 +68,25 @@ from cv_tailor.telegram import send_document, send_text
 DEFAULT_DB_PATH = ROOT / "data" / "jobs.db"
 
 
+def _load_dotenv(path: Path = ROOT / ".env") -> None:
+    """Best-effort .env bootstrap for the detached-spawn path.
+
+    The mac-sidecar spawns this script with launchd's environment, which has
+    none of the Azure/SMTP/Telegram keys (scan.py gets them from run_scan.sh
+    sourcing .env; there is no wrapper here). Explicit environment always wins
+    (setdefault), so tests and shell runs that export their own values are
+    untouched."""
+    try:
+        for line in path.read_text().splitlines():
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, _, value = line.partition("=")
+            os.environ.setdefault(key.strip(), value.strip().strip('"').strip("'"))
+    except OSError:
+        pass
+
+
 def _db_path() -> Path:
     env = os.environ.get("SCOUT_DB_PATH")
     return Path(env) if env else DEFAULT_DB_PATH
@@ -215,6 +234,7 @@ def _handle_portal(args, entry: dict, meta: dict) -> int:
 
 
 def main(argv=None) -> int:
+    _load_dotenv()
     ap = argparse.ArgumentParser(description="Assemble + route one approved job")
     ap.add_argument("scan_date", help="e.g. 2026-07-10")
     ap.add_argument("job_id", help="the queue entry id")

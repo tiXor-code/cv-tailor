@@ -740,3 +740,21 @@ def test_concurrent_double_spawn_second_gets_status_conflict(mod, monkeypatch, t
     assert rc == 2
     entry = _read_entry(tmp_path, "2026-07-10", "job-1")
     assert entry["status"] == "assembling"  # the "winner's" state, untouched by the loser
+
+
+def test_load_dotenv_setdefault_semantics(tmp_path, monkeypatch):
+    """The detached-spawn bootstrap loads .env but explicit environment wins."""
+    import os
+    mod = _load_module()
+    envfile = tmp_path / ".env"
+    envfile.write_text(
+        "# comment\nAZURE_OPENAI_API_KEY=from-dotenv\nAPPLY_ARMED=1\n"
+        'QUOTED="q-value"\nbroken-line-no-equals\n')
+    monkeypatch.setenv("APPLY_ARMED", "0")
+    monkeypatch.delenv("AZURE_OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("QUOTED", raising=False)
+    mod._load_dotenv(envfile)
+    assert os.environ["AZURE_OPENAI_API_KEY"] == "from-dotenv"
+    assert os.environ["APPLY_ARMED"] == "0"  # explicit env wins over .env
+    assert os.environ["QUOTED"] == "q-value"
+    mod._load_dotenv(tmp_path / "missing.env")  # silent no-op
