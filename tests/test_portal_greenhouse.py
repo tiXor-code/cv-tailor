@@ -155,6 +155,94 @@ def test_required_unanswerable_question_aborts_to_needs_human(tmp_path, browser_
     assert (Path(result.evidence_dir) / "aborted.png").exists()
 
 
+# --- write-verified resume upload (C345) -----------------------------------
+
+def test_resume_missing_cv_path_aborts_to_resume_upload_failed(tmp_path, browser_page):
+    adapter = GreenhouseAdapter()
+    package = _package(tmp_path)
+    package.pop("cv_path")
+    entry = {"id": "job-1"}
+
+    with serve_fixtures() as base_url:
+        browser_page.goto(f"{base_url}/greenhouse_form.html", wait_until="load")
+        result = adapter.apply(browser_page, entry, package, PROFILE, ANSWERS, dry_run=True)
+
+    assert result.status == "needs_human"
+    assert result.reason == "resume-upload-failed"
+    assert not (Path(result.evidence_dir) / "filled.png").exists()
+
+
+def test_resume_input_absent_aborts_to_resume_upload_failed(tmp_path, browser_page):
+    adapter = GreenhouseAdapter()
+    package = _package(tmp_path)
+    entry = {"id": "job-1"}
+
+    with serve_fixtures() as base_url:
+        browser_page.goto(f"{base_url}/greenhouse_form.html?noresume=1", wait_until="load")
+        result = adapter.apply(browser_page, entry, package, PROFILE, ANSWERS, dry_run=True)
+
+    assert result.status == "needs_human"
+    assert result.reason == "resume-upload-failed"
+
+
+# --- write-verified required screening answer (C345) -----------------------
+
+def test_unwritable_required_question_aborts_to_needs_human(tmp_path, browser_page):
+    adapter = GreenhouseAdapter()
+    package = _package(tmp_path)
+    entry = {"id": "job-1"}
+
+    with serve_fixtures() as base_url:
+        # The required LinkedIn question reverts every write: grounded from
+        # profile.contact.linkedin, but never lands in the DOM.
+        browser_page.goto(f"{base_url}/greenhouse_form.html?locked=1", wait_until="load")
+        result = adapter.apply(browser_page, entry, package, PROFILE, ANSWERS, dry_run=True)
+
+    assert result.status == "needs_human"
+    assert result.reason == "unwritable-required:LinkedIn Profile"
+    assert (Path(result.evidence_dir) / "aborted.png").exists()
+    assert not (Path(result.evidence_dir) / "filled.png").exists()
+
+
+# --- label fallback chain + radio/checkbox enumeration (C345) --------------
+
+def test_radio_group_labeled_via_label_for_is_enumerated_and_answered(tmp_path, browser_page):
+    adapter = GreenhouseAdapter()
+    package = _package(tmp_path)
+    entry = {"id": "job-1"}
+
+    with serve_fixtures() as base_url:
+        # ?radio=1 injects a required EEO "Gender" radio group whose label is
+        # carried ONLY by <label for> (no aria-label): the fallback chain must
+        # find it, and the deterministic EEO tier answers it with the decline
+        # option (no LLM needed).
+        browser_page.goto(f"{base_url}/greenhouse_form.html?radio=1", wait_until="load")
+        result = adapter.apply(browser_page, entry, package, PROFILE, ANSWERS, dry_run=True)
+
+        decline_checked = browser_page.locator("#question_1003_d").is_checked()
+        male_checked = browser_page.locator("#question_1003_m").is_checked()
+
+    assert result.status == "filled"
+    assert decline_checked is True
+    assert male_checked is False
+
+
+def test_unlabelled_required_control_aborts_to_needs_human(tmp_path, browser_page):
+    adapter = GreenhouseAdapter()
+    package = _package(tmp_path)
+    entry = {"id": "job-1"}
+
+    with serve_fixtures() as base_url:
+        # ?unlabelled=1 injects a required control with no aria-label,
+        # label[for], legend, or placeholder -- nothing to derive a label from.
+        browser_page.goto(f"{base_url}/greenhouse_form.html?unlabelled=1", wait_until="load")
+        result = adapter.apply(browser_page, entry, package, PROFILE, ANSWERS, dry_run=True)
+
+    assert result.status == "needs_human"
+    assert result.reason == "unlabelled-required-field"
+    assert (Path(result.evidence_dir) / "aborted.png").exists()
+
+
 # --- captcha blocker -------------------------------------------------------
 
 def test_captcha_blocker_aborts_to_needs_human(tmp_path, browser_page):

@@ -24,10 +24,12 @@ the submission may have gone through).
 """
 from __future__ import annotations
 
+import re
+import time
 from pathlib import Path
+from urllib.parse import urlparse
 
 from playwright.sync_api import Error as PlaywrightError
-from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
 
 from cv_tailor.portal.base import (
     PortalAdapter,
@@ -36,8 +38,10 @@ from cv_tailor.portal.base import (
     detect_blockers,
     fill_field,
     register_adapter,
+    verify_file_attached,
+    verify_filled,
 )
-from cv_tailor.screening import Answer, Question, answer_question
+from cv_tailor.screening import Question, answer_question
 
 # How long to wait for a post-submit confirmation signal before degrading
 # to needs_human("no-confirmation"). A module constant (not a hardcoded
@@ -48,7 +52,28 @@ _APPLICATION_TAB_SELECTOR = "#job-application-form"
 _RESUME_SELECTOR = "#_systemfield_resume"
 _COVER_LETTER_SELECTOR = "#_systemfield_cover_letter"
 _SUBMIT_SELECTOR = "#submit-btn"
-_CONFIRMATION_TEXT = "been submitted"
+
+# Broadened confirmation detection (armed path). A real Ashby submit can signal
+# success several ways -- the canonical "been submitted" banner, a generic
+# thank-you, or (increasingly) an SPA that simply swaps the form out for a
+# success view and/or routes to a new path. Any one of these visible signals is
+# treated as success; only the total absence of all of them within the cap is a
+# no-confirmation. The reason string below is what a human sees, so it must say
+# the submission MIGHT have gone through.
+_CONFIRMATION_RE = re.compile(
+    r"been submitted|application (?:received|submitted)|thank you for applying|"
+    r"thanks for applying|successfully submitted",
+    re.I,
+)
+# An error/validation banner means the form is still open on a failure, NOT a
+# vanished-because-succeeded form -- suppresses the form-disappeared signal.
+_ERROR_BANNER_SELECTOR = (
+    "[role='alert'], .ashby-application-form-error, .error, .form-error, [aria-invalid='true']"
+)
+_NO_CONFIRMATION_REASON = (
+    "no-confirmation: submission may have succeeded, VERIFY on the portal "
+    "before applying manually"
+)
 
 # Contact fields filled directly from profile.contact, keyed by the
 # selector used to fill them. Ashby doesn't have a single universal set of
@@ -99,11 +124,29 @@ class AshbyAdapter(PortalAdapter):
         # (resume parsing) that detaches and rebuilds the whole form,
         # silently wiping any values typed beforehand. Uploading first
         # means later fills land on the settled, post-parse DOM.
-        self._upload_resume(page, package.get("cv_path"))
+        #
+        # The upload is write-VERIFIED (el.files length) -- a missing cv_path,
+        # a selector that matches nothing, an upload error, or a file that
+        # never actually attached must abort to needs_human BEFORE any field is
+        # typed and long before any armed submit, rather than silently applying
+        # with no resume.
+        if not self._upload_and_verify_resume(page, package.get("cv_path")):
+            capture_evidence(page, evidence_dir, "aborted")
+            return PortalResult(status="needs_human", reason="resume-upload-failed",
+                                 evidence_dir=str(evidence_dir))
 
         contact = (profile or {}).get("contact", {}) or {}
         for selector, key in _CONTACT_FIELD_SELECTORS:
             fill_field(page, selector, contact.get(key, ""))
+
+        # The two universally-required contact fields (name, email) are
+        # write-verified: if either was given but did not land in the DOM,
+        # abort rather than submit a form missing the applicant's identity.
+        unwritten_contact = self._verify_contact(page, contact)
+        if unwritten_contact is not None:
+            capture_evidence(page, evidence_dir, "aborted")
+            return PortalResult(status="needs_human", reason="contact-fill-failed",
+                                 evidence_dir=str(evidence_dir))
 
         self._fill_cover_letter(page, package.get("cover_letter_path"))
 
@@ -135,6 +178,14 @@ class AshbyAdapter(PortalAdapter):
 
     # --- filling --------------------------------------------------------------
 
+    def _upload_and_verify_resume(self, page, cv_path) -> bool:
+        """Upload the resume and confirm it actually attached. Returns False on
+        any failure (no cv_path, selector miss, upload error, or a file that
+        never landed) so the caller can abort to resume-upload-failed."""
+        if not self._upload_resume(page, cv_path):
+            return False
+        return verify_file_attached(page, _RESUME_SELECTOR)
+
     def _upload_resume(self, page, cv_path) -> bool:
         if not cv_path:
             return False
@@ -156,6 +207,16 @@ class AshbyAdapter(PortalAdapter):
         except PlaywrightError:
             pass
         return True
+
+    @staticmethod
+    def _verify_contact(page, contact: dict) -> str | None:
+        """Read back name + email after filling. Returns the first field key
+        whose non-empty grounded value did not land in the DOM, else None."""
+        for selector, key in (("#_systemfield_name", "name"), ("#_systemfield_email", "email")):
+            expected = (contact or {}).get(key, "")
+            if expected and not verify_filled(page, selector, expected):
+                return key
+        return None
 
     def _fill_cover_letter(self, page, cover_letter_path) -> bool:
         if not cover_letter_path:
@@ -206,15 +267,29 @@ class AshbyAdapter(PortalAdapter):
                     if question.required:
                         return f"unanswerable-required:{question.label}"
                     continue
-                try:
-                    page.locator(selector).select_option(label=answer.value)
-                except PlaywrightError:
-                    if question.required:
-                        return f"unanswerable-required:{question.label}"
+                written = self._select(page, selector, answer.value)
             else:
-                fill_field(page, selector, answer.value)
+                written = fill_field(page, selector, answer.value) and \
+                    verify_filled(page, selector, answer.value)
+
+            # A REQUIRED answer that did not verify (readonly/reverting field,
+            # a stale selector) must abort -- "grounded" is not "written".
+            # Optional fields stay best-effort: a failed optional write is a
+            # blank field, not a needs_human.
+            if not written and question.required:
+                return f"unwritable-required:{question.label}"
 
         return None
+
+    @staticmethod
+    def _select(page, selector: str, value: str) -> bool:
+        """Select the option whose visible label is `value`, then read the
+        selection back. Returns False on any error or a mismatch."""
+        try:
+            page.locator(selector).select_option(label=value)
+        except PlaywrightError:
+            return False
+        return verify_filled(page, selector, value)
 
     def _question_for_wrapper(self, wrapper, field_id: str):
         """Return (Question, css_selector, options) for one field-entry
@@ -252,21 +327,87 @@ class AshbyAdapter(PortalAdapter):
 
     def _submit_and_await_confirmation(self, page, evidence_dir: Path) -> PortalResult:
         try:
+            initial_url = page.url
+        except PlaywrightError:
+            initial_url = None
+
+        try:
             page.locator(_SUBMIT_SELECTOR).first.click()
         except PlaywrightError as exc:
             capture_evidence(page, evidence_dir, "submit-failed")
             return PortalResult(status="failed", reason=f"submit-click: {exc}", evidence_dir=str(evidence_dir))
 
+        # Let any navigation the submit kicked off settle before we read
+        # signals: a plain form GET reload momentarily tears down the form, and
+        # reading during that transient would misfire the form-disappeared
+        # signal. wait_for_load_state returns immediately for a JS-only submit
+        # (page already "load"), and rides out a real navigation otherwise.
         try:
-            page.get_by_text(_CONFIRMATION_TEXT, exact=False).first.wait_for(
-                state="visible", timeout=CONFIRMATION_TIMEOUT_MS
-            )
-        except PlaywrightTimeoutError:
-            capture_evidence(page, evidence_dir, "no-confirmation")
-            return PortalResult(status="needs_human", reason="no-confirmation", evidence_dir=str(evidence_dir))
+            page.wait_for_load_state("load", timeout=5_000)
+        except PlaywrightError:
+            pass
 
-        capture_evidence(page, evidence_dir, "submitted")
-        return PortalResult(status="submitted", reason="", evidence_dir=str(evidence_dir))
+        # Poll for ANY confirmation signal up to the cap. On no signal within
+        # the cap the reason string tells the human the submit may still have
+        # landed -- we never retry a submit that might already have gone
+        # through.
+        deadline = time.monotonic() + CONFIRMATION_TIMEOUT_MS / 1000
+        while True:
+            if self._confirmed(page, initial_url):
+                capture_evidence(page, evidence_dir, "submitted")
+                return PortalResult(status="submitted", reason="", evidence_dir=str(evidence_dir))
+            if time.monotonic() >= deadline:
+                break
+            try:
+                page.wait_for_timeout(200)
+            except PlaywrightError:
+                break
+
+        capture_evidence(page, evidence_dir, "no-confirmation")
+        return PortalResult(status="needs_human", reason=_NO_CONFIRMATION_REASON,
+                             evidence_dir=str(evidence_dir))
+
+    @staticmethod
+    def _confirmed(page, initial_url) -> bool:
+        """True if any confirmation signal is present:
+          1. a visible confirmation phrase;
+          2. a navigation to a genuinely different PATH (a query-only change --
+             e.g. a plain form GET reload back to the same page -- is NOT a
+             success signal);
+          3. the application form having disappeared with no error banner AND
+             the URL entirely unchanged, i.e. an SPA that swapped the form out
+             for a success view without navigating (gating on the unchanged URL
+             keeps a GET-reload transient from being misread as this)."""
+        try:
+            current_url = page.url
+        except PlaywrightError:
+            current_url = None
+
+        # 1) A visible confirmation phrase.
+        try:
+            phrase = page.get_by_text(_CONFIRMATION_RE)
+            if phrase.count() > 0 and phrase.first.is_visible():
+                return True
+        except PlaywrightError:
+            pass
+        # 2) Navigation to a genuinely different path.
+        if initial_url is not None and current_url is not None:
+            try:
+                if urlparse(current_url).path != urlparse(initial_url).path:
+                    return True
+            except ValueError:
+                pass
+        # 3) SPA form-vanish with no navigation and no error banner.
+        if current_url == initial_url:
+            try:
+                form = page.locator("#application-form")
+                form_gone = form.count() == 0 or not form.first.is_visible()
+                has_error = page.locator(_ERROR_BANNER_SELECTOR).count() > 0
+                if form_gone and not has_error:
+                    return True
+            except PlaywrightError:
+                pass
+        return False
 
 
 ASHBY_ADAPTER = register_adapter(AshbyAdapter())

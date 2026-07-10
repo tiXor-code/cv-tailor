@@ -158,6 +158,52 @@ def fill_field(page, selector: str, value) -> bool:
         return False
 
 
+# --- write verification -------------------------------------------------------
+#
+# Root cause these two helpers close: adapters used to treat "a grounded answer
+# was obtained" as "the value is in the DOM". It is not the same thing -- a
+# readonly/reverting field, a stale selector, or an upload that never attached
+# all leave the form blank while the code believes it filled it. verify_filled /
+# verify_file_attached read the browser back so an adapter can prove a write
+# landed before it declares a form filled or (armed) clicks submit. Both are
+# best-effort readers: any miss/error returns False so the caller treats a
+# failed read-back exactly like a failed write.
+
+def verify_filled(page, selector: str, expected) -> bool:
+    """True iff the first element matching `selector` currently holds
+    `expected` (case- and whitespace-normalized). Reads the live value back
+    via `input_value()` (which also returns a <select>'s selected option
+    value), so it proves the DOM actually took the write rather than trusting
+    that `.fill()`/`select_option` was called. Returns False on an empty
+    `expected`, a missing element, or any Playwright error -- never raises."""
+    if expected is None or expected == "":
+        return False
+    try:
+        locator = page.locator(selector).first
+        if locator.count() == 0:
+            return False
+        actual = locator.input_value()
+    except PlaywrightError:
+        return False
+    return str(actual).strip().casefold() == str(expected).strip().casefold()
+
+
+def verify_file_attached(page, selector: str) -> bool:
+    """True iff the file input matching `selector` has at least one file
+    attached (`el.files && el.files.length > 0`). This is the only reliable
+    read-back for an upload: browsers never expose a file input's value via
+    `.value`/`input_value()`, so the resume upload can only be confirmed by
+    inspecting `el.files`. Returns False on a missing element or any error --
+    never raises."""
+    try:
+        locator = page.locator(selector).first
+        if locator.count() == 0:
+            return False
+        return bool(locator.evaluate("el => !!(el.files && el.files.length > 0)"))
+    except PlaywrightError:
+        return False
+
+
 # --- orchestration ------------------------------------------------------------
 
 def run_portal_application(entry: dict, package: dict, profile: dict, answers: dict, *,

@@ -181,6 +181,94 @@ def test_apply_required_unanswerable_question_aborts_to_needs_human(chromium_pag
     assert not (evidence_dir / "filled.png").exists()
 
 
+# --- write-verified resume upload (C345) -----------------------------------------
+
+def test_apply_resume_missing_cv_path_aborts_to_resume_upload_failed(chromium_page, package):
+    page = chromium_page
+    entry = {"id": "job-1"}
+    package_no_cv = {k: v for k, v in package.items() if k != "cv_path"}
+    adapter = LeverAdapter()  # abort happens before screening -> no client needed
+
+    with serve_fixtures() as base_url:
+        _goto(page, base_url)
+        result = adapter.apply(page, entry, package_no_cv, _PROFILE, _ANSWERS, dry_run=True)
+
+    assert result.status == "needs_human"
+    assert result.reason == "resume-upload-failed"
+    assert not (Path(result.evidence_dir) / "filled.png").exists()
+
+
+# --- write-verified required screening answer (C345) -----------------------------
+
+def test_apply_unwritable_required_org_aborts_to_needs_human(chromium_page, package):
+    page = chromium_page
+    entry = {"id": "job-1"}
+    # org is grounded via the LLM tier, but the ?locked=1 field reverts writes.
+    adapter = LeverAdapter(client=_FakeClient(["Ministeru' Creativ"]))
+
+    with serve_fixtures() as base_url:
+        _goto(page, base_url, locked="1")
+        result = adapter.apply(page, entry, package, _PROFILE, _ANSWERS, dry_run=True)
+
+    assert result.status == "needs_human"
+    assert result.reason == "unwritable-required:Current company"
+    assert (Path(result.evidence_dir) / "aborted.png").exists()
+    assert not (Path(result.evidence_dir) / "filled.png").exists()
+
+
+# --- multi-field blocks, number kind, value-sourced selects (C345) ---------------
+
+def test_discover_questions_enumerates_number_field_and_both_fields_of_a_block(chromium_page):
+    page = chromium_page
+
+    with serve_fixtures() as base_url:
+        _goto(page, base_url, extra="1")
+        found = lever.discover_questions(page)
+
+    by_name = {name: q for q, name in found}
+    # a type=number question is enumerated with kind "number"
+    assert by_name["years_experience"].kind == "number"
+    # a single .application-question block with TWO named controls yields BOTH
+    assert "ref_name" in by_name
+    assert "ref_email" in by_name
+    assert by_name["ref_name"].kind == "text"
+    assert by_name["ref_email"].kind == "text"
+
+
+def test_apply_extra_coded_select_is_filled_by_value_not_visible_text(chromium_page, package):
+    page = chromium_page
+    entry = {"id": "job-1"}
+    # org needs the LLM tier; every other extra field resolves deterministically
+    # (EEO decline) or falls to the LLM and is told UNKNOWN -> left blank.
+    adapter = LeverAdapter(client=_FakeClient(["Ministeru' Creativ"] + ["UNKNOWN"] * 10))
+
+    with serve_fixtures() as base_url:
+        _goto(page, base_url, extra="1")
+        result = adapter.apply(page, entry, package, _PROFILE, _ANSWERS, dry_run=True)
+
+    assert result.status == "filled"
+    state = json.loads((Path(result.evidence_dir) / "form_state.json").read_text())
+    # The coded EEO select's "Decline to self-identify" option has value="4"
+    # and different visible text -- the decline flow must land the VALUE.
+    assert state["eeo[gender_coded]"] == "4"
+    # the original value==text EEO select still resolves to its value/text
+    assert state["eeo[gender]"] == "Decline to self-identify"
+
+
+def test_check_option_matches_value_containing_a_quote(chromium_page):
+    page = chromium_page
+
+    with serve_fixtures() as base_url:
+        _goto(page, base_url, extra="1")
+        # An option value carrying an apostrophe must not break the locator:
+        # the match is done in Python, never interpolated into a selector.
+        ok = LeverAdapter._check_option(page, "radio", "referral_src", "A friend's referral")
+        checked_value = page.locator("input[name='referral_src']:checked").get_attribute("value")
+
+    assert ok is True
+    assert checked_value == "A friend's referral"
+
+
 # --- captcha ---------------------------------------------------------------------
 
 def test_apply_captcha_wall_aborts_to_needs_human(chromium_page, package):

@@ -14,12 +14,23 @@
   select), and there is no separate application-page navigation (the real
   form already lives on the posting page too, so this matches).
 
-  This file also fixture-fakes network-free variants of two conditions the
-  adapter must handle, both driven by query string so one file covers every
+  This file also fixture-fakes network-free variants of several conditions the
+  adapter must handle, all driven by query string so one file covers every
   scenario (mirrors blocked_form.html's iframe trick from Task C1):
-    ?captcha=1   -> injects a captcha-shaped div after load (blocker path)
-    ?nosubmit=1  -> submit is accepted but no confirmation ever appears
-                    (tests the no-confirmation timeout path)
+    ?captcha=1     -> injects a captcha-shaped div after load (blocker path)
+    ?nosubmit=1    -> submit is accepted but no confirmation ever appears
+                      (tests the no-confirmation timeout path)
+    ?radio=1       -> injects a required EEO "Gender" radio group whose label
+                      is carried by a <label for> (NO aria-label), to exercise
+                      the label-fallback chain + radio-kind enumeration.
+    ?unlabelled=1  -> injects a required custom control with NO derivable
+                      label anywhere (no aria-label / label[for] / legend /
+                      placeholder) -> unlabelled-required-field abort.
+    ?noresume=1    -> removes the resume file input entirely, exercising the
+                      resume-upload-failed path (selector matches nothing).
+    ?locked=1      -> the required LinkedIn text question silently reverts any
+                      typed value, exercising the write-verified
+                      unwritable-required path.
 -->
 <html>
 <head><meta charset="utf-8"><title>Acme Corp - Senior Engineer</title></head>
@@ -55,6 +66,8 @@
   <script>
     (function () {
       var params = new URLSearchParams(location.search);
+      var form = document.getElementById("application-form");
+      var submitBtn = document.getElementById("submit_app");
 
       if (params.get("captcha") === "1") {
         var captcha = document.createElement("div");
@@ -63,7 +76,48 @@
         document.body.appendChild(captcha);
       }
 
-      var form = document.getElementById("application-form");
+      if (params.get("noresume") === "1") {
+        var resumeInput = document.getElementById("resume");
+        if (resumeInput) { resumeInput.parentNode.removeChild(resumeInput); }
+      }
+
+      if (params.get("locked") === "1") {
+        // Required LinkedIn text question that rejects every write.
+        var locked = document.getElementById("question_1002");
+        locked.addEventListener("input", function () { locked.value = ""; });
+      }
+
+      if (params.get("radio") === "1") {
+        // EEO "Gender" question as a required radio group. The label is a
+        // <label for> pointing at the group container (id=question_1003) and
+        // there is deliberately NO aria-label, so the enumerator must fall
+        // back from aria-label to label[for]. The "Decline to self-identify"
+        // option lets the deterministic EEO tier answer it (no LLM needed).
+        var wrap = document.createElement("div");
+        wrap.className = "application-question";
+        wrap.innerHTML =
+          '<label for="question_1003">Gender</label>' +
+          '<div id="question_1003" role="radiogroup">' +
+          '  <input type="radio" name="question_1003" id="question_1003_m" value="Male" aria-required="true">' +
+          '  <input type="radio" name="question_1003" id="question_1003_f" value="Female" aria-required="true">' +
+          '  <input type="radio" name="question_1003" id="question_1003_d" value="Decline to self-identify" aria-required="true">' +
+          '</div>';
+        form.insertBefore(wrap, submitBtn);
+      }
+
+      if (params.get("unlabelled") === "1") {
+        // Required custom control with no derivable label anywhere.
+        var wrap2 = document.createElement("div");
+        wrap2.className = "application-question";
+        var bad = document.createElement("input");
+        bad.type = "text";
+        bad.id = "question_9999";
+        bad.name = "question_9999";
+        bad.setAttribute("aria-required", "true");
+        wrap2.appendChild(bad);
+        form.insertBefore(wrap2, submitBtn);
+      }
+
       form.addEventListener("submit", function (e) {
         e.preventDefault();
         if (params.get("nosubmit") === "1") {

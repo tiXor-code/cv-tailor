@@ -149,6 +149,73 @@ def test_apply_required_unanswerable_question_aborts_to_needs_human(chromium_pag
     assert not (evidence_dir / "filled.png").exists()
 
 
+# --- write-verified resume upload (C345) ---------------------------------------
+
+def test_apply_resume_missing_cv_path_aborts_to_resume_upload_failed(chromium_page, package):
+    page = chromium_page
+    entry = {"id": "job-1"}
+    package_no_cv = {k: v for k, v in package.items() if k != "cv_path"}
+
+    with serve_fixtures() as base_url:
+        _goto(page, base_url)
+        result = AshbyAdapter().apply(page, entry, package_no_cv, _PROFILE, _ANSWERS, dry_run=True)
+
+    assert result.status == "needs_human"
+    assert result.reason == "resume-upload-failed"
+    evidence_dir = Path(result.evidence_dir)
+    assert (evidence_dir / "aborted.png").exists()
+    # never reaches "filled" -> never submits with a missing resume
+    assert not (evidence_dir / "filled.png").exists()
+
+
+def test_apply_resume_input_absent_aborts_to_resume_upload_failed(chromium_page, package):
+    page = chromium_page
+    entry = {"id": "job-1"}
+
+    with serve_fixtures() as base_url:
+        _goto(page, base_url, variant="noresume")
+        result = AshbyAdapter().apply(page, entry, package, _PROFILE, _ANSWERS, dry_run=True)
+
+    assert result.status == "needs_human"
+    assert result.reason == "resume-upload-failed"
+
+
+# --- write-verified required screening answer (C345) ---------------------------
+
+def test_apply_unwritable_required_field_aborts_to_needs_human(chromium_page, package):
+    page = chromium_page
+    entry = {"id": "job-1"}
+
+    with serve_fixtures() as base_url:
+        # The required notice-period field silently reverts every write: the
+        # answer is grounded (answers.notice_period) but never lands.
+        _goto(page, base_url, variant="locked")
+        result = AshbyAdapter().apply(page, entry, package, _PROFILE, _ANSWERS, dry_run=True)
+
+    assert result.status == "needs_human"
+    assert result.reason.startswith("unwritable-required:")
+    assert "notice period" in result.reason.lower()
+
+    evidence_dir = Path(result.evidence_dir)
+    assert (evidence_dir / "aborted.png").exists()
+    assert not (evidence_dir / "filled.png").exists()
+
+
+# --- write-verified contact fields (C345) --------------------------------------
+
+def test_apply_contact_email_unwritable_aborts_to_contact_fill_failed(chromium_page, package):
+    page = chromium_page
+    entry = {"id": "job-1"}
+
+    with serve_fixtures() as base_url:
+        _goto(page, base_url, variant="lockedemail")
+        result = AshbyAdapter().apply(page, entry, package, _PROFILE, _ANSWERS, dry_run=True)
+
+    assert result.status == "needs_human"
+    assert result.reason == "contact-fill-failed"
+    assert not (Path(result.evidence_dir) / "filled.png").exists()
+
+
 # --- captcha after navigation --------------------------------------------------
 
 def test_apply_captcha_revealed_after_navigation_aborts_to_needs_human(chromium_page, package):
@@ -190,6 +257,22 @@ def test_apply_armed_submit_returns_submitted_with_confirmation_evidence(chromiu
     assert (evidence_dir / "submitted.png").exists()
 
 
+def test_apply_armed_altconfirm_form_disappears_counts_as_submitted(chromium_page, package):
+    page = chromium_page
+    entry = {"id": "job-1"}
+
+    with serve_fixtures() as base_url:
+        # On submit the form is removed and a success panel with text that does
+        # NOT contain "submitted"/"thank you" appears (no error banner). The
+        # broadened detector must read the vanished form as success.
+        _goto(page, base_url, variant="altconfirm")
+        result = AshbyAdapter().apply(page, entry, package, _PROFILE, _ANSWERS, dry_run=False)
+
+    assert result.status == "submitted"
+    assert result.reason == ""
+    assert (Path(result.evidence_dir) / "submitted.png").exists()
+
+
 def test_apply_armed_no_confirmation_within_timeout_returns_needs_human(chromium_page, package, monkeypatch):
     monkeypatch.setattr(ashby, "CONFIRMATION_TIMEOUT_MS", 500)
     page = chromium_page
@@ -200,7 +283,13 @@ def test_apply_armed_no_confirmation_within_timeout_returns_needs_human(chromium
         result = AshbyAdapter().apply(page, entry, package, _PROFILE, _ANSWERS, dry_run=False)
 
     assert result.status == "needs_human"
-    assert result.reason == "no-confirmation"
+    # Broadened confirmation detection (C345): the no-confirmation reason now
+    # carries the human-facing "verify on the portal" guidance.
+    assert result.reason == (
+        "no-confirmation: submission may have succeeded, VERIFY on the portal "
+        "before applying manually"
+    )
+    assert result.reason.startswith("no-confirmation")
 
     evidence_dir = Path(result.evidence_dir)
     assert (evidence_dir / "no-confirmation.png").exists()

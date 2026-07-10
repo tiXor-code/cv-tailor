@@ -110,6 +110,56 @@
     // toggles on this same file rather than separate pages/endpoints.
     document.addEventListener('DOMContentLoaded', function () {
       var params = new URLSearchParams(location.search);
+      var form = document.getElementById('application-form');
+
+      if (params.get('locked') === '1') {
+        // Required "Current company" (org) field that rejects every write:
+        // the value is cleared on each input event, so .fill() "runs" but the
+        // DOM stays blank -- the write-verify read-back must catch this.
+        var org = form.querySelector("input[name='org']");
+        org.addEventListener('input', function () { org.value = ''; });
+      }
+
+      if (params.get('extra') === '1') {
+        // Additive hardening fields (kept behind ?extra=1 so the baseline
+        // tests never see them):
+        //  - a type=number question               (number-kind enumeration)
+        //  - one .application-question block with TWO named controls
+        //    (multi-field enumeration -- both must be discovered)
+        //  - an EEO select whose option value != visible text
+        //    (Decline to self-identify has value="4" -> select BY VALUE)
+        //  - a radio group whose option value carries an apostrophe
+        //    (selector quote-safety)
+        var extra = document.createElement('div');
+        extra.className = 'section page-centered application-form';
+        extra.innerHTML =
+          '<ul>' +
+          '<li class="application-question"><label>' +
+          '<div class="application-label">Years of experience</div>' +
+          '<div class="application-field"><input type="number" name="years_experience"></div>' +
+          '</label></li>' +
+          '<li class="application-question custom-question">' +
+          '<div class="application-label">References</div>' +
+          '<div class="application-field"><input type="text" name="ref_name"></div>' +
+          '<div class="application-field"><input type="text" name="ref_email"></div>' +
+          '</li>' +
+          '<li class="application-question"><label>' +
+          '<div class="application-label">Gender identity</div>' +
+          '<div class="application-field"><div class="application-dropdown"><select name="eeo[gender_coded]">' +
+          '<option value="">Select ...</option>' +
+          '<option value="1">Male</option>' +
+          '<option value="2">Female</option>' +
+          '<option value="4">Decline to self-identify</option>' +
+          '</select></div></div></label></li>' +
+          '<li class="application-question">' +
+          '<div class="application-label">Referral source</div>' +
+          '<div class="application-field">' +
+          '<label><input type="radio" name="referral_src" value="A friend&#39;s referral">A friend\'s referral</label>' +
+          '<label><input type="radio" name="referral_src" value="Job board">Job board</label>' +
+          '</div></li>' +
+          '</ul>';
+        form.insertBefore(extra, form.querySelector('.last-section-apply'));
+      }
 
       if (params.get('captcha') === '1') {
         var wall = document.createElement('div');

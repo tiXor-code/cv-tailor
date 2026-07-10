@@ -39,6 +39,15 @@
   - ?variant=nosubmit      -- the submit button does a real (same-origin)
     form GET instead of the JS-handled fixture "submit", so no
     confirmation text ever appears -- exercises the no-confirmation path.
+  - ?variant=locked        -- the required screening text field silently
+    reverts any typed value (an input listener clears it), so a fill "runs"
+    but nothing lands -- exercises the write-verified unwritable-required path.
+  - ?variant=noresume      -- removes the resume file input entirely, so the
+    resume upload has no target -- exercises the resume-upload-failed path.
+  - ?variant=altconfirm    -- on submit the form panel is removed and a
+    success panel with text that does NOT contain "submitted"/"thank you"
+    appears (no error banner) -- exercises the broadened confirmation
+    detection (form-disappeared-without-error signal).
 -->
 <nav role="tablist">
   <a id="job-overview" role="tab" aria-selected="true" href="#overview">Overview</a>
@@ -120,6 +129,26 @@
       "Briefly describe a recent project or challenge you're proud of.";
   }
 
+  if (variant === "locked") {
+    // Required screening field that silently rejects every write: the value
+    // is cleared on every input event, so .fill() "succeeds" but the DOM
+    // ends up blank -- the write-verify read-back must catch this.
+    var locked = document.getElementById("q_required_text");
+    locked.addEventListener("input", function () { locked.value = ""; });
+  }
+
+  if (variant === "lockedemail") {
+    // The (universally required) email contact field silently rejects writes,
+    // to exercise the contact-fill-failed read-back path.
+    var lockedEmail = document.getElementById("_systemfield_email");
+    lockedEmail.addEventListener("input", function () { lockedEmail.value = ""; });
+  }
+
+  if (variant === "noresume") {
+    var resumeEntry = document.querySelector("[data-field-path='_systemfield_resume']");
+    if (resumeEntry) { resumeEntry.parentNode.removeChild(resumeEntry); }
+  }
+
   var appTab = document.getElementById("job-application-form");
   var overviewTab = document.getElementById("job-overview");
   var overviewPanel = document.getElementById("overview");
@@ -149,7 +178,21 @@
     overviewPanel.style.display = "block";
   });
 
-  if (variant !== "nosubmit") {
+  if (variant === "altconfirm") {
+    // Success is signalled by the form vanishing and a panel whose text does
+    // NOT match the "submitted"/"thank you" phrases -- and with no error
+    // banner. The broadened confirmation detector must read this as success.
+    document.getElementById("application-form").addEventListener("submit", function (ev) {
+      ev.preventDefault();
+      var formPanelEl = document.getElementById("form");
+      var appForm = document.getElementById("application-form");
+      appForm.parentNode.removeChild(appForm);
+      var done = document.createElement("div");
+      done.id = "alt-confirmation";
+      done.textContent = "All set on our end.";
+      formPanelEl.appendChild(done);
+    });
+  } else if (variant !== "nosubmit") {
     document.getElementById("application-form").addEventListener("submit", function (ev) {
       ev.preventDefault();
       document.getElementById("application-form").style.display = "none";

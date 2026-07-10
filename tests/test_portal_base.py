@@ -27,7 +27,14 @@ sys.path.insert(0, str(Path(__file__).resolve().parent / "fixtures" / "portal"))
 
 import cv_tailor.portal.base as portal_base
 from cv_tailor.portal import PortalAdapter, PortalResult, adapter_for, run_portal_application
-from cv_tailor.portal.base import capture_evidence, detect_blockers, fill_field, register_adapter
+from cv_tailor.portal.base import (
+    capture_evidence,
+    detect_blockers,
+    fill_field,
+    register_adapter,
+    verify_file_attached,
+    verify_filled,
+)
 from serve import serve_fixtures
 
 
@@ -376,6 +383,64 @@ def test_fill_field_coerces_non_string_values():
     fill_field(page, "#years", 5)
 
     assert locator.filled_with == "5"
+
+
+# --- verify_filled / verify_file_attached (real Playwright) ------------------
+
+def test_verify_filled_reads_the_value_back_true_and_normalizes_case():
+    from playwright.sync_api import sync_playwright
+
+    with serve_fixtures() as base_url, sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        try:
+            page = browser.new_page()
+            page.goto(f"{base_url}/simple_form.html", wait_until="load")
+            fill_field(page, "#full_name", "Teodor Lutoiu")
+
+            assert verify_filled(page, "#full_name", "Teodor Lutoiu") is True
+            # case- and whitespace-normalized
+            assert verify_filled(page, "#full_name", "  teodor lutoiu ") is True
+        finally:
+            browser.close()
+
+
+def test_verify_filled_false_on_mismatch_missing_and_empty_expected():
+    from playwright.sync_api import sync_playwright
+
+    with serve_fixtures() as base_url, sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        try:
+            page = browser.new_page()
+            page.goto(f"{base_url}/simple_form.html", wait_until="load")
+            fill_field(page, "#full_name", "Teodor Lutoiu")
+
+            assert verify_filled(page, "#full_name", "Someone Else") is False
+            assert verify_filled(page, "#does_not_exist", "x") is False
+            assert verify_filled(page, "#full_name", "") is False
+        finally:
+            browser.close()
+
+
+def test_verify_file_attached_true_only_after_a_file_is_set(tmp_path):
+    from playwright.sync_api import sync_playwright
+
+    cv = tmp_path / "cv.pdf"
+    cv.write_bytes(b"%PDF-1.4 fake\n")
+
+    with serve_fixtures() as base_url, sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        try:
+            page = browser.new_page()
+            page.goto(f"{base_url}/simple_form.html", wait_until="load")
+
+            # Nothing attached yet, and a missing selector is False, never raises.
+            assert verify_file_attached(page, "#resume") is False
+            assert verify_file_attached(page, "#no_such_input") is False
+
+            page.locator("#resume").set_input_files(str(cv))
+            assert verify_file_attached(page, "#resume") is True
+        finally:
+            browser.close()
 
 
 # --- run_portal_application: pre-browser branches ----------------------------
