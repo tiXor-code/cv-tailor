@@ -54,3 +54,12 @@ def test_descriptions_sidecar_written_and_read(tmp_path):
 def test_read_description_missing_is_empty(tmp_path):
     # older scans predate the sidecar -> empty string, no crash
     assert read_description("2020-01-01", "deadbeef", queue_dir=tmp_path) == ""
+
+
+def test_email_apply_detection_in_queue(tmp_path):
+    jd = "To apply, send your CV to jobs@acme.dev with the subject line AI."
+    scored = [{"job": _job(description=jd), "score": 9, "reason": "", "keywords": []}]
+    out = write_jobs_queue(scored, date(2026, 6, 24), queue_dir=tmp_path)
+    entry = json.loads(out.read_text())[0]
+    assert entry["apply_method"] == "email"
+    assert entry["apply_target"] == "jobs@acme.dev"

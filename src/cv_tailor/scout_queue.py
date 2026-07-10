@@ -10,6 +10,9 @@ import json
 import os
 from pathlib import Path
 
+from cv_tailor.apply_detect import detect_apply_channel
+from cv_tailor.enrich import company_domain
+
 
 def queue_root(queue_dir=None) -> Path:
     if queue_dir is not None:
@@ -27,6 +30,8 @@ def _job_id(job) -> str:
 
 def _to_entry(item) -> dict:
     job = item["job"]
+    method, target = detect_apply_channel(
+        getattr(job, "description", "") or "", company_domain(job))
     return {
         "id": _job_id(job),
         "source": job.source,
@@ -40,8 +45,8 @@ def _to_entry(item) -> dict:
         "package_dir": None,
         "cv_path": None,
         "cover_letter_path": None,
-        "apply_method": "portal",
-        "apply_target": job.url,
+        "apply_method": method if method == "email" else "portal",
+        "apply_target": target if method == "email" else job.url,
         "status": "pending",
         "decided_at": None,
     }
