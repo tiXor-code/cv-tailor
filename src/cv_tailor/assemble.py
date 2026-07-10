@@ -89,9 +89,19 @@ def assemble_package(entry: dict, scan_date: str, *, queue_dir=None, client=None
     fields.setdefault("job_meta", {})["company"] = company
     fields["job_meta"]["role"] = role
 
-    # canonical-case skills (LLMs lowercase), then honesty/schema validation
+    # canonical-case skills (LLMs lowercase), then drop any skill the LLM
+    # invented that isn't in profile.skills at all. Dropping a claimed
+    # emphasis is honest -- removing a claim can't fabricate anything -- so
+    # unlike an invented experience/project/summary id, it must not dead-end
+    # the whole assembly. Record what got dropped for the caller/meta.json.
     canon = {s.lower(): s for grp in profile.get("skills", {}).values() for s in grp}
-    fields["skills_emphasis"] = [canon.get(s.lower(), s) for s in fields.get("skills_emphasis", [])]
+    emphasis = [canon.get(s.lower(), s) for s in fields.get("skills_emphasis", [])]
+    fields["skills_emphasis"] = [s for s in emphasis if s.lower() in canon]
+    skills_dropped = [s for s in emphasis if s.lower() not in canon]
+
+    # remaining honesty/schema validation still hard-fails on anything that
+    # references content that would otherwise render as fact (experience,
+    # project, and summary ids).
     errors = validate(profile, fields)
     if errors:
         raise AssembleError("CV validation failed (honesty guard):\n  - " + "\n  - ".join(errors))
@@ -119,6 +129,7 @@ def assemble_package(entry: dict, scan_date: str, *, queue_dir=None, client=None
         "one_line_pitch": fields.get("one_line_pitch"),
         "gaps_honest": fields.get("gaps_honest", []),
         "jd_keywords_matched": fields.get("jd_keywords_matched", []),
+        "skills_dropped": skills_dropped,
         "cover_letter_warnings": cover_warnings,
         "cover_letter_words": len(re.findall(r"\b[\w'-]+\b", letter)),
     }

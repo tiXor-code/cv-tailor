@@ -133,17 +133,63 @@ def test_assemble_package_uses_inline_description_when_no_sidecar(tmp_path):
 
 
 def test_assemble_package_validation_failure_raises_assemble_error(tmp_path, monkeypatch):
-    """A tailor() result referencing a skill outside profile.skills trips the
-    honesty guard -- assemble_package must surface this as AssembleError, not
-    a raw exception, and must not have written package files."""
+    """A tailor() result referencing an experience id outside profile.experiences
+    trips the honesty guard -- assemble_package must surface this as
+    AssembleError, not a raw exception, and must not have written package
+    files. (Unknown skills_emphasis is handled separately -- see
+    test_assemble_package_drops_unknown_skills_emphasis -- dropping a claimed
+    skill can't fabricate anything, so it must not dead-end the assembly the
+    way an invented experience/project/summary id would.)"""
     bad_fields = json.loads(json.dumps(FIELDS))
-    bad_fields["skills_emphasis"] = ["Kubernetes-Not-In-Profile"]
+    bad_fields["experience_ids_ordered"] = ["no-such-experience"]
     monkeypatch.setattr(assemble_mod, "tailor", lambda *a, **kw: bad_fields)
 
-    entry = _entry(id="bad-skill-job")
+    entry = _entry(id="bad-experience-job")
     _seed_description(tmp_path, "2026-07-10", entry["id"], "We need a Python engineer.")
 
     with pytest.raises(AssembleError):
         assemble_package(entry, "2026-07-10", queue_dir=tmp_path, client="unused-sentinel")
 
     assert not (tmp_path / "2026-07-10" / "packages").exists()
+
+
+def test_assemble_package_drops_unknown_skills_emphasis(tmp_path, monkeypatch):
+    """An LLM-invented skill not present anywhere in profile.skills (real e2e
+    case: 'automation') must NOT dead-end the assembly -- dropping a claimed
+    emphasis is honest (it can't fabricate anything), unlike an invented
+    experience/project/summary id which references content that would then
+    render as fact. The dropped skill is recorded in meta['skills_dropped']
+    and must not reach the fields handed to rendering/cover-letter."""
+    bad_fields = json.loads(json.dumps(FIELDS))
+    bad_fields["skills_emphasis"] = ["Python", "automation"]
+    monkeypatch.setattr(assemble_mod, "tailor", lambda *a, **kw: bad_fields)
+
+    seen_fields = {}
+
+    def _capturing_cover_letter(profile, jd_text, fields, *, client=None, deployment=None):
+        seen_fields["skills_emphasis"] = list(fields.get("skills_emphasis", []))
+        return CLEAN_LETTER
+
+    monkeypatch.setattr(assemble_mod, "cover_letter", _capturing_cover_letter)
+
+    entry = _entry(id="bogus-skill-job")
+    _seed_description(tmp_path, "2026-07-10", entry["id"], "We need a Python engineer.")
+
+    result = assemble_package(entry, "2026-07-10", queue_dir=tmp_path, client="unused-sentinel")
+
+    assert result["skills_dropped"] == ["automation"]
+    assert seen_fields["skills_emphasis"] == ["Python"]
+    assert "automation" not in seen_fields["skills_emphasis"]
+
+    meta_on_disk = json.loads((Path(result["package_dir"]) / "meta.json").read_text())
+    assert meta_on_disk["skills_dropped"] == ["automation"]
+
+
+def test_assemble_package_skills_dropped_empty_when_none_dropped(tmp_path):
+    """No unknown skills -> meta['skills_dropped'] is present but empty."""
+    entry = _entry(id="clean-skill-job")
+    _seed_description(tmp_path, "2026-07-10", entry["id"], "We need a Python engineer.")
+
+    result = assemble_package(entry, "2026-07-10", queue_dir=tmp_path, client="unused-sentinel")
+
+    assert result["skills_dropped"] == []

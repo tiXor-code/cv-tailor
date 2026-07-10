@@ -1,4 +1,5 @@
 import json
+import multiprocessing
 from datetime import date
 from types import SimpleNamespace
 
@@ -113,5 +114,57 @@ def test_update_entry_write_is_atomic_no_tmp_residue(tmp_path):
     update_entry("2026-06-24", job_id, lambda e: e.update(status="approved"), queue_dir=tmp_path)
 
     day_dir = tmp_path / "2026-06-24"
-    assert list(day_dir.glob("*.tmp")) == []
+    assert list(day_dir.glob("*.tmp*")) == []
     assert (day_dir / "jobs.json").exists()
+
+
+def _bump_counter_n_times(scan_date_iso, job_id, queue_dir, n):
+    """Module-level so multiprocessing (spawn) can pickle/import it as the
+    child process target. Each call is its own full read-modify-write cycle
+    through update_entry, exactly like two live orchestrator processes
+    hammering the same day's queue on different job ids."""
+    from cv_tailor.scout_queue import update_entry
+
+    def _bump(entry):
+        entry["counter"] = entry.get("counter", 0) + 1
+
+    for _ in range(n):
+        update_entry(scan_date_iso, job_id, _bump, queue_dir=queue_dir)
+
+
+def test_update_entry_concurrent_writers_no_crash_no_lost_updates(tmp_path):
+    """Regression test for the live e2e failure: two orchestrator processes
+    updating DIFFERENT job ids in the SAME day file collided on the shared
+    fixed '.tmp' name -- one process's rename threw FileNotFoundError and a
+    status write was lost to the read-modify-write race. Two real OS
+    processes (not threads) each mutate their OWN entry 25 times; neither
+    may crash and neither may lose an update."""
+    scored = [
+        {"job": _job(raw_id="one"), "score": 9, "reason": "", "keywords": []},
+        {"job": _job(raw_id="two"), "score": 5, "reason": "", "keywords": []},
+    ]
+    write_jobs_queue(scored, date(2026, 6, 24), queue_dir=tmp_path)
+    id_one = _job_id(_job(raw_id="one"))
+    id_two = _job_id(_job(raw_id="two"))
+    update_entry("2026-06-24", id_one, lambda e: e.update(counter=0), queue_dir=tmp_path)
+    update_entry("2026-06-24", id_two, lambda e: e.update(counter=0), queue_dir=tmp_path)
+
+    n = 25
+    ctx = multiprocessing.get_context("spawn")
+    p1 = ctx.Process(target=_bump_counter_n_times, args=("2026-06-24", id_one, tmp_path, n))
+    p2 = ctx.Process(target=_bump_counter_n_times, args=("2026-06-24", id_two, tmp_path, n))
+    p1.start()
+    p2.start()
+    p1.join(timeout=60)
+    p2.join(timeout=60)
+
+    assert p1.exitcode == 0, "worker 1 crashed (see traceback above)"
+    assert p2.exitcode == 0, "worker 2 crashed (see traceback above)"
+
+    entries = json.loads((tmp_path / "2026-06-24" / "jobs.json").read_text())
+    by_id = {e["id"]: e for e in entries}
+    assert by_id[id_one]["counter"] == n, "lost update(s) on entry one"
+    assert by_id[id_two]["counter"] == n, "lost update(s) on entry two"
+
+    day_dir = tmp_path / "2026-06-24"
+    assert list(day_dir.glob("*.tmp*")) == []
