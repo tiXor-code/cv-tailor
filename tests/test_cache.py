@@ -1,7 +1,10 @@
 # tests/test_cache.py
 import sys, pathlib
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent / "src"))
-from cv_tailor.cache import connect, is_new, mark_seen
+from cv_tailor.cache import (
+    connect, is_new, mark_seen,
+    record_application, application_exists, applications_sent_today,
+)
 from cv_tailor.job_sources import JobPosting
 
 
@@ -43,3 +46,34 @@ def test_enrichment_ttl(tmp_path):
     # max_age_days=0 means anything is stale -> treated as a miss
     assert get_enrichment(conn, "old.com", max_age_days=0) is None
     assert get_enrichment(conn, "old.com") is not None  # default window: hit
+
+
+def test_application_record_then_exists_by_job_id(tmp_path):
+    conn = connect(tmp_path / "jobs.db")
+    assert application_exists(conn, job_id="job-1", company="Acme", role="AI Engineer") is False
+    record_application(conn, job_id="job-1", company="Acme", role="AI Engineer",
+                        url="https://x/1", channel="email")
+    assert application_exists(conn, job_id="job-1", company="Acme", role="AI Engineer") is True
+
+
+def test_application_exists_by_normalized_company_role_different_id(tmp_path):
+    conn = connect(tmp_path / "jobs.db")
+    record_application(conn, job_id="job-1", company="Acme Inc.", role="AI Engineer",
+                        url="https://x/1", channel="email")
+    # Different job_id, same company/role after normalization -> already applied.
+    assert application_exists(conn, job_id="job-2", company="acme inc", role="AI  Engineer") is True
+
+
+def test_application_exists_false_for_different_company_role(tmp_path):
+    conn = connect(tmp_path / "jobs.db")
+    record_application(conn, job_id="job-1", company="Acme", role="AI Engineer",
+                        url="https://x/1", channel="email")
+    assert application_exists(conn, job_id="job-3", company="Beta Corp", role="Backend Engineer") is False
+
+
+def test_applications_sent_today_counts_todays_rows(tmp_path):
+    conn = connect(tmp_path / "jobs.db")
+    assert applications_sent_today(conn) == 0
+    record_application(conn, job_id="job-1", company="Acme", role="AI Engineer",
+                        url="https://x/1", channel="email")
+    assert applications_sent_today(conn) == 1

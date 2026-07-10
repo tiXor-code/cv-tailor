@@ -7,6 +7,8 @@ import json
 import os
 import urllib.parse
 import urllib.request
+import uuid
+from pathlib import Path
 from typing import Optional
 
 
@@ -42,6 +44,66 @@ def send_text(text: str, *, token: Optional[str] = None, chat_id: Optional[str] 
         except Exception:
             ok = False
     return ok
+
+
+def send_document(path, caption: str = "", *, token: Optional[str] = None,
+                   chat_id: Optional[str] = None) -> bool:
+    """Send a file as a Telegram document via the Bot API sendDocument endpoint.
+    Returns True on success, False on failure or missing credentials (same
+    error-swallowing contract as send_text)."""
+    token = token or os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
+    chat_id = chat_id or os.environ.get("TELEGRAM_CHAT_ID", "").strip()
+    if not token or not chat_id:
+        return False
+
+    try:
+        file_path = Path(path)
+        file_bytes = file_path.read_bytes()
+    except OSError:
+        return False
+
+    boundary = uuid.uuid4().hex
+    body = _build_multipart_body(boundary, chat_id, caption, file_path.name, file_bytes)
+    req = urllib.request.Request(
+        f"https://api.telegram.org/bot{token}/sendDocument",
+        data=body,
+        headers={"Content-Type": f"multipart/form-data; boundary={boundary}"},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            resp_data = json.load(resp)
+            return bool(resp_data.get("ok"))
+    except Exception:
+        return False
+
+
+def _build_multipart_body(boundary: str, chat_id: str, caption: str, filename: str,
+                           file_bytes: bytes) -> bytes:
+    """Hand-build a multipart/form-data body (stdlib only, no requests dep)."""
+    crlf = "\r\n"
+    parts: list[bytes] = []
+
+    def text_field(name: str, value: str) -> bytes:
+        return (
+            f"--{boundary}{crlf}"
+            f'Content-Disposition: form-data; name="{name}"{crlf}{crlf}'
+            f"{value}{crlf}"
+        ).encode()
+
+    parts.append(text_field("chat_id", chat_id))
+    if caption:
+        parts.append(text_field("caption", caption))
+    parts.append(
+        (
+            f"--{boundary}{crlf}"
+            f'Content-Disposition: form-data; name="document"; filename="{filename}"{crlf}'
+            f"Content-Type: application/octet-stream{crlf}{crlf}"
+        ).encode()
+        + file_bytes
+        + crlf.encode()
+    )
+    parts.append(f"--{boundary}--{crlf}".encode())
+    return b"".join(parts)
 
 
 def _chunk_text(text: str, limit: int) -> list[str]:
