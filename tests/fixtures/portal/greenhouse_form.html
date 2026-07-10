@@ -1,0 +1,80 @@
+<!doctype html>
+<!--
+  Local static snapshot of a Greenhouse Job Board application form, built
+  from a real posting fetched from job-boards.greenhouse.io/gitlab (and
+  cross-checked against remotecom/canonical). Field ids, aria-label text,
+  aria-required flags, and the "question_<id>" custom-question naming
+  convention are copied faithfully from that real markup.
+
+  Two faithful simplifications, both because the live Greenhouse Job Board
+  is a React app whose real controls (a JS-driven country combobox, EEO
+  react-select widgets) render nothing in static HTML and are not scriptable
+  from a fixture: the "how did you hear about us" question is a native
+  <select> here (the live page uses a react-select combobox with no native
+  select), and there is no separate application-page navigation (the real
+  form already lives on the posting page too, so this matches).
+
+  This file also fixture-fakes network-free variants of two conditions the
+  adapter must handle, both driven by query string so one file covers every
+  scenario (mirrors blocked_form.html's iframe trick from Task C1):
+    ?captcha=1   -> injects a captcha-shaped div after load (blocker path)
+    ?nosubmit=1  -> submit is accepted but no confirmation ever appears
+                    (tests the no-confirmation timeout path)
+-->
+<html>
+<head><meta charset="utf-8"><title>Acme Corp - Senior Engineer</title></head>
+<body>
+  <form id="application-form" class="application--form">
+    <input type="text" id="first_name" name="first_name" aria-label="First Name" aria-required="true">
+    <input type="text" id="last_name" name="last_name" aria-label="Last Name" aria-required="true">
+    <input type="text" id="email" name="email" aria-label="Email" aria-required="true">
+    <input type="tel" id="phone" name="phone" aria-label="Phone" aria-required="false">
+
+    <input type="file" id="resume" name="resume" accept=".pdf,.doc,.docx,.txt,.rtf">
+    <input type="file" id="cover_letter" name="cover_letter" accept=".pdf,.doc,.docx,.txt,.rtf">
+
+    <div class="application-question">
+      <label for="question_1001">How did you hear about this position?</label>
+      <select id="question_1001" name="question_1001" aria-label="How did you hear about this position?" aria-required="false">
+        <option value="">Select...</option>
+        <option value="linkedin">LinkedIn</option>
+        <option value="referral">Referral</option>
+        <option value="company_website">Company website</option>
+        <option value="other">Other</option>
+      </select>
+    </div>
+
+    <div class="application-question">
+      <label for="question_1002">LinkedIn Profile</label>
+      <input type="text" id="question_1002" name="question_1002" aria-label="LinkedIn Profile" aria-required="true">
+    </div>
+
+    <button type="submit" id="submit_app" class="btn btn--pill">Submit application</button>
+  </form>
+
+  <script>
+    (function () {
+      var params = new URLSearchParams(location.search);
+
+      if (params.get("captcha") === "1") {
+        var captcha = document.createElement("div");
+        captcha.className = "g-recaptcha";
+        captcha.setAttribute("data-sitekey", "fixture-only");
+        document.body.appendChild(captcha);
+      }
+
+      var form = document.getElementById("application-form");
+      form.addEventListener("submit", function (e) {
+        e.preventDefault();
+        if (params.get("nosubmit") === "1") {
+          return;
+        }
+        var confirmation = document.createElement("div");
+        confirmation.id = "confirmation-message";
+        confirmation.textContent = "Thank you for applying to Acme Corp!";
+        document.body.appendChild(confirmation);
+      });
+    })();
+  </script>
+</body>
+</html>

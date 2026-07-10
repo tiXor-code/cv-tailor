@@ -7,5 +7,6 @@ from cv_tailor.portal.base import (
     adapter_for,
     run_portal_application,
 )
+from cv_tailor.portal import greenhouse  # noqa
 
 __all__ = ["PortalAdapter", "PortalResult", "adapter_for", "run_portal_application"]
