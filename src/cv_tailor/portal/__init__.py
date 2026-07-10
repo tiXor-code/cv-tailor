@@ -1,0 +1,11 @@
+# src/cv_tailor/portal/__init__.py
+"""Portal package: autonomous ATS application filling (Ashby/Greenhouse/Lever
+adapters land in later tasks). Public surface for the orchestrator and adapters."""
+from cv_tailor.portal.base import (
+    PortalAdapter,
+    PortalResult,
+    adapter_for,
+    run_portal_application,
+)
+
+__all__ = ["PortalAdapter", "PortalResult", "adapter_for", "run_portal_application"]
