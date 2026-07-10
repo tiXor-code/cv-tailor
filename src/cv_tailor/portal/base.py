@@ -20,6 +20,7 @@ should not).
 from __future__ import annotations
 
 import json
+import time
 from pathlib import Path
 from typing import NamedTuple
 
@@ -110,23 +111,31 @@ def _dump_form_state(page) -> dict:
 
 
 def capture_evidence(page, evidence_dir, stage: str) -> None:
-    """Write `<stage>.png` (full-page screenshot) and overwrite
+    """Best-effort: write `<stage>.png` (full-page screenshot) and overwrite
     `form_state.json` with the current named-field name->value snapshot.
-    Never raises -- a failed screenshot (e.g. page already closed) still
-    lets the form_state write proceed, and vice versa, so a crash mid-run
-    never loses whichever half of the evidence was still capturable."""
-    evidence_dir = Path(evidence_dir)
-    evidence_dir.mkdir(parents=True, exist_ok=True)
-
+    Never raises, full stop -- this runs from a `finally` block in
+    run_portal_application, so an evidence-write failure (mkdir on a bad
+    path, a full disk on write_text, a closed page) must never mask the
+    real result underneath it. A failed screenshot still lets the
+    form_state write proceed, and vice versa, so a crash mid-run loses only
+    whichever half of the evidence really was uncapturable; if the whole
+    body blows up (e.g. mkdir itself fails), this returns having captured
+    nothing rather than raising."""
     try:
-        page.screenshot(path=str(evidence_dir / f"{stage}.png"), full_page=True)
-    except PlaywrightError:
-        pass
+        evidence_dir = Path(evidence_dir)
+        evidence_dir.mkdir(parents=True, exist_ok=True)
 
-    form_state = _dump_form_state(page)
-    (evidence_dir / "form_state.json").write_text(
-        json.dumps(form_state, indent=2, ensure_ascii=False)
-    )
+        try:
+            page.screenshot(path=str(evidence_dir / f"{stage}.png"), full_page=True)
+        except PlaywrightError:
+            pass
+
+        form_state = _dump_form_state(page)
+        (evidence_dir / "form_state.json").write_text(
+            json.dumps(form_state, indent=2, ensure_ascii=False)
+        )
+    except Exception:  # noqa: BLE001 -- best-effort evidence capture must never raise (see docstring)
+        pass
 
 
 # --- field filling ------------------------------------------------------------
@@ -158,11 +167,23 @@ def run_portal_application(entry: dict, package: dict, profile: dict, answers: d
     Flow: resolve evidence_dir -> resolve URL -> look up the adapter for its
     host (no match -> needs_human before any browser is launched) -> launch
     headless chromium -> navigate (timeout -> needs_human) -> blocker check
-    (captcha/login-required -> needs_human) -> dispatch to the adapter ->
-    capture evidence at whatever stage was last reached, always, even on an
-    adapter exception -> any uncaught exception anywhere degrades to
-    "failed" rather than propagating, so a bad job never kills the caller's
-    batch run.
+    (captcha/login-required -> needs_human) -> dispatch to the adapter
+    (timeout -> needs_human) -> capture evidence at whatever stage was last
+    reached, always, even on an adapter exception -> any uncaught exception
+    anywhere degrades to "failed" rather than propagating, so a bad job
+    never kills the caller's batch run.
+
+    `timeout_s` is a wall-clock budget for the whole browser interaction,
+    not a per-action cap: navigation gets the full budget, but once it
+    returns the page's default action timeout shrinks to whatever remains
+    (floored at 5s) so a chain of slow adapter actions can't each burn the
+    full budget on their own. A Playwright TimeoutError raised anywhere in
+    navigation or adapter dispatch degrades to needs_human("timeout")
+    rather than the generic "failed" -- it means the page never responded
+    in time, not that the adapter's logic is broken. If the adapter
+    finishes and returns normally despite running past timeout_s, its
+    result stands as-is: the cap only governs blocking waits, not elapsed
+    wall-clock time after the fact.
     """
     evidence_dir = Path(package["package_dir"]) / "portal"
     evidence_dir.mkdir(parents=True, exist_ok=True)
@@ -186,12 +207,19 @@ def run_portal_application(entry: dict, package: dict, profile: dict, answers: d
                 page = browser.new_page()
                 page.set_default_timeout(timeout_s * 1000)
 
+                start = time.monotonic()
                 try:
                     page.goto(url, wait_until="load", timeout=timeout_s * 1000)
                 except PlaywrightTimeoutError:
                     stage = "timeout"
                     return PortalResult(status="needs_human", reason="timeout",
                                          evidence_dir=str(evidence_dir))
+
+                # Shrink the per-action budget to whatever's left of timeout_s
+                # (floored at 5s) so a chain of adapter actions can't each
+                # burn the full wall-clock budget on their own.
+                remaining = timeout_s - (time.monotonic() - start)
+                page.set_default_timeout(max(remaining, 5) * 1000)
 
                 blocker = detect_blockers(page)
                 if blocker:
@@ -200,7 +228,12 @@ def run_portal_application(entry: dict, package: dict, profile: dict, answers: d
                                          evidence_dir=str(evidence_dir))
 
                 stage = "dispatch"
-                result = adapter.apply(page, entry, package, profile, answers, dry_run=dry_run)
+                try:
+                    result = adapter.apply(page, entry, package, profile, answers, dry_run=dry_run)
+                except PlaywrightTimeoutError:
+                    stage = "timeout"
+                    return PortalResult(status="needs_human", reason="timeout",
+                                         evidence_dir=str(evidence_dir))
                 stage = result.status
                 return result
             finally:

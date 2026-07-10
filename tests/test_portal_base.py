@@ -10,12 +10,17 @@ actual Playwright wiring works, per the task brief's explicit ask.
 """
 from __future__ import annotations
 
+import contextlib
+import http.server
 import json
 import sys
+import threading
+import time
 from pathlib import Path
 
 import pytest
 from playwright.sync_api import Error as PlaywrightError
+from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 sys.path.insert(0, str(Path(__file__).resolve().parent / "fixtures" / "portal"))
@@ -108,6 +113,61 @@ class DummyAdapter(PortalAdapter):
         fill_field(page, "#full_name", profile.get("contact", {}).get("name", ""))
         evidence_dir = Path(package["package_dir"]) / "portal"
         return PortalResult(status="filled", reason="", evidence_dir=str(evidence_dir))
+
+
+class RaisingAdapter(PortalAdapter):
+    """Adapter whose apply() always blows up with a plain exception -- proves
+    run_portal_application's generic-failure path degrades to "failed"
+    (not needs_human) and still captures evidence at the "dispatch" stage."""
+
+    hosts = ("127.0.0.1",)
+    name = "raising"
+
+    def apply(self, page, entry, package, profile, answers, *, dry_run):
+        raise RuntimeError("adapter exploded")
+
+
+class TimeoutRaisingAdapter(PortalAdapter):
+    """Adapter whose apply() raises a real Playwright TimeoutError -- proves
+    run_portal_application maps a mid-dispatch timeout to needs_human
+    ("timeout") instead of letting it fall into the generic "failed" branch.
+    Raises directly rather than actually waiting so the test stays fast."""
+
+    hosts = ("127.0.0.1",)
+    name = "timeout-raising"
+
+    def apply(self, page, entry, package, profile, answers, *, dry_run):
+        raise PlaywrightTimeoutError("Timeout 5000ms exceeded waiting for selector")
+
+
+class _SlowHandler(http.server.BaseHTTPRequestHandler):
+    """Accepts the connection and the request but never writes a response
+    within any test's timeout_s, so page.goto reliably times out client-side
+    without relying on a dropped/refused connection (which fails fast with a
+    different error, not a timeout)."""
+
+    def do_GET(self):
+        time.sleep(2)
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html")
+        self.end_headers()
+        self.wfile.write(b"<html><body>slow</body></html>")
+
+    def log_message(self, *args):
+        pass  # keep test output quiet
+
+
+@contextlib.contextmanager
+def _serve_slow():
+    httpd = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _SlowHandler)
+    port = httpd.server_address[1]
+    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield f"http://127.0.0.1:{port}"
+    finally:
+        httpd.shutdown()
+        thread.join(timeout=5)
 
 
 @pytest.fixture
@@ -246,6 +306,39 @@ def test_capture_evidence_does_not_raise_when_screenshot_fails(tmp_path):
     assert json.loads((evidence_dir / "form_state.json").read_text()) == {"full_name": "Teodor"}
 
 
+def test_capture_evidence_does_not_raise_when_mkdir_fails(tmp_path):
+    # evidence_dir's parent is a FILE, not a directory, so
+    # `evidence_dir.mkdir(parents=True)` raises NotADirectoryError.
+    blocker_file = tmp_path / "blocker"
+    blocker_file.write_text("not a directory")
+    evidence_dir = blocker_file / "portal"
+    page = FakePage(form_state={"full_name": "Teodor"})
+
+    capture_evidence(page, evidence_dir, "start")  # must not raise
+
+    assert not evidence_dir.exists()
+
+
+def test_capture_evidence_does_not_raise_when_form_state_write_fails(tmp_path, monkeypatch):
+    page = FakePage(form_state={"full_name": "Teodor"})
+    evidence_dir = tmp_path / "portal"
+    original_write_text = Path.write_text
+
+    def flaky_write_text(self, *args, **kwargs):
+        if self.name == "form_state.json":
+            raise OSError("disk full")
+        return original_write_text(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "write_text", flaky_write_text)
+
+    capture_evidence(page, evidence_dir, "start")  # must not raise
+
+    # Screenshot happened before the write_text failure, so it's still there;
+    # the form_state write itself never landed.
+    assert (evidence_dir / "start.png").exists()
+    assert not (evidence_dir / "form_state.json").exists()
+
+
 # --- fill_field ---------------------------------------------------------------
 
 def test_fill_field_returns_false_for_empty_value():
@@ -374,3 +467,68 @@ def test_smoke_run_portal_application_dispatches_to_adapter_end_to_end(tmp_path,
     assert (evidence_dir / "filled.png").exists()
     state = json.loads((evidence_dir / "form_state.json").read_text())
     assert state["full_name"] == "Teodor Lutoiu"
+
+
+# --- run_portal_application: browser-backed failure paths --------------------
+
+def test_run_portal_application_needs_human_when_blocker_detected_mid_navigation(tmp_path, clean_registry):
+    register_adapter(DummyAdapter())
+    package = {"package_dir": str(tmp_path / "pkg")}
+
+    with serve_fixtures() as base_url:
+        entry = {"id": "job-1", "apply_target": f"{base_url}/blocked_form.html"}
+        result = run_portal_application(entry, package, {}, {}, dry_run=True)
+
+    assert result.status == "needs_human"
+    assert result.reason == "captcha"
+    evidence_dir = Path(result.evidence_dir)
+    assert (evidence_dir / "captcha.png").exists()
+    assert (evidence_dir / "form_state.json").exists()
+
+
+def test_run_portal_application_failed_when_adapter_raises(tmp_path, clean_registry):
+    register_adapter(RaisingAdapter())
+    package = {"package_dir": str(tmp_path / "pkg")}
+
+    with serve_fixtures() as base_url:
+        entry = {"id": "job-1", "apply_target": f"{base_url}/simple_form.html"}
+        result = run_portal_application(entry, package, {}, {}, dry_run=True)
+
+    assert result.status == "failed"
+    assert "adapter exploded" in result.reason
+    evidence_dir = Path(result.evidence_dir)
+    assert (evidence_dir / "dispatch.png").exists()
+    assert (evidence_dir / "form_state.json").exists()
+
+
+def test_run_portal_application_needs_human_timeout_when_adapter_raises_playwright_timeout(tmp_path, clean_registry):
+    register_adapter(TimeoutRaisingAdapter())
+    package = {"package_dir": str(tmp_path / "pkg")}
+
+    with serve_fixtures() as base_url:
+        entry = {"id": "job-1", "apply_target": f"{base_url}/simple_form.html"}
+        result = run_portal_application(entry, package, {}, {}, dry_run=True)
+
+    assert result.status == "needs_human"
+    assert result.reason == "timeout"
+    evidence_dir = Path(result.evidence_dir)
+    assert (evidence_dir / "timeout.png").exists()
+    assert (evidence_dir / "form_state.json").exists()
+
+
+@pytest.mark.integration
+def test_run_portal_application_needs_human_timeout_on_slow_navigation(tmp_path, clean_registry):
+    register_adapter(DummyAdapter())
+    package = {"package_dir": str(tmp_path / "pkg")}
+
+    with _serve_slow() as base_url:
+        entry = {"id": "job-1", "apply_target": f"{base_url}/anything"}
+        result = run_portal_application(entry, package, {}, {}, dry_run=True, timeout_s=1)
+
+    assert result.status == "needs_human"
+    assert result.reason == "timeout"
+    # The attempt happened -- evidence dir + form_state.json always land,
+    # even though the screenshot may be of a still-loading blank page.
+    evidence_dir = Path(result.evidence_dir)
+    assert evidence_dir.is_dir()
+    assert (evidence_dir / "form_state.json").exists()
