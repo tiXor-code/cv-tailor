@@ -41,7 +41,9 @@ from cv_tailor.portal.base import (
     capture_evidence,
     detect_blockers,
     fill_field,
+    handoff_timeout_s,
     register_adapter,
+    resolve_blocker,
     verify_file_attached,
     verify_filled,
 )
@@ -114,20 +116,25 @@ class AshbyAdapter(PortalAdapter):
 
     def apply(self, page, entry: dict, package: dict, profile: dict,
               answers: dict, *, dry_run: bool, client: Any = None,
-              deployment: str | None = None) -> PortalResult:
+              deployment: str | None = None, handoff: bool = False,
+              notify: Any = None) -> PortalResult:
         evidence_dir = Path(package["package_dir"]) / "portal"
 
         blocker = detect_blockers(page)
         if blocker:
-            capture_evidence(page, evidence_dir, blocker)
-            return PortalResult(status="needs_human", reason=blocker, evidence_dir=str(evidence_dir))
+            result = resolve_blocker(page, blocker, evidence_dir, stage=blocker,
+                                      handoff=handoff, notify=notify)
+            if result is not None:
+                return result
 
         self._open_application_tab(page)
 
         blocker = detect_blockers(page)
         if blocker:
-            capture_evidence(page, evidence_dir, blocker)
-            return PortalResult(status="needs_human", reason=blocker, evidence_dir=str(evidence_dir))
+            result = resolve_blocker(page, blocker, evidence_dir, stage=blocker,
+                                      handoff=handoff, notify=notify)
+            if result is not None:
+                return result
 
         # Upload the resume FIRST, before any typed field: on the real
         # Ashby form, selecting a resume triggers a client-side re-render
@@ -173,6 +180,9 @@ class AshbyAdapter(PortalAdapter):
 
         if dry_run:
             return PortalResult(status="filled", reason="", evidence_dir=str(evidence_dir))
+
+        if handoff:
+            return self._await_handoff_submission(page, entry, evidence_dir, notify)
 
         return self._submit_and_await_confirmation(page, evidence_dir)
 
@@ -456,6 +466,46 @@ class AshbyAdapter(PortalAdapter):
         return None, None, None
 
     # --- submission -----------------------------------------------------------
+
+    def _await_handoff_submission(self, page, entry: dict, evidence_dir: Path, notify) -> PortalResult:
+        """Handoff mode: never click submit -- the human does that themselves
+        after solving any CAPTCHA. Notify once, snapshot the same pre-click
+        state _submit_and_await_confirmation itself snapshots (initial_url,
+        form_present_pre_click -- taken fresh here since nothing has been
+        clicked yet), then poll the SAME confirmation signal (_confirmed)
+        every 2s up to the handoff timeout. Confirmed -> "submitted" with
+        evidence. Timeout -> needs_human, form left exactly as the human
+        last saw it (never retried, matching every other no-confirmation
+        degrade in this adapter)."""
+        company = (entry or {}).get("company", "")
+        if notify is not None:
+            try:
+                notify(f"{company} form filled and waiting: solve any captcha and click submit")
+            except Exception:  # noqa: BLE001 -- notify is best-effort
+                pass
+
+        try:
+            initial_url = page.url
+        except PlaywrightError:
+            initial_url = None
+        form_present_pre_click = self._form_present(page)
+
+        deadline = time.monotonic() + handoff_timeout_s()
+        while True:
+            if self._confirmed(page, initial_url, form_present_pre_click):
+                capture_evidence(page, evidence_dir, "submitted")
+                return PortalResult(status="submitted", reason="", evidence_dir=str(evidence_dir))
+            if time.monotonic() >= deadline:
+                break
+            try:
+                page.wait_for_timeout(2000)
+            except PlaywrightError:
+                break
+
+        capture_evidence(page, evidence_dir, "handoff-timeout")
+        return PortalResult(status="needs_human",
+                             reason="handoff-timeout: not submitted, form left as-is",
+                             evidence_dir=str(evidence_dir))
 
     def _submit_and_await_confirmation(self, page, evidence_dir: Path) -> PortalResult:
         try:

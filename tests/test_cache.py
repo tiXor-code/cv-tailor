@@ -4,6 +4,7 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent / "src"))
 from cv_tailor.cache import (
     connect, is_new, mark_seen,
     record_application, delete_application, application_exists, applications_sent_today,
+    own_application_recorded,
 )
 from cv_tailor.job_sources import JobPosting
 
@@ -119,3 +120,19 @@ def test_delete_application_removes_the_row(tmp_path):
 def test_delete_application_missing_job_id_is_a_noop(tmp_path):
     conn = connect(tmp_path / "jobs.db")
     delete_application(conn, job_id="does-not-exist")  # must not raise
+
+
+def test_own_application_recorded_false_when_no_row(tmp_path):
+    conn = connect(tmp_path / "jobs.db")
+    assert own_application_recorded(conn, "job-1") is False
+
+
+def test_own_application_recorded_true_only_for_the_exact_job_id(tmp_path):
+    conn = connect(tmp_path / "jobs.db")
+    record_application(conn, job_id="job-1", company="Acme", role="AI Engineer",
+                        url="https://x/1", channel="portal")
+
+    assert own_application_recorded(conn, "job-1") is True
+    # A different job_id -- even with the same normalized company|role -- is
+    # NOT "our own" row (that's application_exists's job, not this one's).
+    assert own_application_recorded(conn, "job-2") is False

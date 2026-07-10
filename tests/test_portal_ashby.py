@@ -395,6 +395,92 @@ def test_apply_armed_normal_fixture_still_returns_submitted(chromium_page, packa
     assert result.reason == ""
 
 
+# --- handoff mode: headed fill, human does captcha + submit ------------------
+
+def test_apply_handoff_never_submits_and_times_out_when_nothing_clicks(chromium_page, package, monkeypatch):
+    """Direct proof that handoff mode never clicks submit itself: the
+    DEFAULT fixture (no auto-click variant) is used, so the ONLY way
+    #confirmation could ever appear is a real click -- none happens, so this
+    must time out at needs_human with the confirmation panel still hidden."""
+    monkeypatch.setenv("APPLY_HANDOFF_TIMEOUT", "0")
+    page = chromium_page
+    entry = {"id": "job-1", "company": "Fixture Co"}
+
+    with serve_fixtures() as base_url:
+        _goto(page, base_url)
+        result = AshbyAdapter().apply(page, entry, package, _PROFILE, _ANSWERS,
+                                       dry_run=False, handoff=True, notify=None)
+
+        confirmation_visible = page.locator("#confirmation").is_visible()
+
+    assert result.status == "needs_human"
+    assert result.reason == "handoff-timeout: not submitted, form left as-is"
+    assert confirmation_visible is False
+
+    evidence_dir = Path(result.evidence_dir)
+    assert (evidence_dir / "filled.png").exists()
+    assert (evidence_dir / "handoff-timeout.png").exists()
+
+
+def test_apply_handoff_confirmed_after_delayed_human_submit_returns_submitted(
+    chromium_page, package, monkeypatch
+):
+    """?variant=handoffsubmit fires a fixture-only setTimeout that clicks
+    #submit-btn ~300ms after page load, standing in for a human solving a
+    captcha and clicking submit themselves -- nothing in the adapter's own
+    handoff code path ever calls .click(). The poll (every 2s, per the
+    handoff-mode contract) must notice the resulting confirmation text and
+    return submitted with evidence."""
+    monkeypatch.setenv("APPLY_HANDOFF_TIMEOUT", "5")
+    page = chromium_page
+    entry = {"id": "job-1", "company": "Fixture Co"}
+    notified = []
+
+    with serve_fixtures() as base_url:
+        _goto(page, base_url, variant="handoffsubmit")
+        result = AshbyAdapter().apply(page, entry, package, _PROFILE, _ANSWERS,
+                                       dry_run=False, handoff=True, notify=notified.append)
+
+        confirmation_visible = page.locator("#confirmation").is_visible()
+
+    assert result.status == "submitted"
+    assert result.reason == ""
+    assert confirmation_visible is True
+    assert notified == ["Fixture Co form filled and waiting: solve any captcha and click submit"]
+
+    evidence_dir = Path(result.evidence_dir)
+    assert (evidence_dir / "filled.png").exists()
+    assert (evidence_dir / "submitted.png").exists()
+
+
+def test_apply_handoff_blocker_timeout_returns_handoff_specific_needs_human(
+    chromium_page, package, monkeypatch
+):
+    """A captcha revealed after navigation (?variant=captcha, opened once the
+    Application tab is clicked) aborts to plain needs_human("captcha")
+    outside handoff mode (see
+    test_apply_captcha_revealed_after_navigation_aborts_to_needs_human
+    above). In handoff mode the SAME blocker instead goes through
+    wait_for_blocker_clear; with an immediate handoff timeout (the
+    fixture's captcha iframe is a static DOM marker that never clears on
+    its own) it must degrade to the handoff-specific reason instead --
+    proving resolve_blocker's handoff branch is actually wired into this
+    adapter's real detect_blockers checkpoints, not just unit-tested in
+    isolation (see test_portal_base.py's resolve_blocker tests for the
+    cleared-continues-the-flow half of this behavior)."""
+    monkeypatch.setenv("APPLY_HANDOFF_TIMEOUT", "0")
+    page = chromium_page
+    entry = {"id": "job-1", "company": "Fixture Co"}
+
+    with serve_fixtures() as base_url:
+        _goto(page, base_url, variant="captcha")
+        result = AshbyAdapter().apply(page, entry, package, _PROFILE, _ANSWERS,
+                                       dry_run=False, handoff=True, notify=None)
+
+    assert result.status == "needs_human"
+    assert result.reason == "handoff-timeout: captcha not solved"
+
+
 # --- end-to-end via run_portal_application (registry + dispatch wiring) --------
 
 class _LocalAshbyAdapter(AshbyAdapter):

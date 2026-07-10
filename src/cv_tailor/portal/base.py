@@ -20,6 +20,7 @@ should not).
 from __future__ import annotations
 
 import json
+import os
 import time
 from pathlib import Path
 from typing import Any, NamedTuple
@@ -53,7 +54,8 @@ class PortalAdapter:
 
     def apply(self, page, entry: dict, package: dict, profile: dict,
               answers: dict, *, dry_run: bool, client: Any = None,
-              deployment: str | None = None) -> PortalResult:
+              deployment: str | None = None, handoff: bool = False,
+              notify: Any = None) -> PortalResult:
         raise NotImplementedError
 
 
@@ -106,6 +108,76 @@ def detect_blockers(page) -> str | None:
     except PlaywrightError:
         pass
     return None
+
+
+# --- handoff mode -------------------------------------------------------------
+#
+# Handoff mode: a human sits at a HEADED browser window and does only the
+# CAPTCHA and the final submit click; everything else (filling, upload,
+# screening answers) is still driven by the adapter, exactly like an armed
+# run. These two helpers give the three adapters a single, shared way to
+# (a) wait out a blocker until a human clears it or gives up, and (b) turn
+# that wait into the right PortalResult without duplicating the polling loop
+# three times.
+
+def handoff_timeout_s() -> float:
+    """APPLY_HANDOFF_TIMEOUT seconds, read fresh on every call (never cached
+    at import time, so tests -- and prod config -- can vary it per-run).
+    Governs both the blocker-wait and the submit-wait. Default 600s."""
+    try:
+        return float(os.environ.get("APPLY_HANDOFF_TIMEOUT", "600"))
+    except (TypeError, ValueError):
+        return 600.0
+
+
+def wait_for_blocker_clear(page, timeout_s: float, notify=None) -> bool:
+    """When a blocker is detected in handoff mode: notify the human once
+    (best-effort -- a notify failure never aborts the wait), then poll
+    detect_blockers every 2s until it clears (True) or timeout_s elapses
+    (False). Mirrors the polling shape of Ashby's own
+    _submit_and_await_confirmation loop."""
+    if notify is not None:
+        try:
+            notify("captcha waiting in the browser on the mini")
+        except Exception:  # noqa: BLE001 -- notify is best-effort
+            pass
+
+    deadline = time.monotonic() + timeout_s
+    while True:
+        if detect_blockers(page) is None:
+            return True
+        if time.monotonic() >= deadline:
+            return False
+        try:
+            page.wait_for_timeout(2000)
+        except PlaywrightError:
+            return False
+
+
+def resolve_blocker(page, blocker: str, evidence_dir, *, stage: str,
+                     handoff: bool, notify=None) -> PortalResult | None:
+    """Shared blocker-handling policy for an adapter's own mid-flow
+    detect_blockers check. `stage` is the evidence filename to use on the
+    non-handoff/immediate path -- callers differ here (Ashby captures the
+    raw blocker string, Greenhouse/Lever capture the literal "blocked").
+
+    Non-handoff: identical to every adapter's pre-existing inline behavior --
+    capture evidence at `stage` and return needs_human(blocker) immediately.
+    Handoff: wait_for_blocker_clear up to the handoff timeout. Cleared ->
+    None, meaning "continue the flow unchanged" (the caller keeps going).
+    Timeout -> capture "aborted" evidence and return
+    needs_human("handoff-timeout: captcha not solved") -- never retried,
+    matching every other needs_human degrade in this package."""
+    if not handoff:
+        capture_evidence(page, evidence_dir, stage)
+        return PortalResult(status="needs_human", reason=blocker, evidence_dir=str(evidence_dir))
+
+    if wait_for_blocker_clear(page, handoff_timeout_s(), notify):
+        return None
+
+    capture_evidence(page, evidence_dir, "aborted")
+    return PortalResult(status="needs_human", reason="handoff-timeout: captcha not solved",
+                         evidence_dir=str(evidence_dir))
 
 
 # --- evidence capture --------------------------------------------------------
@@ -218,7 +290,8 @@ def verify_file_attached(page, selector: str) -> bool:
 
 def run_portal_application(entry: dict, package: dict, profile: dict, answers: dict, *,
                             dry_run: bool, timeout_s: int = 120, headless: bool = True,
-                            client: Any = None, deployment: str | None = None) -> PortalResult:
+                            client: Any = None, deployment: str | None = None,
+                            handoff: bool = False, notify: Any = None) -> PortalResult:
     """Own the full Playwright lifecycle for one job's portal application.
 
     Flow: resolve evidence_dir -> resolve URL -> look up the adapter for its
@@ -236,18 +309,32 @@ def run_portal_application(entry: dict, package: dict, profile: dict, answers: d
     questions the deterministic tier can't resolve get an LLM-grounded
     shot before the caller falls back to needs_human.
 
+    `handoff=True` is "a human is watching this browser and will do the
+    CAPTCHA + submit click themselves": it forces a HEADED browser
+    (`headless` is overridden to False, whatever the caller passed) and
+    forwards `handoff`/`notify` to the adapter unchanged, same as
+    `client`/`deployment` above -- the adapter owns all handoff-specific
+    waiting (see cv_tailor.portal.base.wait_for_blocker_clear /
+    resolve_blocker). `notify` is a best-effort `str -> None` callable (e.g.
+    Telegram) the adapter uses to tell the human what it's waiting on.
+
     `timeout_s` is a wall-clock budget for the whole browser interaction,
     not a per-action cap: navigation gets the full budget, but once it
     returns the page's default action timeout shrinks to whatever remains
     (floored at 5s) so a chain of slow adapter actions can't each burn the
-    full budget on their own. A Playwright TimeoutError raised anywhere in
-    navigation or adapter dispatch degrades to needs_human("timeout")
-    rather than the generic "failed" -- it means the page never responded
-    in time, not that the adapter's logic is broken. If the adapter
-    finishes and returns normally despite running past timeout_s, its
-    result stands as-is: the cap only governs blocking waits, not elapsed
-    wall-clock time after the fact.
+    full budget on their own. In handoff mode that remaining budget is
+    extended by APPLY_HANDOFF_TIMEOUT (see handoff_timeout_s) before the
+    floor is applied, so the overall run timeout can never cut off a human
+    still solving a CAPTCHA or about to click submit. A Playwright
+    TimeoutError raised anywhere in navigation or adapter dispatch degrades
+    to needs_human("timeout") rather than the generic "failed" -- it means
+    the page never responded in time, not that the adapter's logic is
+    broken. If the adapter finishes and returns normally despite running
+    past timeout_s, its result stands as-is: the cap only governs blocking
+    waits, not elapsed wall-clock time after the fact.
     """
+    if handoff:
+        headless = False
     evidence_dir = Path(package["package_dir"]) / "portal"
     evidence_dir.mkdir(parents=True, exist_ok=True)
 
@@ -280,8 +367,13 @@ def run_portal_application(entry: dict, package: dict, profile: dict, answers: d
 
                 # Shrink the per-action budget to whatever's left of timeout_s
                 # (floored at 5s) so a chain of adapter actions can't each
-                # burn the full wall-clock budget on their own.
+                # burn the full wall-clock budget on their own. In handoff
+                # mode, extend that remaining budget by the handoff timeout
+                # first -- the human's own CAPTCHA/submit wait must never be
+                # cut off by this shrink.
                 remaining = timeout_s - (time.monotonic() - start)
+                if handoff:
+                    remaining += handoff_timeout_s()
                 page.set_default_timeout(max(remaining, 5) * 1000)
 
                 blocker = detect_blockers(page)
@@ -293,7 +385,8 @@ def run_portal_application(entry: dict, package: dict, profile: dict, answers: d
                 stage = "dispatch"
                 try:
                     result = adapter.apply(page, entry, package, profile, answers, dry_run=dry_run,
-                                            client=client, deployment=deployment)
+                                            client=client, deployment=deployment,
+                                            handoff=handoff, notify=notify)
                 except PlaywrightTimeoutError:
                     stage = "timeout"
                     return PortalResult(status="needs_human", reason="timeout",

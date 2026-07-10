@@ -19,6 +19,7 @@ an answer is mandatory. Greenhouse splits the name into two fields, so
 """
 from __future__ import annotations
 
+import time
 from pathlib import Path
 from typing import Any
 
@@ -31,7 +32,9 @@ from cv_tailor.portal.base import (
     capture_evidence,
     detect_blockers,
     fill_field,
+    handoff_timeout_s,
     register_adapter,
+    resolve_blocker,
     verify_file_attached,
     verify_filled,
 )
@@ -198,7 +201,8 @@ class GreenhouseAdapter(PortalAdapter):
 
     def apply(self, page, entry: dict, package: dict, profile: dict,
               answers: dict, *, dry_run: bool, client: Any = None,
-              deployment: str | None = None) -> PortalResult:
+              deployment: str | None = None, handoff: bool = False,
+              notify: Any = None) -> PortalResult:
         evidence_dir = Path(package["package_dir"]) / "portal"
 
         # Greenhouse's real Job Board is a React app: the "load" event
@@ -223,9 +227,10 @@ class GreenhouseAdapter(PortalAdapter):
         # right after page.goto before dispatching here.
         blocker = detect_blockers(page)
         if blocker:
-            capture_evidence(page, evidence_dir, "blocked")
-            return PortalResult(status="needs_human", reason=blocker,
-                                 evidence_dir=str(evidence_dir))
+            result = resolve_blocker(page, blocker, evidence_dir, stage="blocked",
+                                      handoff=handoff, notify=notify)
+            if result is not None:
+                return result
 
         contact = (profile or {}).get("contact", {}) or {}
         first_name, last_name = _split_name(contact.get("name", ""))
@@ -298,6 +303,8 @@ class GreenhouseAdapter(PortalAdapter):
 
         if dry_run:
             return PortalResult(status="filled", reason="", evidence_dir=str(evidence_dir))
+        if handoff:
+            return self._await_handoff_submission(page, entry, evidence_dir, notify)
         return self._submit(page, evidence_dir)
 
     # --- write helpers ---------------------------------------------------------
@@ -368,6 +375,47 @@ class GreenhouseAdapter(PortalAdapter):
 
         capture_evidence(page, evidence_dir, "submitted")
         return PortalResult(status="submitted", reason="", evidence_dir=str(evidence_dir))
+
+    @staticmethod
+    def _confirmed(page) -> bool:
+        """The same confirmation signal `_submit` waits for post-click
+        (#confirmation-message), exposed as a poll-able check for handoff
+        mode, which never clicks."""
+        try:
+            return page.locator("#confirmation-message").count() > 0
+        except PlaywrightError:
+            return False
+
+    def _await_handoff_submission(self, page, entry: dict, evidence_dir: Path, notify) -> PortalResult:
+        """Handoff mode: never click #submit_app -- the human does that
+        themselves after solving any CAPTCHA. Notify once, then poll the
+        same confirmation signal `_submit` waits for, every 2s up to the
+        handoff timeout. Confirmed -> "submitted" with evidence. Timeout ->
+        needs_human, form left exactly as the human last saw it (never
+        retried, matching `_submit`'s own no-confirmation degrade)."""
+        company = (entry or {}).get("company", "")
+        if notify is not None:
+            try:
+                notify(f"{company} form filled and waiting: solve any captcha and click submit")
+            except Exception:  # noqa: BLE001 -- notify is best-effort
+                pass
+
+        deadline = time.monotonic() + handoff_timeout_s()
+        while True:
+            if self._confirmed(page):
+                capture_evidence(page, evidence_dir, "submitted")
+                return PortalResult(status="submitted", reason="", evidence_dir=str(evidence_dir))
+            if time.monotonic() >= deadline:
+                break
+            try:
+                page.wait_for_timeout(2000)
+            except PlaywrightError:
+                break
+
+        capture_evidence(page, evidence_dir, "handoff-timeout")
+        return PortalResult(status="needs_human",
+                             reason="handoff-timeout: not submitted, form left as-is",
+                             evidence_dir=str(evidence_dir))
 
 
 register_adapter(GreenhouseAdapter())

@@ -55,6 +55,7 @@ from cv_tailor.cache import (
     applications_sent_today,
     connect,
     delete_application,
+    own_application_recorded,
     record_application,
 )
 from cv_tailor.portal import run_portal_application
@@ -138,16 +139,33 @@ def _finish_portal_dry_run(args, result) -> int:
 def _handle_portal(args, entry: dict, meta: dict) -> int:
     """Portal apply path (replaces the Phase A stub that parked every portal
     job at `ready` unattempted): unarmed runs a fill-only dry-run for a
-    Teodor-reviewable preview; armed gates on the applications ledger
-    (channel "portal", the same daily-cap/duplicate policy as email) and
-    then actually drives the browser submit.
+    Teodor-reviewable preview; armed (or --handoff, see below) gates on the
+    applications ledger (channel "portal", the same daily-cap/duplicate
+    policy as email) and then actually drives the browser submit.
 
     A needs_human outcome always KEEPS whatever ledger row was recorded --
     run_portal_application's own no-confirmation semantics mean the
     submission may have gone through server-side even with no client-side
     confirmation signal, so deleting the row here could let the same job get
     re-submitted later. Only a definite `failed` (never got close to a real
-    submit) rolls the row back, mirroring sender.py's SMTP-exception rollback.
+    submit) rolls back a row THIS run inserted, mirroring sender.py's
+    SMTP-exception rollback.
+
+    --handoff (args.handoff) is a headed, human-assisted completion of a
+    portal application: it runs the ledger-gated submit path REGARDLESS of
+    APPLY_ARMED (a human is watching the browser and doing the CAPTCHA +
+    submit click themselves, so the armed gate that exists to stop
+    *autonomous* submission doesn't apply). Handoff's allowed start statuses
+    (see main()) include needs_human/ready, i.e. it is normally COMPLETING a
+    prior attempt -- own_application_recorded(job_id) is true when that
+    prior attempt already recorded this exact job's ledger row (e.g. an
+    earlier armed run that hit needs_human and kept it). In that case this
+    run proceeds straight to the browser without another INSERT
+    (own_row_skip below): we already own this application, so there is
+    nothing to race and nothing to duplicate-block. A pre-existing row for a
+    DIFFERENT job_id sharing the same company|role norm_key is still a
+    genuine duplicate and blocks exactly as it always has (own_row_skip is
+    only true for THIS job_id).
     """
     profile_path = Path(os.environ.get("CV_TAILOR_PROFILE", ROOT / "profile.yaml"))
     profile = load_profile(profile_path, strict=True)
@@ -155,8 +173,9 @@ def _handle_portal(args, entry: dict, meta: dict) -> int:
     client = build_azure_client()
 
     armed = os.environ.get("APPLY_ARMED", "0") == "1"
+    handoff = bool(getattr(args, "handoff", False))
 
-    if not armed:
+    if not armed and not handoff:
         result = run_portal_application(entry, meta, profile, answers, dry_run=True, client=client)
         return _finish_portal_dry_run(args, result)
 
@@ -165,32 +184,41 @@ def _handle_portal(args, entry: dict, meta: dict) -> int:
     company = entry.get("company", "")
     role = entry.get("title", "")
 
-    if application_exists(conn, job_id=job_id, company=company, role=role):
-        update_entry(args.scan_date, args.job_id, lambda e: e.update(status="failed", error="duplicate"))
-        print("portal blocked: duplicate", file=sys.stderr)
-        return 1
+    own_row_skip = handoff and own_application_recorded(conn, job_id)
 
-    cap = int(os.environ.get("APPLY_DAILY_CAP", "10"))
-    if applications_sent_today(conn) >= cap:
-        update_entry(args.scan_date, args.job_id, lambda e: e.update(status="failed", error="daily-cap"))
-        print("portal blocked: daily-cap", file=sys.stderr)
-        return 1
+    if own_row_skip:
+        entry = update_entry(args.scan_date, args.job_id, lambda e: e.update(status="sending"))
+    else:
+        if application_exists(conn, job_id=job_id, company=company, role=role):
+            update_entry(args.scan_date, args.job_id, lambda e: e.update(status="failed", error="duplicate"))
+            print("portal blocked: duplicate", file=sys.stderr)
+            return 1
 
-    entry = update_entry(args.scan_date, args.job_id, lambda e: e.update(status="sending"))
+        cap = int(os.environ.get("APPLY_DAILY_CAP", "10"))
+        if applications_sent_today(conn) >= cap:
+            update_entry(args.scan_date, args.job_id, lambda e: e.update(status="failed", error="daily-cap"))
+            print("portal blocked: daily-cap", file=sys.stderr)
+            return 1
 
-    # Record BEFORE the browser submit attempt -- the same record-then-submit
-    # ordering as sender.py's SMTP path. The INSERT (not the pre-check above)
-    # is what arbitrates two concurrent portal submits racing this job_id.
-    recorded = record_application(
-        conn, job_id=job_id, company=company, role=role,
-        url=entry.get("url", ""), channel="portal",
+        entry = update_entry(args.scan_date, args.job_id, lambda e: e.update(status="sending"))
+
+        # Record BEFORE the browser submit attempt -- the same
+        # record-then-submit ordering as sender.py's SMTP path. The INSERT
+        # (not the pre-check above) is what arbitrates two concurrent
+        # portal submits racing this job_id.
+        recorded = record_application(
+            conn, job_id=job_id, company=company, role=role,
+            url=entry.get("url", ""), channel="portal",
+        )
+        if not recorded:
+            update_entry(args.scan_date, args.job_id, lambda e: e.update(status="failed", error="duplicate"))
+            print("portal blocked: duplicate (race)", file=sys.stderr)
+            return 1
+
+    result = run_portal_application(
+        entry, meta, profile, answers, dry_run=False, client=client,
+        handoff=handoff, notify=send_text if handoff else None,
     )
-    if not recorded:
-        update_entry(args.scan_date, args.job_id, lambda e: e.update(status="failed", error="duplicate"))
-        print("portal blocked: duplicate (race)", file=sys.stderr)
-        return 1
-
-    result = run_portal_application(entry, meta, profile, answers, dry_run=False, client=client)
 
     if result.status == "submitted":
         now = datetime.now(timezone.utc).isoformat()
@@ -220,7 +248,12 @@ def _handle_portal(args, entry: dict, meta: dict) -> int:
 
     # failed: the attempt never got close enough to a real submission for the
     # ledger row to mean anything -- roll it back so the job can be retried.
-    delete_application(conn, job_id=job_id)
+    # Only roll back a row THIS run inserted: an own_row_skip completion run
+    # never inserted anything, and the pre-existing row from the earlier
+    # attempt it was completing may still represent a real (ambiguous)
+    # submission -- deleting it here would risk a later genuine duplicate.
+    if not own_row_skip:
+        delete_application(conn, job_id=job_id)
     entry = update_entry(
         args.scan_date, args.job_id,
         lambda e: e.update(status="failed", error=result.reason, evidence_dir=result.evidence_dir),
@@ -240,17 +273,29 @@ def main(argv=None) -> int:
     ap.add_argument("job_id", help="the queue entry id")
     ap.add_argument("--force", action="store_true",
                      help="start from needs_review and send anyway, skipping the warnings stop")
+    ap.add_argument("--handoff", action="store_true",
+                     help="headed browser fill; human solves any captcha and clicks submit; "
+                          "runs regardless of APPLY_ARMED (portal jobs only)")
     args = ap.parse_args(argv)
 
     entry = _load_entry(args.scan_date, args.job_id)
 
-    allowed_start = {"needs_review"} if args.force else {"approved"}
+    # --handoff can COMPLETE a prior attempt (needs_human/ready), not just
+    # start a fresh one (approved) -- see _handle_portal's own_row_skip for
+    # how a pre-existing ledger row from that prior attempt is handled.
+    if args.handoff:
+        allowed_start = {"needs_human", "ready", "approved"}
+    elif args.force:
+        allowed_start = {"needs_review"}
+    else:
+        allowed_start = {"approved"}
+
     start_status = entry.get("status")
     if start_status not in allowed_start:
+        flags = " ".join(f for f, on in (("--force", args.force), ("--handoff", args.handoff)) if on)
         print(
             f"job {args.job_id} has status {start_status!r}, expected one of "
-            f"{sorted(allowed_start)!r} ({'with' if args.force else 'without'} --force). "
-            f"Not touched.",
+            f"{sorted(allowed_start)!r}{f' ({flags})' if flags else ''}. Not touched.",
             file=sys.stderr,
         )
         return 2
@@ -260,7 +305,9 @@ def main(argv=None) -> int:
     # both pass it before either has written anything. expect_status
     # re-checks the status INSIDE the flock right before the write, so only
     # one spawn wins; the loser gets StatusConflict with the entry untouched.
-    expect_status = "needs_review" if args.force else "approved"
+    # It's simply whatever start_status we just validated above (a single
+    # value even though --handoff's allowed_start is a 3-way set).
+    expect_status = start_status
     try:
         update_entry(
             args.scan_date, args.job_id, lambda e: e.update(status="assembling"),

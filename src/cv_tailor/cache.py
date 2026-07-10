@@ -125,6 +125,21 @@ def delete_application(conn: sqlite3.Connection, *, job_id: str) -> None:
     conn.commit()
 
 
+def own_application_recorded(conn: sqlite3.Connection, job_id: str) -> bool:
+    """True iff a ledger row already exists for THIS exact job_id.
+
+    Distinguishes "we already own an application for this job" (a prior
+    armed attempt landed at needs_human and kept its row, or a --handoff
+    completion run is being retried) from application_exists's broader
+    "some job -- possibly a different one -- already claimed this
+    company|role norm_key". Used by the armed/handoff record step: an own
+    row means proceed straight to the browser without another INSERT
+    (we're completing our own prior attempt, not racing a duplicate)."""
+    return conn.execute(
+        "SELECT 1 FROM applications WHERE job_id=?", (job_id,)
+    ).fetchone() is not None
+
+
 def application_exists(conn: sqlite3.Connection, *, job_id: str, company: str, role: str) -> bool:
     if conn.execute("SELECT 1 FROM applications WHERE job_id=?", (job_id,)).fetchone():
         return True

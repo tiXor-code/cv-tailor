@@ -32,8 +32,10 @@ from cv_tailor.portal.base import (
     detect_blockers,
     fill_field,
     register_adapter,
+    resolve_blocker,
     verify_file_attached,
     verify_filled,
+    wait_for_blocker_clear,
 )
 from serve import serve_fixtures
 
@@ -81,6 +83,29 @@ class FakePage:
         return self._form_state
 
 
+class WaitablePage(FakePage):
+    """FakePage + a no-op wait_for_timeout, and (optionally) a selector whose
+    match count clears itself after `clear_after` wait_for_timeout calls --
+    for handoff polling tests that need zero real wall-clock waiting.
+    `blocked_selector=None` (the default) just means "whatever locator_counts
+    says", i.e. FakePage's ordinary behavior."""
+
+    def __init__(self, *, blocked_selector=None, clear_after=None, **kwargs):
+        super().__init__(**kwargs)
+        self._blocked_selector = blocked_selector
+        self._clear_after = clear_after
+        self.wait_calls = 0
+
+    def locator(self, selector):
+        if self._blocked_selector is not None and selector == self._blocked_selector:
+            blocked = self._clear_after is None or self.wait_calls < self._clear_after
+            return FakeLocator(count=1 if blocked else 0)
+        return super().locator(selector)
+
+    def wait_for_timeout(self, ms):
+        self.wait_calls += 1
+
+
 class FakeFillLocator:
     def __init__(self, count=1, raise_error=False):
         self._count = count
@@ -116,7 +141,8 @@ class DummyAdapter(PortalAdapter):
     hosts = ("127.0.0.1",)
     name = "dummy"
 
-    def apply(self, page, entry, package, profile, answers, *, dry_run, client=None, deployment=None):
+    def apply(self, page, entry, package, profile, answers, *, dry_run, client=None, deployment=None,
+              handoff=False, notify=None):
         fill_field(page, "#full_name", profile.get("contact", {}).get("name", ""))
         evidence_dir = Path(package["package_dir"]) / "portal"
         return PortalResult(status="filled", reason="", evidence_dir=str(evidence_dir))
@@ -130,7 +156,8 @@ class RaisingAdapter(PortalAdapter):
     hosts = ("127.0.0.1",)
     name = "raising"
 
-    def apply(self, page, entry, package, profile, answers, *, dry_run, client=None, deployment=None):
+    def apply(self, page, entry, package, profile, answers, *, dry_run, client=None, deployment=None,
+              handoff=False, notify=None):
         raise RuntimeError("adapter exploded")
 
 
@@ -143,7 +170,8 @@ class TimeoutRaisingAdapter(PortalAdapter):
     hosts = ("127.0.0.1",)
     name = "timeout-raising"
 
-    def apply(self, page, entry, package, profile, answers, *, dry_run, client=None, deployment=None):
+    def apply(self, page, entry, package, profile, answers, *, dry_run, client=None, deployment=None,
+              handoff=False, notify=None):
         raise PlaywrightTimeoutError("Timeout 5000ms exceeded waiting for selector")
 
 
@@ -255,6 +283,72 @@ def test_detect_blockers_swallows_locator_errors_and_keeps_checking():
     )
 
     assert detect_blockers(page) == "login-required"
+
+
+# --- handoff: wait_for_blocker_clear / resolve_blocker -----------------------
+
+def test_wait_for_blocker_clear_returns_true_after_n_polls():
+    page = WaitablePage(blocked_selector=portal_base._CAPTCHA_SELECTORS[0], clear_after=2)
+    notified = []
+
+    result = wait_for_blocker_clear(page, timeout_s=5, notify=notified.append)
+
+    assert result is True
+    assert page.wait_calls == 2
+    assert notified == ["captcha waiting in the browser on the mini"]
+
+
+def test_wait_for_blocker_clear_returns_false_on_timeout():
+    page = WaitablePage(blocked_selector=portal_base._CAPTCHA_SELECTORS[0], clear_after=None)
+
+    result = wait_for_blocker_clear(page, timeout_s=0, notify=None)
+
+    assert result is False
+
+
+def test_wait_for_blocker_clear_notify_failure_is_swallowed():
+    page = WaitablePage(blocked_selector=portal_base._CAPTCHA_SELECTORS[0], clear_after=1)
+
+    def boom(_msg):
+        raise RuntimeError("telegram down")
+
+    result = wait_for_blocker_clear(page, timeout_s=5, notify=boom)  # must not raise
+
+    assert result is True
+
+
+def test_resolve_blocker_handoff_cleared_returns_none_to_continue_flow():
+    page = WaitablePage()  # no blocker selector configured -> already clear
+
+    result = resolve_blocker(page, "captcha", "unused-evidence-dir", stage="captcha",
+                              handoff=True, notify=None)
+
+    assert result is None
+
+
+def test_resolve_blocker_handoff_timeout_returns_needs_human(monkeypatch, tmp_path):
+    monkeypatch.setenv("APPLY_HANDOFF_TIMEOUT", "0")
+    page = WaitablePage(blocked_selector=portal_base._CAPTCHA_SELECTORS[0], clear_after=None)
+    evidence_dir = tmp_path / "portal"
+
+    result = resolve_blocker(page, "captcha", evidence_dir, stage="captcha",
+                              handoff=True, notify=None)
+
+    assert result.status == "needs_human"
+    assert result.reason == "handoff-timeout: captcha not solved"
+    assert (evidence_dir / "aborted.png").exists()
+
+
+def test_resolve_blocker_non_handoff_returns_immediate_needs_human(tmp_path):
+    page = FakePage()
+    evidence_dir = tmp_path / "portal"
+
+    result = resolve_blocker(page, "login-required", evidence_dir, stage="login-required",
+                              handoff=False, notify=None)
+
+    assert result.status == "needs_human"
+    assert result.reason == "login-required"
+    assert (evidence_dir / "login-required.png").exists()
 
 
 # --- capture_evidence --------------------------------------------------------
@@ -547,7 +641,8 @@ class ClientCapturingAdapter(PortalAdapter):
         self.seen_client = "unset"
         self.seen_deployment = "unset"
 
-    def apply(self, page, entry, package, profile, answers, *, dry_run, client=None, deployment=None):
+    def apply(self, page, entry, package, profile, answers, *, dry_run, client=None, deployment=None,
+              handoff=False, notify=None):
         self.seen_client = client
         self.seen_deployment = deployment
         evidence_dir = Path(package["package_dir"]) / "portal"

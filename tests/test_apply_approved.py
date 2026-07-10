@@ -60,6 +60,13 @@ def mod(monkeypatch, tmp_path):
     monkeypatch.setenv("SCOUT_QUEUE_DIR", str(tmp_path))
     monkeypatch.setenv("CV_TAILOR_PROFILE", str(ROOT / "tests" / "fixtures" / "profile_minimal.yaml"))
     monkeypatch.setenv("SCOUT_DB_PATH", str(tmp_path / "jobs.db"))
+    # Deterministic default regardless of this machine's real repo .env --
+    # _load_dotenv's os.environ.setdefault(...) would otherwise pick up
+    # whatever APPLY_ARMED the real .env holds the first time a test runs
+    # without setting it explicitly, and (being a raw os.environ write, not
+    # a monkeypatch one) that leaks into every later test in the session.
+    # Tests that need armed=1 override this explicitly after the fixture runs.
+    monkeypatch.setenv("APPLY_ARMED", "0")
     return _load_module()
 
 
@@ -83,18 +90,20 @@ def _spy_update_entry(mod, monkeypatch):
 
 class _FakeRunPortal:
     """Queued-reply stand-in for cv_tailor.portal.run_portal_application.
-    Records every call's kwargs (profile/answers/client/deployment/dry_run)
-    so tests can assert the orchestrator threaded them through correctly,
-    not just that it reacted to the returned status."""
+    Records every call's kwargs (profile/answers/client/deployment/dry_run/
+    handoff/notify) so tests can assert the orchestrator threaded them
+    through correctly, not just that it reacted to the returned status."""
 
     def __init__(self, results):
         self._results = list(results)
         self.calls = []
 
-    def __call__(self, entry, package, profile, answers, *, dry_run, client=None, deployment=None):
+    def __call__(self, entry, package, profile, answers, *, dry_run, client=None, deployment=None,
+                 handoff=False, notify=None):
         self.calls.append({
             "entry": entry, "package": package, "profile": profile, "answers": answers,
             "dry_run": dry_run, "client": client, "deployment": deployment,
+            "handoff": handoff, "notify": notify,
         })
         return self._results.pop(0)
 
@@ -248,9 +257,9 @@ def test_force_from_needs_review_skips_warnings_stop_and_sends(mod, monkeypatch,
     assert entry["status"] == "sent"
 
 
-def _portal_queue(tmp_path):
+def _portal_queue(tmp_path, **overrides):
     _write_queue(tmp_path, "2026-07-10", _entry(
-        apply_method="portal", apply_target="https://acme.example/jobs/1"))
+        apply_method="portal", apply_target="https://acme.example/jobs/1", **overrides))
 
 
 def _stub_portal_prereqs(mod, monkeypatch, *, answers=None, client=None):
@@ -540,6 +549,146 @@ def test_portal_armed_daily_cap_blocks_before_browser_attempt(mod, monkeypatch, 
     entry = _read_entry(tmp_path, "2026-07-10", "job-1")
     assert entry["status"] == "failed"
     assert entry["error"] == "daily-cap"
+
+
+# --- --handoff: human-assisted completion, runs regardless of APPLY_ARMED ----
+
+def test_handoff_from_needs_human_with_own_ledger_row_proceeds_and_sends(mod, monkeypatch, tmp_path):
+    """A prior armed attempt hit needs_human and kept its ledger row for
+    THIS job_id. --handoff resumes it: own_application_recorded is true, so
+    the record step must proceed straight to the browser without another
+    INSERT (own_row_skip) -- record_application must never even be called."""
+    from cv_tailor.cache import connect, record_application
+    from cv_tailor.portal import PortalResult
+
+    _portal_queue(tmp_path, status="needs_human")
+    trail = _spy_update_entry(mod, monkeypatch)
+    evidence_dir = str(tmp_path / "pkg" / "portal")
+
+    conn = connect(tmp_path / "jobs.db")
+    record_application(conn, job_id="job-1", company="Acme Inc.", role="AI Engineer",
+                        url="https://acme.example/jobs/1", channel="portal")
+
+    monkeypatch.setattr(mod, "assemble_package", _fake_assemble(package_dir=tmp_path / "pkg"))
+    _stub_portal_prereqs(mod, monkeypatch)
+    fake_run = _FakeRunPortal([PortalResult(status="submitted", reason="", evidence_dir=evidence_dir)])
+    monkeypatch.setattr(mod, "run_portal_application", fake_run)
+    monkeypatch.setattr(
+        mod, "record_application",
+        lambda *a, **kw: pytest.fail("own-row completion must not attempt a fresh insert"),
+    )
+    crm_calls = []
+    monkeypatch.setattr(mod, "crm_mark_applied", lambda *a, **kw: crm_calls.append(a) or True)
+    texts = []
+    monkeypatch.setattr(mod, "send_text", lambda *a, **kw: texts.append(a) or True)
+
+    rc = mod.main(["2026-07-10", "job-1", "--handoff"])
+
+    assert rc == 0
+    assert trail == ["assembling", "sending", "sent"]
+    entry = _read_entry(tmp_path, "2026-07-10", "job-1")
+    assert entry["status"] == "sent"
+    assert entry["evidence_dir"] == evidence_dir
+    assert crm_calls == [("Acme Inc.", "AI Engineer", "https://acme.example/jobs/1")]
+    call = fake_run.calls[0]
+    assert call["dry_run"] is False
+    assert call["handoff"] is True
+    assert call["notify"] is mod.send_text
+
+    # still exactly one ledger row for job-1 -- no duplicate insert happened
+    count = conn.execute("SELECT COUNT(*) FROM applications WHERE job_id='job-1'").fetchone()[0]
+    assert count == 1
+
+
+def test_handoff_different_jobs_same_company_role_row_blocks_duplicate(mod, monkeypatch, tmp_path):
+    """own_application_recorded is false for job-1 (the existing row belongs
+    to a DIFFERENT job_id) -- a same-company|role collision from another job
+    must still block as a genuine duplicate, exactly like the non-handoff
+    armed path."""
+    from cv_tailor.cache import connect, record_application
+
+    _portal_queue(tmp_path, status="needs_human")
+    trail = _spy_update_entry(mod, monkeypatch)
+
+    conn = connect(tmp_path / "jobs.db")
+    record_application(conn, job_id="some-other-job-id", company="Acme Inc.", role="AI Engineer",
+                        url="https://acme.example/jobs/999", channel="portal")
+
+    monkeypatch.setattr(mod, "assemble_package", _fake_assemble(package_dir=tmp_path / "pkg"))
+    _stub_portal_prereqs(mod, monkeypatch)
+    monkeypatch.setattr(
+        mod, "run_portal_application",
+        lambda *a, **kw: pytest.fail("must not attempt the browser on a duplicate"),
+    )
+    monkeypatch.setattr(mod, "send_text", lambda *a, **kw: True)
+
+    rc = mod.main(["2026-07-10", "job-1", "--handoff"])
+
+    assert rc == 1
+    assert trail == ["assembling", "failed"]
+    entry = _read_entry(tmp_path, "2026-07-10", "job-1")
+    assert entry["status"] == "failed"
+    assert entry["error"] == "duplicate"
+
+
+def test_handoff_timeout_result_marks_needs_human(mod, monkeypatch, tmp_path):
+    """A fresh --handoff run (starting from `ready`, no prior ledger row)
+    that times out waiting for the human to submit lands at needs_human with
+    the adapter's handoff-timeout reason, same as any other needs_human."""
+    from cv_tailor.portal import PortalResult
+
+    _portal_queue(tmp_path, status="ready")
+    trail = _spy_update_entry(mod, monkeypatch)
+    evidence_dir = str(tmp_path / "pkg" / "portal")
+
+    monkeypatch.setattr(mod, "assemble_package", _fake_assemble(package_dir=tmp_path / "pkg"))
+    _stub_portal_prereqs(mod, monkeypatch)
+    monkeypatch.setattr(
+        mod, "run_portal_application",
+        _FakeRunPortal([PortalResult(
+            status="needs_human",
+            reason="handoff-timeout: not submitted, form left as-is",
+            evidence_dir=evidence_dir,
+        )]),
+    )
+    monkeypatch.setattr(mod, "crm_mark_applied", lambda *a, **kw: pytest.fail("must not be called"))
+    texts = []
+    monkeypatch.setattr(mod, "send_text", lambda *a, **kw: texts.append(a) or True)
+
+    rc = mod.main(["2026-07-10", "job-1", "--handoff"])
+
+    assert rc == 0
+    assert trail == ["assembling", "sending", "needs_human"]
+    entry = _read_entry(tmp_path, "2026-07-10", "job-1")
+    assert entry["status"] == "needs_human"
+    assert entry["error"] == "handoff-timeout: not submitted, form left as-is"
+    assert entry["evidence_dir"] == evidence_dir
+    assert len(texts) == 1
+
+
+def test_handoff_runs_regardless_of_apply_armed(mod, monkeypatch, tmp_path):
+    """--handoff is human-authorized submission: it must reach the
+    ledger-gated submit path even with APPLY_ARMED unset/0."""
+    from cv_tailor.portal import PortalResult
+
+    monkeypatch.setenv("APPLY_ARMED", "0")
+    _portal_queue(tmp_path, status="ready")
+    _spy_update_entry(mod, monkeypatch)
+    evidence_dir = str(tmp_path / "pkg" / "portal")
+
+    monkeypatch.setattr(mod, "assemble_package", _fake_assemble(package_dir=tmp_path / "pkg"))
+    _stub_portal_prereqs(mod, monkeypatch)
+    fake_run = _FakeRunPortal([PortalResult(status="submitted", reason="", evidence_dir=evidence_dir)])
+    monkeypatch.setattr(mod, "run_portal_application", fake_run)
+    monkeypatch.setattr(mod, "crm_mark_applied", lambda *a, **kw: True)
+    monkeypatch.setattr(mod, "send_text", lambda *a, **kw: True)
+
+    rc = mod.main(["2026-07-10", "job-1", "--handoff"])
+
+    assert rc == 0
+    assert fake_run.calls[0]["dry_run"] is False  # never the unarmed dry-run branch
+    entry = _read_entry(tmp_path, "2026-07-10", "job-1")
+    assert entry["status"] == "sent"
 
 
 def test_portal_setup_raises_marks_failed_not_wedged_in_assembling(mod, monkeypatch, tmp_path):
