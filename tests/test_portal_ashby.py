@@ -358,6 +358,43 @@ def test_apply_armed_no_confirmation_within_timeout_returns_needs_human(chromium
     assert (evidence_dir / "no-confirmation.png").exists()
 
 
+def test_apply_armed_form_id_mismatch_never_false_reports_submitted(chromium_page, package, monkeypatch):
+    """Phase C fix: signal 3 (form-vanish) assumed #application-form is the
+    real Ashby id, never verified against a live posting. If the real id
+    differs, that locator already reads 0 elements BEFORE any click -- the
+    old code would misread "never matched to begin with" as "form vanished
+    because the submit succeeded" and false-report every armed submit on
+    such a posting as submitted. Pre-click presence must gate the signal."""
+    monkeypatch.setattr(ashby, "CONFIRMATION_TIMEOUT_MS", 500)
+    page = chromium_page
+    entry = {"id": "job-1"}
+
+    with serve_fixtures() as base_url:
+        _goto(page, base_url, variant="formidmismatch")
+        result = AshbyAdapter().apply(page, entry, package, _PROFILE, _ANSWERS, dry_run=False)
+
+    assert result.status == "needs_human"
+    assert result.reason == (
+        "no-confirmation: submission may have succeeded, VERIFY on the portal "
+        "before applying manually"
+    )
+
+
+def test_apply_armed_normal_fixture_still_returns_submitted(chromium_page, package):
+    """Regression guard for the Phase C fix above: the normal fixture's form
+    DOES carry #application-form, so it must remain present pre-click and
+    the ordinary armed-submit happy path must be unaffected."""
+    page = chromium_page
+    entry = {"id": "job-1"}
+
+    with serve_fixtures() as base_url:
+        _goto(page, base_url)
+        result = AshbyAdapter().apply(page, entry, package, _PROFILE, _ANSWERS, dry_run=False)
+
+    assert result.status == "submitted"
+    assert result.reason == ""
+
+
 # --- end-to-end via run_portal_application (registry + dispatch wiring) --------
 
 class _LocalAshbyAdapter(AshbyAdapter):

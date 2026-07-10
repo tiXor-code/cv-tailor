@@ -317,7 +317,108 @@ def test_apply_armed_no_confirmation_within_timeout_returns_needs_human(chromium
         result = adapter.apply(page, entry, package, _PROFILE, _ANSWERS, dry_run=False)
 
     assert result.status == "needs_human"
-    assert result.reason == "no-confirmation"
+    assert result.reason == (
+        "no-confirmation: submission may have succeeded, VERIFY on the portal "
+        "before applying manually"
+    )
+
+
+# --- post-click submit errors (Phase C fix: ledger-row safety) -------------------
+#
+# A fake, duck-typed page (not real Playwright) isolates _submit_and_await_confirmation
+# from the rest of apply()'s DOM interactions -- the same style as
+# tests/test_portal_base.py's FakePage/FakeLocator stand-ins.
+
+class _FakeSubmitLocator:
+    def __init__(self):
+        self.clicked = False
+
+    @property
+    def first(self):
+        return self
+
+    def click(self):
+        self.clicked = True
+
+
+class _FakeSubmitPage:
+    def __init__(self, *, wait_error=None):
+        self.locator_obj = _FakeSubmitLocator()
+        self._wait_error = wait_error
+
+    def locator(self, selector):
+        return self.locator_obj
+
+    def wait_for_selector(self, selector, timeout=None):
+        if self._wait_error is not None:
+            raise self._wait_error
+
+
+def test_submit_post_click_non_timeout_playwright_error_returns_needs_human_not_failed(tmp_path):
+    """Finding: the post-click wait used to catch ONLY PlaywrightTimeoutError,
+    so a non-timeout PlaywrightError (page closed, navigation interrupted)
+    escaped uncaught -> run_portal_application would report "failed" ->
+    the orchestrator deletes the ledger row for a submission that may have
+    already gone through. Must degrade to needs_human like a timeout does,
+    keeping the row."""
+    from playwright.sync_api import Error as PlaywrightError
+
+    adapter = LeverAdapter()
+    page = _FakeSubmitPage(wait_error=PlaywrightError("Target page, context or browser has been closed"))
+    evidence_dir = tmp_path / "portal"
+
+    result = adapter._submit_and_await_confirmation(page, evidence_dir)
+
+    assert result.status == "needs_human"
+    assert result.reason == (
+        "no-confirmation: submission may have succeeded, VERIFY on the portal "
+        "before applying manually"
+    )
+    assert page.locator_obj.clicked is True
+
+
+def test_submit_post_click_timeout_still_returns_needs_human_same_reason(tmp_path):
+    """Regression guard: a plain confirmation timeout (the original,
+    already-handled case) must keep returning needs_human with the same
+    standardized reason after the except clause was broadened."""
+    from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
+
+    adapter = LeverAdapter()
+    page = _FakeSubmitPage(wait_error=PlaywrightTimeoutError("Timeout 30000ms exceeded"))
+    evidence_dir = tmp_path / "portal"
+
+    result = adapter._submit_and_await_confirmation(page, evidence_dir)
+
+    assert result.status == "needs_human"
+    assert result.reason == (
+        "no-confirmation: submission may have succeeded, VERIFY on the portal "
+        "before applying manually"
+    )
+
+
+def test_submit_pre_click_error_still_returns_failed(tmp_path):
+    """Regression guard: a PRE-click error (submit control missing/unclickable)
+    is a genuine failure -- the click never happened, so nothing was
+    submitted, and "failed" (ledger rollback) stays correct."""
+    from playwright.sync_api import Error as PlaywrightError
+
+    class _RaisingClickLocator:
+        @property
+        def first(self):
+            return self
+
+        def click(self):
+            raise PlaywrightError("element not found")
+
+    class _RaisingClickPage:
+        def locator(self, selector):
+            return _RaisingClickLocator()
+
+    adapter = LeverAdapter()
+    result = adapter._submit_and_await_confirmation(_RaisingClickPage(), tmp_path / "portal")
+
+    assert result.status == "failed"
+    assert result.reason.startswith("submit-click:")
 
 
 # --- end-to-end via run_portal_application (registry + dispatch wiring) ----------

@@ -66,6 +66,15 @@
     success panel with text that does NOT contain "submitted"/"thank you"
     appears (no error banner) -- exercises the broadened confirmation
     detection (form-disappeared-without-error signal).
+  - ?variant=formidmismatch -- the form element's id is renamed away from
+    "application-form" (the adapter's id, copied from one real posting and
+    never verified against every board config) right after the script
+    captures its own reference to it, so the adapter's own #application-form
+    locator already matches 0 elements BEFORE any click. Submit does nothing
+    else (no confirmation text, no removal, no navigation) -- exercises the
+    pre-click-presence gate on the form-vanish confirmation signal (Phase C
+    fix): a genuine id mismatch must degrade to needs_human, not a false
+    "submitted".
 -->
 <nav role="tablist">
   <a id="job-overview" role="tab" aria-selected="true" href="#overview">Overview</a>
@@ -147,6 +156,16 @@
 (function () {
   var params = new URLSearchParams(window.location.search);
   var variant = params.get("variant");
+  var appForm = document.getElementById("application-form");
+
+  if (variant === "formidmismatch") {
+    // Simulate a real posting whose form doesn't actually carry the id the
+    // adapter assumes: rename AFTER capturing this script's own reference
+    // (so the fixture's own submit wiring below still works), so the
+    // adapter's own #application-form locator matches 0 elements from the
+    // very first read, before any click ever happens.
+    appForm.id = "app-container-real";
+  }
 
   if (variant === "unanswerable") {
     document.getElementById("q_required_text_label").textContent =
@@ -248,20 +267,27 @@
     // Success is signalled by the form vanishing and a panel whose text does
     // NOT match the "submitted"/"thank you" phrases -- and with no error
     // banner. The broadened confirmation detector must read this as success.
-    document.getElementById("application-form").addEventListener("submit", function (ev) {
+    appForm.addEventListener("submit", function (ev) {
       ev.preventDefault();
       var formPanelEl = document.getElementById("form");
-      var appForm = document.getElementById("application-form");
       appForm.parentNode.removeChild(appForm);
       var done = document.createElement("div");
       done.id = "alt-confirmation";
       done.textContent = "All set on our end.";
       formPanelEl.appendChild(done);
     });
-  } else if (variant !== "nosubmit") {
-    document.getElementById("application-form").addEventListener("submit", function (ev) {
+  } else if (variant === "formidmismatch") {
+    // Submit does nothing observable at all: no confirmation phrase, no
+    // removal, no navigation -- the ONLY way this run can ever resolve is
+    // signal 3 (form-vanish), which must stay disabled because the form was
+    // never found present under the adapter's assumed id to begin with.
+    appForm.addEventListener("submit", function (ev) {
       ev.preventDefault();
-      document.getElementById("application-form").style.display = "none";
+    });
+  } else if (variant !== "nosubmit") {
+    appForm.addEventListener("submit", function (ev) {
+      ev.preventDefault();
+      appForm.style.display = "none";
       document.getElementById("confirmation").style.display = "block";
     });
   }

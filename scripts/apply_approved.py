@@ -282,7 +282,22 @@ def main(argv=None) -> int:
     apply_method = entry.get("apply_method")
 
     if apply_method == "portal":
-        return _handle_portal(args, entry, meta)
+        try:
+            return _handle_portal(args, entry, meta)
+        except Exception as exc:  # noqa: BLE001 -- portal setup (load_profile
+            # strict=True, load_answers, build_azure_client) or any other
+            # unexpected exception in the dispatch must land in the queue as
+            # `failed`, mirroring the assemble/send guards above. Without this
+            # the job wedges at `assembling` forever: no error recorded, no
+            # Telegram note, and the detached process just dies silently.
+            error = f"{type(exc).__name__}: {exc}"
+            update_entry(args.scan_date, args.job_id, lambda e: e.update(status="failed", error=error))
+            print(f"portal handling failed: {error}", file=sys.stderr)
+            try:
+                send_text(f"{entry.get('company')} / {entry.get('title')}: portal handling failed ({error})")
+            except Exception:  # noqa: BLE001 -- Telegram delivery is best-effort here
+                pass
+            return 1
 
     # email
     entry = update_entry(args.scan_date, args.job_id, lambda e: e.update(status="sending"))

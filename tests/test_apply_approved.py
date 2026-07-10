@@ -542,6 +542,65 @@ def test_portal_armed_daily_cap_blocks_before_browser_attempt(mod, monkeypatch, 
     assert entry["error"] == "daily-cap"
 
 
+def test_portal_setup_raises_marks_failed_not_wedged_in_assembling(mod, monkeypatch, tmp_path):
+    """Phase C fix: build_azure_client()/load_profile(strict=True)/
+    load_answers() raising (missing env, malformed profile/answers) must
+    not wedge the job at 'assembling' forever -- it must land as 'failed'
+    with the error recorded, and a best-effort Telegram note must be
+    attempted, mirroring the assemble/send exception guards."""
+    _portal_queue(tmp_path)
+    trail = _spy_update_entry(mod, monkeypatch)
+
+    monkeypatch.setattr(mod, "assemble_package", _fake_assemble(package_dir=tmp_path / "pkg"))
+    monkeypatch.setattr(mod, "load_answers", lambda *a, **kw: {})
+
+    def boom():
+        raise KeyError("AZURE_OPENAI_API_KEY")
+
+    monkeypatch.setattr(mod, "build_azure_client", boom)
+    monkeypatch.setattr(
+        mod, "run_portal_application",
+        lambda *a, **kw: pytest.fail("must not attempt the browser when setup failed"),
+    )
+    texts = []
+    monkeypatch.setattr(mod, "send_text", lambda *a, **kw: texts.append(a) or True)
+
+    rc = mod.main(["2026-07-10", "job-1"])
+
+    assert rc == 1
+    assert trail == ["assembling", "failed"]
+    entry = _read_entry(tmp_path, "2026-07-10", "job-1")
+    assert entry["status"] == "failed"
+    assert "AZURE_OPENAI_API_KEY" in entry["error"]
+    assert len(texts) == 1  # best-effort failure notification attempted
+
+
+def test_portal_setup_raises_telegram_also_failing_still_returns_1(mod, monkeypatch, tmp_path):
+    """The Telegram failure note is best-effort: if it too raises, the
+    orchestrator must still report failure (not crash uncaught)."""
+    _portal_queue(tmp_path)
+    _spy_update_entry(mod, monkeypatch)
+
+    monkeypatch.setattr(mod, "assemble_package", _fake_assemble(package_dir=tmp_path / "pkg"))
+    monkeypatch.setattr(mod, "load_answers", lambda *a, **kw: {})
+
+    def boom():
+        raise KeyError("AZURE_OPENAI_API_KEY")
+
+    monkeypatch.setattr(mod, "build_azure_client", boom)
+
+    def text_boom(*a, **kw):
+        raise RuntimeError("telegram down")
+
+    monkeypatch.setattr(mod, "send_text", text_boom)
+
+    rc = mod.main(["2026-07-10", "job-1"])
+
+    assert rc == 1
+    entry = _read_entry(tmp_path, "2026-07-10", "job-1")
+    assert entry["status"] == "failed"
+
+
 def test_assemble_raises_marks_failed_with_error(mod, monkeypatch, tmp_path):
     from cv_tailor.assemble import AssembleError
 

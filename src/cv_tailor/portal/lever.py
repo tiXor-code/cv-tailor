@@ -50,6 +50,14 @@ _DIRECT_FILL_NAMES = frozenset({
 
 _CONFIRMATION_SELECTOR = "text=/application.*(submitted|received)|thank you for applying/i"
 _CONFIRMATION_TIMEOUT_MS = 30_000
+# Standardized with Ashby's own no-confirmation reason (see ashby.py): what a
+# human sees, so it must say the submission MIGHT have gone through -- used
+# for BOTH a plain confirmation timeout and any other post-click
+# PlaywrightError (see apply()'s submit step, ~C345 Phase C fix).
+_NO_CONFIRMATION_REASON = (
+    "no-confirmation: submission may have succeeded, VERIFY on the portal "
+    "before applying manually"
+)
 
 
 def _clean_label(raw: str) -> str:
@@ -392,6 +400,20 @@ class LeverAdapter(PortalAdapter):
         if dry_run:
             return PortalResult(status="filled", reason="", evidence_dir=str(evidence_dir))
 
+        return self._submit_and_await_confirmation(page, evidence_dir)
+
+    def _submit_and_await_confirmation(self, page, evidence_dir: Path) -> PortalResult:
+        """Click submit, then wait for a confirmation signal. A pre-click
+        error (submit control missing/unclickable) is a genuine "failed" --
+        the click itself never happened, so nothing was submitted and the
+        orchestrator's ledger-rollback-on-failed is safe. Anything that goes
+        wrong AFTER the click is a different story: the click already fired,
+        so a plain confirmation timeout OR any other PlaywrightError (page
+        closed, navigation interrupted, etc.) is equally ambiguous -- the
+        submission may have gone through server-side with nothing to show
+        for it client-side. Both must degrade to needs_human, matching
+        Ashby/Greenhouse (never "failed" post-click, which would delete the
+        ledger row and risk re-submitting a job that may already be in)."""
         try:
             page.locator("#btn-submit").first.click()
         except PlaywrightError as exc:
@@ -399,10 +421,9 @@ class LeverAdapter(PortalAdapter):
 
         try:
             page.wait_for_selector(_CONFIRMATION_SELECTOR, timeout=_CONFIRMATION_TIMEOUT_MS)
-        except PlaywrightTimeoutError:
-            # The submission may have gone through server-side even though
-            # no confirmation rendered client-side -- never auto-retry.
-            return PortalResult(status="needs_human", reason="no-confirmation", evidence_dir=str(evidence_dir))
+        except PlaywrightError:
+            return PortalResult(status="needs_human", reason=_NO_CONFIRMATION_REASON,
+                                 evidence_dir=str(evidence_dir))
 
         capture_evidence(page, evidence_dir, "submitted")
         return PortalResult(status="submitted", reason="", evidence_dir=str(evidence_dir))

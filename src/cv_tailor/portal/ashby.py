@@ -463,6 +463,17 @@ class AshbyAdapter(PortalAdapter):
         except PlaywrightError:
             initial_url = None
 
+        # Snapshot whether #application-form is present using the EXACT same
+        # locator _confirmed's signal 3 reads post-click, taken BEFORE the
+        # submit click. That id was copied from one real posting's DOM and
+        # was never verified against every Ashby board config -- if a real
+        # posting's form actually carries a different id, this locator
+        # already reads 0 right now, before anything happened. Passing that
+        # down means signal 3 is disabled for the whole run whenever the
+        # form was never found to begin with, instead of misreading "id
+        # never matched" as "form vanished because the submit succeeded".
+        form_present_pre_click = self._form_present(page)
+
         try:
             page.locator(_SUBMIT_SELECTOR).first.click()
         except PlaywrightError as exc:
@@ -485,7 +496,7 @@ class AshbyAdapter(PortalAdapter):
         # through.
         deadline = time.monotonic() + CONFIRMATION_TIMEOUT_MS / 1000
         while True:
-            if self._confirmed(page, initial_url):
+            if self._confirmed(page, initial_url, form_present_pre_click):
                 capture_evidence(page, evidence_dir, "submitted")
                 return PortalResult(status="submitted", reason="", evidence_dir=str(evidence_dir))
             if time.monotonic() >= deadline:
@@ -500,7 +511,19 @@ class AshbyAdapter(PortalAdapter):
                              evidence_dir=str(evidence_dir))
 
     @staticmethod
-    def _confirmed(page, initial_url) -> bool:
+    def _form_present(page) -> bool:
+        """True if #application-form currently resolves to a visible element.
+        Used both to snapshot pre-click state (see _submit_and_await_confirmation)
+        and, transitively, as the gate for _confirmed's signal 3. Never
+        raises -- a locator error just reads as "not present"."""
+        try:
+            form = page.locator("#application-form")
+            return form.count() > 0 and form.first.is_visible()
+        except PlaywrightError:
+            return False
+
+    @staticmethod
+    def _confirmed(page, initial_url, form_present_pre_click: bool) -> bool:
         """True if any confirmation signal is present:
           1. a visible confirmation phrase;
           2. a navigation to a genuinely different PATH (a query-only change --
@@ -509,7 +532,14 @@ class AshbyAdapter(PortalAdapter):
           3. the application form having disappeared with no error banner AND
              the URL entirely unchanged, i.e. an SPA that swapped the form out
              for a success view without navigating (gating on the unchanged URL
-             keeps a GET-reload transient from being misread as this)."""
+             keeps a GET-reload transient from being misread as this). This
+             signal is only meaningful when the form was actually PRESENT
+             before the submit click (form_present_pre_click) -- if the
+             #application-form locator never matched to begin with (a real
+             posting whose form carries a different id, never verified against
+             live Ashby DOM), "form_gone" is trivially true on the very first
+             poll and would misread a submit that never even reached a valid
+             submit button as already submitted."""
         try:
             current_url = page.url
         except PlaywrightError:
@@ -529,8 +559,9 @@ class AshbyAdapter(PortalAdapter):
                     return True
             except ValueError:
                 pass
-        # 3) SPA form-vanish with no navigation and no error banner.
-        if current_url == initial_url:
+        # 3) SPA form-vanish with no navigation and no error banner -- disabled
+        # entirely when the form was never confirmed present pre-click.
+        if form_present_pre_click and current_url == initial_url:
             try:
                 form = page.locator("#application-form")
                 form_gone = form.count() == 0 or not form.first.is_visible()
