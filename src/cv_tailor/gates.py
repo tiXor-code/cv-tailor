@@ -14,6 +14,15 @@ _EU_RE = re.compile(
 # US-only / non-EU exclusions that override a generic "remote".
 _US_ONLY_RE = re.compile(r"us[- ]only|u\.s\.[- ]only|must be (us|united states)[- ]based|"
                          r"us work authorization|gc/?citizen", re.I)
+# Hybrid/onsite-cadence phrasing (hybrid, "N days a/per week onsite/in office",
+# on-site, in-office). A posting can carry a "Remote" label (e.g. from a broad
+# company-wide remote-friendly blurb or a mistagged SerpAPI/Google Jobs card --
+# see the EnthuZiastic/Cisco cross-listing incident in MEMORY.md) while still
+# anchoring the actual role to an onsite cadence in a specific office.
+_HYBRID_ONSITE_RE = re.compile(
+    r"\bhybrid\b|\bon-?site\b|\bin[- ]office\b|"
+    r"\d+\s*days?\s*(?:per|a)\s*week\s*(?:in|at|on-?site|in[- ]office)",
+    re.I)
 
 
 def _blob(location: str, description: str, cap: int = 2000) -> str:
@@ -41,10 +50,27 @@ def has_target_keyword(text: str, keywords: list[str]) -> bool:
     return any(k.lower() in low for k in keywords)
 
 
+def _is_hybrid_without_eu_signal(location: str, description: str) -> bool:
+    """Cheap Gate 1 drop: a hybrid/onsite-cadence posting with no European
+    signal anywhere in location+description is very likely US (or other
+    non-EU-region) anchored, regardless of a "Remote" label elsewhere in the
+    text -- e.g. a broad "we're a global remote-friendly company" blurb next
+    to "Onsite 3 days per week in Raleigh... or San Jose, California".
+    Recall-favoring: any EU signal (an EU/EMEA/CET country or region name via
+    _EU_RE) keeps the job in even when it is genuinely hybrid-in-Europe (e.g.
+    "hybrid, 2 days a week in our Bucharest office")."""
+    text = _blob(location, description)
+    if not _HYBRID_ONSITE_RE.search(text):
+        return False
+    return not _EU_RE.search(text)
+
+
 def passes_gate1(job, keywords: list[str]) -> bool:
     if not is_remote(job.location, job.description):
         return False
     if not is_eu_eligible(job.location, job.description):
+        return False
+    if _is_hybrid_without_eu_signal(job.location, job.description):
         return False
     return has_target_keyword(f"{job.title} {job.description}", keywords)
 
@@ -69,6 +95,8 @@ def passes_gate1_tracks(job, tracks: dict) -> str | None:
     if not is_remote(job.location, job.description):
         return None
     if not is_eu_eligible(job.location, job.description):
+        return None
+    if _is_hybrid_without_eu_signal(job.location, job.description):
         return None
     matches = matched_tracks(job, tracks)
     return matches[0] if matches else None

@@ -93,6 +93,24 @@ def test_score_job_ai_track_prompt_is_byte_stable():
     assert msgs2[0]["content"] == SCORER_SYSTEM_PROMPT
 
 
+def test_scorer_system_prompt_has_us_anchor_reality_check():
+    """Real incident: a SerpAPI-cross-listed 'Remote' card's true JD anchored
+    the role to a hybrid US-onsite cadence in Raleigh/San Jose (Cisco). The
+    scorer must not trust a bare 'Remote' label -- it needs its own reality
+    check, mirroring norina-jobs' scorer hardening."""
+    p = SCORER_SYSTEM_PROMPT
+    low = p.lower()
+    assert "reality-check" in low or "reality check" in low
+    assert "hybrid" in low
+    assert "onsite" in low or "on-site" in low
+    assert "days per week" in low
+    assert "work-authorization" in low or "work authorization" in low
+    assert "remote from anywhere" in low or "anywhere" in low
+    assert "emea" in low
+    # The hard cap: score 3 or lower regardless of the "Remote" label.
+    assert "3 or lower" in low
+
+
 def test_score_job_content_track_prompt_has_availability_constraint():
     client = _fake_client_capturing()
     score_job({"contact": {}}, "T", "L", "desc", client=client, deployment="m", track="content")

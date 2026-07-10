@@ -101,17 +101,62 @@ def fetch_lever_org(org_slug: str, display_name: str | None = None) -> list[JobP
 _SERP_JOB_BOARDS = ("linkedin.com", "indeed.com", "glassdoor.com", "ziprecruiter.com",
                     "google.com", "serpapi.com")
 
+# ATS platforms whose subdomain or path segment usually carries the org's
+# slug (e.g. "cisco.wd5.myworkdayjobs.com", "jobs.lever.co/acme/...").
+_ATS_HOSTS = ("myworkdayjobs.com", "greenhouse.io", "lever.co", "ashbyhq.com",
+              "smartrecruiters.com")
 
-def _best_company_url(apply_options, share_link):
-    """Prefer an apply link that is NOT a big job board (likelier a company domain),
-    so Hunter can resolve a real company domain later. Fall back to share_link."""
-    for opt in apply_options or []:
-        link = (opt or {}).get("link") or ""
-        host = urlparse(link).netloc.lower()
-        if link and not any(b in host for b in _SERP_JOB_BOARDS):
-            return link
-    if apply_options and apply_options[0].get("link"):
-        return apply_options[0]["link"]
+# Trailing legal-entity suffix stripped before alnum-normalizing an org name,
+# so "Acme Inc" matches an ATS slug like "acme" the same way a bare-word org
+# like "EnthuZiastic" matches "enthuziastic.com" with no stripping needed.
+_ORG_LEGAL_SUFFIX_RE = re.compile(
+    r"\s+(inc\.?|incorporated|llc|ltd\.?|limited|corp\.?|corporation|co\.?|company|"
+    r"gmbh|ag|s\.?a\.?|s\.?r\.?l\.?|plc|bv|pte\.?|pvt\.?)\s*$", re.I)
+
+
+def _normalize_org(name: str) -> str:
+    """Lowercase alnum-only org name for apply-link matching: 'EnthuZiastic'
+    -> 'enthuziastic', 'Acme Inc' -> 'acme' (trailing legal suffix dropped
+    first so it doesn't have to appear verbatim in a URL/slug)."""
+    name = _ORG_LEGAL_SUFFIX_RE.sub("", (name or "").strip())
+    return re.sub(r"[^a-z0-9]", "", name.lower())
+
+
+def _best_company_url(org, apply_options, share_link):
+    """Rank apply links by how confidently they belong to `org`, so a
+    cross-listed apply_options link never gets picked blindly. Real incident:
+    a SerpAPI "EnthuZiastic - Generative AI Automation Engineer - Remote"
+    card's only non-board apply_options link actually pointed at Cisco's
+    Workday page (a different company, hybrid, US-onsite) -- see MEMORY.md.
+
+    Preference order:
+    1. A non-board link whose registrable domain contains the normalized org
+       name -- likeliest the company's own careers page.
+    2. An ATS-hosted link (Workday/Greenhouse/Lever/Ashby/SmartRecruiters)
+       whose URL (subdomain or path) contains the normalized org name.
+    3. Otherwise: share_link -- the Google Jobs page listing every apply
+       option -- never a link that plainly names a different company.
+    """
+    org_norm = _normalize_org(org)
+    links = [((opt or {}).get("link") or "") for opt in (apply_options or [])]
+    links = [link for link in links if link]
+
+    if org_norm:
+        for link in links:
+            host = urlparse(link).netloc.lower()
+            if any(b in host for b in _SERP_JOB_BOARDS):
+                continue
+            if org_norm in _normalize_org(host):
+                return link
+
+        for link in links:
+            host = urlparse(link).netloc.lower()
+            if not any(a in host for a in _ATS_HOSTS):
+                continue
+            parsed = urlparse(link)
+            if org_norm in _normalize_org(parsed.netloc + parsed.path):
+                return link
+
     return share_link or ""
 
 
@@ -148,10 +193,11 @@ def fetch_serpapi(query: str, location: str | None = None, api_key: str | None =
     data = _http_json("https://serpapi.com/search?" + "&".join(params))
     out: list[JobPosting] = []
     for j in data.get("jobs_results", []):
+        org = j.get("company_name") or ""
         out.append(JobPosting(
-            source="serpapi", org=j.get("company_name") or "",
+            source="serpapi", org=org,
             title=j.get("title") or "", location=j.get("location") or "",
-            url=_best_company_url(j.get("apply_options"), j.get("share_link")),
+            url=_best_company_url(org, j.get("apply_options"), j.get("share_link")),
             description=j.get("description") or "", raw_id=j.get("job_id") or "",
         ))
     return out

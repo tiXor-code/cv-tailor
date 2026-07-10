@@ -81,3 +81,51 @@ def test_passes_gate1_tracks_geo_gates_still_apply():
     assert passes_gate1_tracks(not_remote, TRACKS) is None
     wrong_geo = _job("AI Engineer", "Remote - US only", "Python")
     assert passes_gate1_tracks(wrong_geo, TRACKS) is None
+
+
+# --- Fix C: cheap Gate 1 hybrid-without-EU-signal drop (real incident:
+# EnthuZiastic/Cisco cross-listing -- a "Remote" job whose actual JD anchors
+# the role to onsite US-city cadence) ---
+
+def test_passes_gate1_drops_hybrid_without_eu_signal():
+    # Mirrors the real Cisco JD behind the mislinked EnthuZiastic apply
+    # option: a "remote-friendly"/"global" blurb sits next to a hard
+    # onsite-days-per-week requirement in named US cities, no EU signal.
+    cisco_like = _job(
+        "Automation AI Ops Engineer",
+        "Raleigh, North Carolina or San Jose, California",
+        "We're a global, remote-friendly company. Onsite 3 days per week in "
+        "Raleigh, North Carolina or San Jose, California is required for this role.",
+    )
+    assert passes_gate1(cisco_like, KW) is False
+    assert passes_gate1_tracks(cisco_like, TRACKS) is None
+
+
+def test_passes_gate1_keeps_hybrid_with_eu_signal():
+    # A genuinely hybrid EU role (Bucharest office) must NOT be dropped --
+    # the check is recall-favoring and only fires with zero EU signal.
+    bucharest_hybrid = _job(
+        "AI Engineer",
+        "Bucharest, Romania (Remote/Hybrid)",
+        "Python, agentic systems. Remote-first with hybrid flexibility -- "
+        "2 days a week in our Bucharest office for those nearby.",
+    )
+    assert passes_gate1(bucharest_hybrid, KW) is True
+    assert passes_gate1_tracks(bucharest_hybrid, TRACKS) == "ai"
+
+
+def test_passes_gate1_plain_remote_eu_still_passes():
+    plain_remote_eu = _job("AI Engineer", "Remote - Europe", "Python, agentic systems")
+    assert passes_gate1(plain_remote_eu, KW) is True
+    assert passes_gate1_tracks(plain_remote_eu, TRACKS) == "ai"
+
+
+def test_norina_jobs_compat_signatures_unchanged():
+    """norina-jobs imports is_remote/is_eu_eligible/has_target_keyword directly
+    (src/norina/gate.py) and calls them positionally as (location, description)
+    / (text, keywords). Fix C must not change these signatures."""
+    import inspect
+    assert list(inspect.signature(is_remote).parameters) == ["location", "description"]
+    assert list(inspect.signature(is_eu_eligible).parameters) == ["location", "description"]
+    assert list(inspect.signature(has_target_keyword).parameters) == ["text", "keywords"]
+    assert list(inspect.signature(passes_gate1).parameters) == ["job", "keywords"]

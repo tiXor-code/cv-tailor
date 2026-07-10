@@ -30,6 +30,17 @@ Heavily favor:
 - Forward-deployed / solutions-engineer / internal-tooling AI roles
 - n8n, RAG, eval frameworks, MCP, agentic workflows in the JD
 
+Location reality-check: a "Remote" label on the posting is not enough. Read the
+description -- if it anchors the actual work to a US, Canada, Australia, or UK
+office or team (hybrid schedules, "N days per week onsite/in office", named
+US/Canada/Australia/UK cities or states as the work location, US-timezone-only
+core hours, or US/Canada/Australia/UK work-authorization requirements), score
+the role 3 or lower regardless of the "Remote" label, UNLESS the text
+explicitly affirms remote eligibility from Europe/EMEA/anywhere (e.g. "remote
+from anywhere", "EU-based candidates welcome", "open to EMEA/CET"). The
+candidate lives in Bucharest, Romania and cannot commute to a US/UK/Canada/
+Australia office.
+
 Return strict JSON:
 {
   "score": 0-10 integer,

@@ -3,6 +3,7 @@ from unittest import mock
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent / "src"))
 from cv_tailor import job_sources
 from cv_tailor.budget import SerpBudget
+from cv_tailor.job_sources import _best_company_url
 
 
 def _fake_urlopen(payload):
@@ -95,6 +96,54 @@ def test_fetch_serpapi_key_check_order_preserved_when_key_present(tmp_path):
     with mock.patch("urllib.request.urlopen", return_value=_fake_urlopen(payload)):
         job_sources.fetch_serpapi("AI engineer", api_key="k", budget=budget)
     assert budget.used() == 1
+
+
+# --- Fix A: _best_company_url apply-link coherence (real incident: a SerpAPI
+# "EnthuZiastic - Generative AI Automation Engineer - Remote" card whose only
+# non-board apply_options link actually pointed at Cisco's Workday page --
+# a hybrid, US-onsite role at a different company entirely) ---
+
+def test_best_company_url_real_incident_cross_listed_link_falls_back_to_share_link():
+    apply_options = [{
+        "title": "Cisco",
+        "link": "https://cisco.wd5.myworkdayjobs.com/en-US/Cisco_Careers/job/"
+                "Automation-AI-Ops-Engineer",
+    }]
+    share_link = "https://www.google.com/search?ibp=htl;jobs#htivrt=jobs&htidocid=abc123"
+    url = _best_company_url("EnthuZiastic", apply_options, share_link)
+    # Must NEVER pick a link that plainly names a different company.
+    assert url == share_link
+
+
+def test_best_company_url_prefers_matching_company_domain():
+    apply_options = [
+        {"title": "LinkedIn", "link": "https://www.linkedin.com/jobs/1"},
+        {"title": "Careers", "link": "https://careers.acme.com/jobs/1"},
+    ]
+    url = _best_company_url("Acme Inc", apply_options, "https://share/x")
+    assert url == "https://careers.acme.com/jobs/1"
+
+
+def test_best_company_url_matches_ats_hosted_path():
+    apply_options = [{"title": "Lever", "link": "https://jobs.lever.co/acme/some-id"}]
+    url = _best_company_url("Acme Inc", apply_options, "https://share/x")
+    assert url == "https://jobs.lever.co/acme/some-id"
+
+
+def test_best_company_url_board_only_falls_back_to_share_link():
+    apply_options = [
+        {"title": "LinkedIn", "link": "https://www.linkedin.com/jobs/1"},
+        {"title": "Indeed", "link": "https://www.indeed.com/jobs/1"},
+    ]
+    url = _best_company_url("Acme Inc", apply_options, "https://share/x")
+    assert url == "https://share/x"
+
+
+def test_best_company_url_no_apply_options_falls_back_to_share_link():
+    url = _best_company_url("Acme Inc", [], "https://share/x")
+    assert url == "https://share/x"
+    url2 = _best_company_url("Acme Inc", None, "https://share/x")
+    assert url2 == "https://share/x"
 
 
 def test_fetch_all_without_budget_is_unbudgeted(capsys):
