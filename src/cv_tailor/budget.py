@@ -10,12 +10,23 @@ SerpBudget persists a running count in a small JSON file, keyed by calendar
 month: `{"month": "2026-07", "used": n}`. take() must be called once per
 SerpAPI query BEFORE issuing it; a False return means this month's cap is
 already spent and the caller must skip the query instead of firing it.
-Writes are atomic (unique tmp name + os.replace) so a crash mid-write can
-never corrupt the counter or race a concurrent reader/writer -- the same
-pattern used by scout_queue.py's _write_atomic.
+
+take()'s whole read-compare-increment-write is held under an exclusive
+flock on a sibling `<path>.lock` file (fcntl.flock; POSIX-only), the same
+pattern scout_queue.update_entry uses for jobs.json -- this makes it
+race-safe: two concurrent processes (cv-tailor and norina-jobs share this
+budget) can never both read the same `used` count and both pass the cap
+check, so takes can neither overshoot the cap nor silently lose one
+writer's increment. The actual file write still goes through a unique-tmp-
+name + os.replace atomic write (the same pattern used by scout_queue.py's
+_write_atomic), so a crash mid-write can never corrupt the counter either.
+Together these give take() BOTH guarantees: crash-safe (atomic write) AND
+race-safe under concurrent writers (the flock) -- not just the crash-safety
+a plain atomic write alone would provide.
 """
 from __future__ import annotations
 
+import fcntl
 import json
 import os
 from datetime import date
@@ -58,10 +69,26 @@ class SerpBudget:
     def take(self) -> bool:
         """Consume one query from this month's budget. Returns False (and
         leaves the stored count untouched) once the cap is spent, so callers
-        can skip the query and log what got dropped."""
-        data = self._read()
-        if data["used"] >= self.monthly_cap:
-            return False
-        data["used"] += 1
-        self._write_atomic(data)
-        return True
+        can skip the query and log what got dropped.
+
+        Race-safe: the read-compare-increment-write below runs under an
+        exclusive flock on a sibling `<path>.lock` file, held from before
+        the read to after the atomic write, so two concurrent processes can
+        never both read the same `used` count and both proceed past the cap
+        check (see the module docstring)."""
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        lock_path = self.path.with_name(f"{self.path.name}.lock")
+        lock_fd = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o644)
+        try:
+            fcntl.flock(lock_fd, fcntl.LOCK_EX)
+            try:
+                data = self._read()
+                if data["used"] >= self.monthly_cap:
+                    return False
+                data["used"] += 1
+                self._write_atomic(data)
+                return True
+            finally:
+                fcntl.flock(lock_fd, fcntl.LOCK_UN)
+        finally:
+            os.close(lock_fd)

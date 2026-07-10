@@ -63,9 +63,37 @@ def test_fetch_all_threads_one_shared_budget_across_serpapi_sources(tmp_path):
         {"kind": "serpapi", "query": "AI engineer remote europe"},
         {"kind": "serpapi", "query": "content producer remote part-time"},
     ]
-    with mock.patch("urllib.request.urlopen", return_value=_fake_urlopen(payload)):
+    # a real key must be present -- fetch_serpapi now checks the key BEFORE
+    # consulting the budget, so a missing key would short-circuit before
+    # budget.take() is ever reached (see the two key-check-order tests below)
+    with mock.patch("urllib.request.urlopen", return_value=_fake_urlopen(payload)), \
+         mock.patch.dict("os.environ", {"SERPAPI_API_KEY": "k"}, clear=True):
         job_sources.fetch_all(sources, serp_budget=budget)
     # only the first query consumed the shared cap of 1; the second was blocked
+    assert budget.used() == 1
+
+
+def test_fetch_serpapi_checks_api_key_before_touching_budget(tmp_path):
+    """A missing/unset key must never consume budget -- the key check runs
+    BEFORE budget.take() so a misconfigured SERPAPI_API_KEY doesn't silently
+    burn the shared monthly cap with zero real queries (same failure class as
+    the repo's Azure-key twice-bitten history)."""
+    budget = SerpBudget(path=tmp_path / "serpapi_budget.json", monthly_cap=5)
+    with mock.patch("urllib.request.urlopen") as urlopen, \
+         mock.patch.dict("os.environ", {}, clear=True):
+        out = job_sources.fetch_serpapi("AI engineer", budget=budget)
+    urlopen.assert_not_called()
+    assert out == []
+    assert budget.used() == 0
+
+
+def test_fetch_serpapi_key_check_order_preserved_when_key_present(tmp_path):
+    # sanity check the other direction: a present key still reaches (and
+    # consumes) the budget gate as before
+    budget = SerpBudget(path=tmp_path / "serpapi_budget.json", monthly_cap=5)
+    payload = {"jobs_results": []}
+    with mock.patch("urllib.request.urlopen", return_value=_fake_urlopen(payload)):
+        job_sources.fetch_serpapi("AI engineer", api_key="k", budget=budget)
     assert budget.used() == 1
 
 

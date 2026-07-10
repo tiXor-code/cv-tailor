@@ -1,4 +1,5 @@
 import json
+import multiprocessing
 from datetime import date
 
 from cv_tailor.budget import SerpBudget
@@ -64,3 +65,44 @@ def test_default_path_and_cap():
     assert b.monthly_cap == 90
     assert b.path.name == "serpapi_budget.json"
     assert b.path.parent.name == "data"
+
+
+def _take_n_times(path, monthly_cap, n, queue):
+    """Module-level so multiprocessing (spawn) can pickle/import it as the
+    child process target. Each call is its own full read-modify-write cycle
+    through take(), exactly like two real cv-tailor/norina-jobs processes
+    racing to consume the same shared monthly SerpAPI budget."""
+    from cv_tailor.budget import SerpBudget
+
+    b = SerpBudget(path=path, monthly_cap=monthly_cap)
+    successes = sum(1 for _ in range(n) if b.take())
+    queue.put(successes)
+
+
+def test_take_concurrent_writers_no_lost_updates_no_overshoot(tmp_path):
+    """Regression test for the plain read-modify-write race: two real OS
+    processes (not threads) each call take() 30 times against a shared cap
+    of 40. Without a lock held across the whole read-compare-increment-write,
+    both processes can read the same `used` value, both pass the cap check,
+    and both write -- overshooting the cap and/or losing one writer's
+    increment. With the flock in place, exactly `cap` calls succeed in total
+    across both processes and the stored `used` matches exactly (mirrors
+    tests/test_scout_queue.py's concurrent-writers test)."""
+    path = tmp_path / "serpapi_budget.json"
+    n = 30
+    cap = 40
+    ctx = multiprocessing.get_context("spawn")
+    queue = ctx.Queue()
+    p1 = ctx.Process(target=_take_n_times, args=(path, cap, n, queue))
+    p2 = ctx.Process(target=_take_n_times, args=(path, cap, n, queue))
+    p1.start()
+    p2.start()
+    p1.join(timeout=60)
+    p2.join(timeout=60)
+
+    assert p1.exitcode == 0, "worker 1 crashed (see traceback above)"
+    assert p2.exitcode == 0, "worker 2 crashed (see traceback above)"
+
+    total_successes = queue.get(timeout=5) + queue.get(timeout=5)
+    assert total_successes == cap, "overshoot or lost update in take()'s successful-call count"
+    assert json.loads(path.read_text())["used"] == cap, "stored used count diverged from successes"

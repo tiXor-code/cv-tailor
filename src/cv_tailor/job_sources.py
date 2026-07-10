@@ -119,19 +119,27 @@ def fetch_serpapi(query: str, location: str | None = None, api_key: str | None =
                   hl: str = "en", budget=None) -> list[JobPosting]:
     """Google Jobs via SerpAPI. Remote-only (ltype=1). One page (~10 results).
 
-    `budget`, when given, is a budget.SerpBudget consulted BEFORE the network
-    call. A spent budget blocks the query and returns [] without hitting the
-    network -- loudly logged so a silently-empty scan is never mistaken for
-    "no good jobs today". `budget=None` (the default) preserves old
-    unlimited/unbudgeted behavior, so existing callers are unaffected."""
+    The API key is checked FIRST, before the budget is touched at all: a
+    missing/unset SERPAPI_API_KEY returns [] without ever calling
+    budget.take(), so a misconfigured key can never burn the shared monthly
+    budget on queries that were never going to reach the network anyway
+    (same failure class as this repo's Azure-key twice-bitten history --
+    see MEMORY.md cv_tailor_azure_key_dead_scout_silent).
+
+    `budget`, when given, is a budget.SerpBudget consulted AFTER the key
+    check, BEFORE the network call. A spent budget blocks the query and
+    returns [] without hitting the network -- loudly logged so a
+    silently-empty scan is never mistaken for "no good jobs today".
+    `budget=None` (the default) preserves old unlimited/unbudgeted behavior,
+    so existing callers are unaffected."""
+    api_key = api_key or os.environ.get("SERPAPI_API_KEY")
+    if not api_key:
+        print("warning: SERPAPI_API_KEY not set; skipping serpapi source")
+        return []
     if budget is not None and not budget.take():
         print(f"serpapi budget exhausted (cap {budget.monthly_cap}/mo, "
               f"{budget.used()} used this month); skipping remaining queries "
               f"-- dropped {query!r}")
-        return []
-    api_key = api_key or os.environ.get("SERPAPI_API_KEY")
-    if not api_key:
-        print("warning: SERPAPI_API_KEY not set; skipping serpapi source")
         return []
     params = [f"engine=google_jobs", f"q={quote_plus(query)}", f"hl={hl}", "ltype=1",
               f"api_key={api_key}"]
