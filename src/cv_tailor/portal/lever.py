@@ -206,12 +206,14 @@ class LeverAdapter(PortalAdapter):
     name = "lever"
 
     def __init__(self, *, client=None, deployment=None):
-        # client=None (the default) means screening.answer_question runs
-        # deterministic-tier only -- a required question with no grounded
-        # answer honestly aborts to needs_human rather than guessing. A
-        # future orchestrator may set .client/.deployment before calling
-        # apply() to enable the LLM tier for questions the deterministic
-        # tier can't resolve.
+        # Constructor client/deployment are a fallback only, kept for the
+        # adapter's own direct-construction tests (LeverAdapter(client=...))
+        # and for a caller that holds its own instance. The module-level
+        # ASHBY/GREENHOUSE/LEVER singletons registered at import time can't
+        # be constructed per-call, so the orchestrator's real path is the
+        # apply(..., client=..., deployment=...) keyword (unified with the
+        # other two adapters) -- see apply() below, which prefers the kwarg
+        # over these attributes when both are given.
         self.client = client
         self.deployment = deployment
 
@@ -241,13 +243,13 @@ class LeverAdapter(PortalAdapter):
             return False
         return verify_file_attached(page, "input[name='resume']")
 
-    def _answer_all(self, page, evidence_dir, profile, answers) -> PortalResult | None:
+    def _answer_all(self, page, evidence_dir, profile, answers, *, client, deployment) -> PortalResult | None:
         """Fill every remaining discovered question and verify each write.
         Returns a needs_human PortalResult if a REQUIRED question can't be
         grounded (unanswerable-required) or was grounded but the value didn't
         land in the DOM (unwritable-required), else None."""
         for question, field_name in discover_questions(page):
-            answer = answer_question(question, profile, answers, client=self.client, deployment=self.deployment)
+            answer = answer_question(question, profile, answers, client=client, deployment=deployment)
             if answer is None:
                 capture_evidence(page, evidence_dir, "aborted")
                 return PortalResult(status="needs_human",
@@ -320,7 +322,14 @@ class LeverAdapter(PortalAdapter):
         return False
 
     def apply(self, page, entry: dict, package: dict, profile: dict, answers: dict, *,
-              dry_run: bool) -> PortalResult:
+              dry_run: bool, client=None, deployment=None) -> PortalResult:
+        # The kwarg is the orchestrator's real path (the module-level LEVER
+        # singleton is constructed once at import time with client=None, so
+        # it can never carry a per-call client via the constructor). Fall
+        # back to the constructor attributes only when the kwarg is omitted,
+        # so direct-construction tests (LeverAdapter(client=...)) keep working.
+        client = client if client is not None else self.client
+        deployment = deployment if deployment is not None else self.deployment
         evidence_dir = Path(package["package_dir"]) / "portal"
 
         blocker = detect_blockers(page)
@@ -374,7 +383,7 @@ class LeverAdapter(PortalAdapter):
                 cover_text = ""
             fill_field(page, "textarea[name='comments']", cover_text)
 
-        aborted = self._answer_all(page, evidence_dir, profile, answers)
+        aborted = self._answer_all(page, evidence_dir, profile, answers, client=client, deployment=deployment)
         if aborted is not None:
             return aborted
 

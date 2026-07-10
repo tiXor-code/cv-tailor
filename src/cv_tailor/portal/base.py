@@ -22,7 +22,7 @@ from __future__ import annotations
 import json
 import time
 from pathlib import Path
-from typing import NamedTuple
+from typing import Any, NamedTuple
 
 from playwright.sync_api import Error as PlaywrightError
 from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
@@ -37,13 +37,23 @@ class PortalResult(NamedTuple):
 
 class PortalAdapter:
     """Base class for one ATS's fill/submit logic. Subclasses set `hosts`
-    (url substrings this adapter claims) and `name`, and implement `apply`."""
+    (url substrings this adapter claims) and `name`, and implement `apply`.
+
+    `client`/`deployment` are optional: None means the LLM tier of
+    cv_tailor.screening.answer_question is unreachable and screening runs
+    deterministic-tier-only (a required question with no grounded answer
+    honestly aborts to needs_human rather than guessing). The orchestrator
+    passes its own Azure client through run_portal_application so the LLM
+    tier is reachable in production; every adapter's own tests keep
+    exercising the deterministic-only (client=None) path by simply omitting
+    the kwarg."""
 
     hosts: tuple[str, ...] = ()
     name: str = ""
 
     def apply(self, page, entry: dict, package: dict, profile: dict,
-              answers: dict, *, dry_run: bool) -> PortalResult:
+              answers: dict, *, dry_run: bool, client: Any = None,
+              deployment: str | None = None) -> PortalResult:
         raise NotImplementedError
 
 
@@ -207,7 +217,8 @@ def verify_file_attached(page, selector: str) -> bool:
 # --- orchestration ------------------------------------------------------------
 
 def run_portal_application(entry: dict, package: dict, profile: dict, answers: dict, *,
-                            dry_run: bool, timeout_s: int = 120, headless: bool = True) -> PortalResult:
+                            dry_run: bool, timeout_s: int = 120, headless: bool = True,
+                            client: Any = None, deployment: str | None = None) -> PortalResult:
     """Own the full Playwright lifecycle for one job's portal application.
 
     Flow: resolve evidence_dir -> resolve URL -> look up the adapter for its
@@ -218,6 +229,12 @@ def run_portal_application(entry: dict, package: dict, profile: dict, answers: d
     reached, always, even on an adapter exception -> any uncaught exception
     anywhere degrades to "failed" rather than propagating, so a bad job
     never kills the caller's batch run.
+
+    `client`/`deployment` are forwarded to the adapter unchanged (None by
+    default, meaning screening.answer_question runs deterministic-tier
+    only). The orchestrator passes its own Azure client here so screening
+    questions the deterministic tier can't resolve get an LLM-grounded
+    shot before the caller falls back to needs_human.
 
     `timeout_s` is a wall-clock budget for the whole browser interaction,
     not a per-action cap: navigation gets the full budget, but once it
@@ -275,7 +292,8 @@ def run_portal_application(entry: dict, package: dict, profile: dict, answers: d
 
                 stage = "dispatch"
                 try:
-                    result = adapter.apply(page, entry, package, profile, answers, dry_run=dry_run)
+                    result = adapter.apply(page, entry, package, profile, answers, dry_run=dry_run,
+                                            client=client, deployment=deployment)
                 except PlaywrightTimeoutError:
                     stage = "timeout"
                     return PortalResult(status="needs_human", reason="timeout",

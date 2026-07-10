@@ -27,6 +27,7 @@ from __future__ import annotations
 import re
 import time
 from pathlib import Path
+from typing import Any
 from urllib.parse import urlparse
 
 from playwright.sync_api import Error as PlaywrightError
@@ -104,7 +105,8 @@ class AshbyAdapter(PortalAdapter):
     name = "ashby"
 
     def apply(self, page, entry: dict, package: dict, profile: dict,
-              answers: dict, *, dry_run: bool) -> PortalResult:
+              answers: dict, *, dry_run: bool, client: Any = None,
+              deployment: str | None = None) -> PortalResult:
         evidence_dir = Path(package["package_dir"]) / "portal"
 
         blocker = detect_blockers(page)
@@ -150,7 +152,7 @@ class AshbyAdapter(PortalAdapter):
 
         self._fill_cover_letter(page, package.get("cover_letter_path"))
 
-        aborted = self._answer_remaining_questions(page, profile, answers)
+        aborted = self._answer_remaining_questions(page, profile, answers, client=client, deployment=deployment)
         if aborted is not None:
             capture_evidence(page, evidence_dir, "aborted")
             return PortalResult(status="needs_human", reason=aborted, evidence_dir=str(evidence_dir))
@@ -229,7 +231,8 @@ class AshbyAdapter(PortalAdapter):
 
     # --- screening questions ----------------------------------------------------
 
-    def _answer_remaining_questions(self, page, profile: dict, answers: dict) -> str | None:
+    def _answer_remaining_questions(self, page, profile: dict, answers: dict, *,
+                                     client: Any = None, deployment: str | None = None) -> str | None:
         """Enumerate field-entry wrappers not already handled, answer each
         via the screening module, and fill the form. Returns a
         needs_human reason string on a required-unanswerable question,
@@ -248,7 +251,7 @@ class AshbyAdapter(PortalAdapter):
             if question is None:
                 continue
 
-            answer = answer_question(question, profile, answers)
+            answer = answer_question(question, profile, answers, client=client, deployment=deployment)
 
             # answer_question with no client (deterministic tier only) can
             # return None for ANY unmatched question, not just required

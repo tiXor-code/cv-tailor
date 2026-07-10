@@ -8,12 +8,21 @@ pending->rejected transition; every status after that belongs to this script.
 
 Flow (exact status vocabulary, atomic update_entry writes throughout):
   approved -> assembling -> (failed | needs_review | ready | sending)
-                                                          sending -> (sent | preview_sent | failed)
+    email:  sending -> (sent | preview_sent | failed)
+    portal: unarmed -> a dry-run fill/screenshot only, no ledger touched:
+              ready (filled) | needs_human(reason) | failed(reason)
+            armed -> ledger gates (duplicate/cap) -> record-then-submit,
+              exactly like email's SMTP send:
+              sending -> sent (submitted) | needs_human(reason) | failed(reason)
+              A needs_human outcome KEEPS the ledger row (the submission may
+              have gone through -- see run_portal_application's
+              no-confirmation semantics); only a definite failed rolls it back.
 --force allows starting from needs_review (the UI's "send anyway") and skips
 the cover-letter-warnings stop.
 
 Exit codes: 0 on any terminal success state (sent/preview_sent/ready/
-needs_review), 1 on failed, 2 on the wrong start status (entry untouched).
+needs_review/needs_human), 1 on failed, 2 on the wrong start status (entry
+untouched).
 
 Usage:
   python scripts/apply_approved.py <scan-date> <job-id> [--force]
@@ -22,6 +31,9 @@ Env:
   SCOUT_QUEUE_DIR   override the queue root (used by tests; never touches prod state)
   SCOUT_DB_PATH     override the applications-ledger sqlite path (default data/jobs.db)
   CV_TAILOR_PROFILE / CV_TAILOR_TEMPLATES   override profile.yaml / templates dir
+  APPLY_ARMED       "1" submits for real (email SMTP send / portal browser submit);
+                     anything else previews/dry-runs only, same flag for both channels
+  APPLY_DAILY_CAP   max applications/day across BOTH channels while armed (default 10)
 Run under the cv-tailor venv; system python3 lacks deps.
 """
 from __future__ import annotations
@@ -36,12 +48,21 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "src"))
 
+from cv_tailor.answers import load_answers
 from cv_tailor.assemble import AssembleError, assemble_package
-from cv_tailor.cache import connect
+from cv_tailor.cache import (
+    application_exists,
+    applications_sent_today,
+    connect,
+    delete_application,
+    record_application,
+)
+from cv_tailor.portal import run_portal_application
 from cv_tailor.profile import load_profile
 from cv_tailor.scout_queue import StatusConflict, queue_root, update_entry
 from cv_tailor.sender import send_application
 from cv_tailor.sheets import crm_mark_applied
+from cv_tailor.tailor_llm import build_azure_client
 from cv_tailor.telegram import send_document, send_text
 
 DEFAULT_DB_PATH = ROOT / "data" / "jobs.db"
@@ -62,6 +83,135 @@ def _load_entry(scan_date: str, job_id: str, *, queue_dir=None) -> dict:
             return e
     ids = ", ".join(e.get("id", "?") for e in entries) or "(empty)"
     sys.exit(f"job id {job_id!r} not in queue. Available: {ids}")
+
+
+def _finish_portal_dry_run(args, result) -> int:
+    """Unarmed portal result -> queue status. `filled` means the screening
+    honesty guard cleared every required question and the form actually
+    took every write -- `ready` keeps its Phase A meaning (a human can apply
+    via the link), now backed by a filled-form screenshot. needs_human/failed
+    both land on that exact status with the reason + evidence attached."""
+    if result.status == "filled":
+        def _ready(e: dict) -> None:
+            e["status"] = "ready"
+            e["evidence_dir"] = result.evidence_dir
+
+        entry = update_entry(args.scan_date, args.job_id, _ready)
+        send_text(
+            f"{entry.get('company')} / {entry.get('title')}: filled preview staged. "
+            f"Apply: {entry.get('apply_target') or entry.get('url')}"
+        )
+        return 0
+
+    def _needs_human_or_failed(e: dict) -> None:
+        e["status"] = result.status
+        e["error"] = result.reason
+        e["evidence_dir"] = result.evidence_dir
+
+    entry = update_entry(args.scan_date, args.job_id, _needs_human_or_failed)
+    send_text(f"{entry.get('company')} / {entry.get('title')}: portal {result.status} ({result.reason})")
+    if result.status == "failed":
+        print(f"portal dry-run failed: {result.reason}", file=sys.stderr)
+        return 1
+    return 0
+
+
+def _handle_portal(args, entry: dict, meta: dict) -> int:
+    """Portal apply path (replaces the Phase A stub that parked every portal
+    job at `ready` unattempted): unarmed runs a fill-only dry-run for a
+    Teodor-reviewable preview; armed gates on the applications ledger
+    (channel "portal", the same daily-cap/duplicate policy as email) and
+    then actually drives the browser submit.
+
+    A needs_human outcome always KEEPS whatever ledger row was recorded --
+    run_portal_application's own no-confirmation semantics mean the
+    submission may have gone through server-side even with no client-side
+    confirmation signal, so deleting the row here could let the same job get
+    re-submitted later. Only a definite `failed` (never got close to a real
+    submit) rolls the row back, mirroring sender.py's SMTP-exception rollback.
+    """
+    profile_path = Path(os.environ.get("CV_TAILOR_PROFILE", ROOT / "profile.yaml"))
+    profile = load_profile(profile_path, strict=True)
+    answers = load_answers()
+    client = build_azure_client()
+
+    armed = os.environ.get("APPLY_ARMED", "0") == "1"
+
+    if not armed:
+        result = run_portal_application(entry, meta, profile, answers, dry_run=True, client=client)
+        return _finish_portal_dry_run(args, result)
+
+    conn = connect(_db_path())
+    job_id = entry.get("id", "")
+    company = entry.get("company", "")
+    role = entry.get("title", "")
+
+    if application_exists(conn, job_id=job_id, company=company, role=role):
+        update_entry(args.scan_date, args.job_id, lambda e: e.update(status="failed", error="duplicate"))
+        print("portal blocked: duplicate", file=sys.stderr)
+        return 1
+
+    cap = int(os.environ.get("APPLY_DAILY_CAP", "10"))
+    if applications_sent_today(conn) >= cap:
+        update_entry(args.scan_date, args.job_id, lambda e: e.update(status="failed", error="daily-cap"))
+        print("portal blocked: daily-cap", file=sys.stderr)
+        return 1
+
+    entry = update_entry(args.scan_date, args.job_id, lambda e: e.update(status="sending"))
+
+    # Record BEFORE the browser submit attempt -- the same record-then-submit
+    # ordering as sender.py's SMTP path. The INSERT (not the pre-check above)
+    # is what arbitrates two concurrent portal submits racing this job_id.
+    recorded = record_application(
+        conn, job_id=job_id, company=company, role=role,
+        url=entry.get("url", ""), channel="portal",
+    )
+    if not recorded:
+        update_entry(args.scan_date, args.job_id, lambda e: e.update(status="failed", error="duplicate"))
+        print("portal blocked: duplicate (race)", file=sys.stderr)
+        return 1
+
+    result = run_portal_application(entry, meta, profile, answers, dry_run=False, client=client)
+
+    if result.status == "submitted":
+        now = datetime.now(timezone.utc).isoformat()
+
+        def _sent(e: dict) -> None:
+            e["status"] = "sent"
+            e["applied_at"] = now
+            e["evidence_dir"] = result.evidence_dir
+
+        entry = update_entry(args.scan_date, args.job_id, _sent)
+        crm_mark_applied(entry.get("company", ""), entry.get("title", ""), entry.get("url", ""))
+        send_text(f"Sent: {entry.get('company')} / {entry.get('title')}")
+        return 0
+
+    if result.status == "needs_human":
+        def _needs_human(e: dict) -> None:
+            e["status"] = "needs_human"
+            e["error"] = result.reason
+            e["evidence_dir"] = result.evidence_dir
+
+        entry = update_entry(args.scan_date, args.job_id, _needs_human)
+        send_text(
+            f"{entry.get('company')} / {entry.get('title')}: needs human ({result.reason}). "
+            f"Apply manually: {entry.get('apply_target') or entry.get('url')}"
+        )
+        return 0
+
+    # failed: the attempt never got close enough to a real submission for the
+    # ledger row to mean anything -- roll it back so the job can be retried.
+    delete_application(conn, job_id=job_id)
+    entry = update_entry(
+        args.scan_date, args.job_id,
+        lambda e: e.update(status="failed", error=result.reason, evidence_dir=result.evidence_dir),
+    )
+    print(f"portal submit failed: {result.reason}", file=sys.stderr)
+    try:
+        send_text(f"{entry.get('company')} / {entry.get('title')}: portal submit failed ({result.reason})")
+    except Exception:  # noqa: BLE001 -- Telegram delivery is best-effort here
+        pass
+    return 1
 
 
 def main(argv=None) -> int:
@@ -132,12 +282,7 @@ def main(argv=None) -> int:
     apply_method = entry.get("apply_method")
 
     if apply_method == "portal":
-        entry = update_entry(args.scan_date, args.job_id, lambda e: e.update(status="ready"))
-        send_text(
-            f"{entry.get('company')} / {entry.get('title')} ready to apply: "
-            f"{entry.get('apply_target') or entry.get('url')}"
-        )
-        return 0
+        return _handle_portal(args, entry, meta)
 
     # email
     entry = update_entry(args.scan_date, args.job_id, lambda e: e.update(status="sending"))

@@ -373,6 +373,61 @@ def _relocation_answer(q: Question, answers: dict) -> Answer | _FailClosed | Non
     return Answer(opt, "answers:relocation")
 
 
+# --- current company/employer (Lever's `org` field: "Current company") ---
+#
+# There is no profile.contact field for this -- it is grounded in
+# profile.experiences instead. Without it, every Lever job dead-ends (the
+# field is REQUIRED on every real Lever board), since the deterministic tier
+# has nothing else to route it to and the LLM tier (when reachable) would
+# have to re-derive the same fact from the full profile dump on every job.
+
+_CURRENT_COMPANY_RE = re.compile(
+    r"\bcurrent\s+(?:company|employer|organi[sz]ation)\b|\bpresent\s+employer\b", re.I
+)
+
+# Roles that describe self-employment (running one's own business) or
+# freelance client work, not being employed BY a company -- excluded when
+# picking the "current employer": that field means employer, not "who do
+# you invoice". This is why Teodor's Ministeru' Creativ (Founder) and Wolff
+# Digital Marketing (freelance) entries are skipped in favor of EA.
+_SELF_EMPLOYED_RE = re.compile(r"\bfounder\b|\bfreelance\b", re.I)
+
+
+def _current_experience(profile: dict) -> dict | None:
+    """The most recent profile.experiences entry that reads as genuine
+    current employment: `dates` ends in "Present" (profile.yaml's convention
+    for an ongoing role) AND neither the role nor the company text reads as
+    self-employment or freelance work. Returns None when no experience
+    qualifies -- the caller falls through to the LLM tier (if reachable)
+    rather than guessing."""
+    for exp in (profile or {}).get("experiences", []) or []:
+        dates = str(exp.get("dates", "")).strip()
+        if not dates.lower().endswith("present"):
+            continue
+        role = str(exp.get("role", ""))
+        company = str(exp.get("company", ""))
+        if _SELF_EMPLOYED_RE.search(role) or _SELF_EMPLOYED_RE.search(company):
+            continue
+        return exp
+    return None
+
+
+def _current_company_answer(q: Question, profile: dict) -> Answer | None:
+    """Ground a "current company/employer" question in profile.experiences.
+    Returns the employer's `company` field verbatim -- never a shortened or
+    invented alias, per the honesty guard. text/select/etc. all go through
+    the same final kind/option gate as every other tier, so an option-picklist
+    current-company field that doesn't contain this exact string safely
+    fails closed rather than guessing."""
+    exp = _current_experience(profile)
+    if exp is None:
+        return None
+    company = str(exp.get("company", "")).strip()
+    if not company:
+        return None
+    return Answer(company, "profile:experiences.current")
+
+
 # --- currency-aware salary (fix 4) ---
 
 _NON_EUR_CURRENCY_RE = re.compile(
@@ -429,6 +484,8 @@ def _deterministic_answer(q: Question, profile: dict, answers: dict) -> Answer |
         return _from_answers(answers, "notice_period")
     if _is_work_auth_label(label):
         return _work_auth_answer(q, answers)
+    if _CURRENT_COMPANY_RE.search(label):
+        return _current_company_answer(q, profile)
     if _AVAILAB_RE.search(label):
         return _from_answers(answers, "availability_parttime")
 

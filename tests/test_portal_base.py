@@ -116,7 +116,7 @@ class DummyAdapter(PortalAdapter):
     hosts = ("127.0.0.1",)
     name = "dummy"
 
-    def apply(self, page, entry, package, profile, answers, *, dry_run):
+    def apply(self, page, entry, package, profile, answers, *, dry_run, client=None, deployment=None):
         fill_field(page, "#full_name", profile.get("contact", {}).get("name", ""))
         evidence_dir = Path(package["package_dir"]) / "portal"
         return PortalResult(status="filled", reason="", evidence_dir=str(evidence_dir))
@@ -130,7 +130,7 @@ class RaisingAdapter(PortalAdapter):
     hosts = ("127.0.0.1",)
     name = "raising"
 
-    def apply(self, page, entry, package, profile, answers, *, dry_run):
+    def apply(self, page, entry, package, profile, answers, *, dry_run, client=None, deployment=None):
         raise RuntimeError("adapter exploded")
 
 
@@ -143,7 +143,7 @@ class TimeoutRaisingAdapter(PortalAdapter):
     hosts = ("127.0.0.1",)
     name = "timeout-raising"
 
-    def apply(self, page, entry, package, profile, answers, *, dry_run):
+    def apply(self, page, entry, package, profile, answers, *, dry_run, client=None, deployment=None):
         raise PlaywrightTimeoutError("Timeout 5000ms exceeded waiting for selector")
 
 
@@ -535,6 +535,39 @@ def test_smoke_run_portal_application_dispatches_to_adapter_end_to_end(tmp_path,
 
 
 # --- run_portal_application: browser-backed failure paths --------------------
+
+class ClientCapturingAdapter(PortalAdapter):
+    """Records whatever client/deployment run_portal_application forwarded,
+    proving the C6 client-threading wire-up reaches the adapter."""
+
+    hosts = ("127.0.0.1",)
+    name = "client-capturing"
+
+    def __init__(self):
+        self.seen_client = "unset"
+        self.seen_deployment = "unset"
+
+    def apply(self, page, entry, package, profile, answers, *, dry_run, client=None, deployment=None):
+        self.seen_client = client
+        self.seen_deployment = deployment
+        evidence_dir = Path(package["package_dir"]) / "portal"
+        return PortalResult(status="filled", reason="", evidence_dir=str(evidence_dir))
+
+
+def test_run_portal_application_forwards_client_and_deployment_to_adapter(tmp_path, clean_registry):
+    adapter = ClientCapturingAdapter()
+    register_adapter(adapter)
+    package = {"package_dir": str(tmp_path / "pkg")}
+    sentinel_client = object()
+
+    with serve_fixtures() as base_url:
+        entry = {"id": "job-1", "apply_target": f"{base_url}/simple_form.html"}
+        run_portal_application(entry, package, {}, {}, dry_run=True,
+                                client=sentinel_client, deployment="gpt-4o-mini")
+
+    assert adapter.seen_client is sentinel_client
+    assert adapter.seen_deployment == "gpt-4o-mini"
+
 
 def test_run_portal_application_needs_human_when_blocker_detected_mid_navigation(tmp_path, clean_registry):
     register_adapter(DummyAdapter())

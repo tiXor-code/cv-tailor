@@ -81,6 +81,24 @@ def _spy_update_entry(mod, monkeypatch):
     return trail
 
 
+class _FakeRunPortal:
+    """Queued-reply stand-in for cv_tailor.portal.run_portal_application.
+    Records every call's kwargs (profile/answers/client/deployment/dry_run)
+    so tests can assert the orchestrator threaded them through correctly,
+    not just that it reacted to the returned status."""
+
+    def __init__(self, results):
+        self._results = list(results)
+        self.calls = []
+
+    def __call__(self, entry, package, profile, answers, *, dry_run, client=None, deployment=None):
+        self.calls.append({
+            "entry": entry, "package": package, "profile": profile, "answers": answers,
+            "dry_run": dry_run, "client": client, "deployment": deployment,
+        })
+        return self._results.pop(0)
+
+
 def _fake_assemble(*, warnings=None, package_dir):
     warnings = warnings or []
 
@@ -230,13 +248,33 @@ def test_force_from_needs_review_skips_warnings_stop_and_sends(mod, monkeypatch,
     assert entry["status"] == "sent"
 
 
-def test_portal_job_goes_ready_no_send(mod, monkeypatch, tmp_path):
+def _portal_queue(tmp_path):
     _write_queue(tmp_path, "2026-07-10", _entry(
         apply_method="portal", apply_target="https://acme.example/jobs/1"))
+
+
+def _stub_portal_prereqs(mod, monkeypatch, *, answers=None, client=None):
+    """Common portal-path stubs every trail test needs: assemble, a
+    controlled answers.yaml, and a fake Azure client (never touches real
+    creds -- build_azure_client() would raise without them)."""
+    monkeypatch.setattr(mod, "load_answers", lambda *a, **kw: answers if answers is not None else {})
+    monkeypatch.setattr(mod, "build_azure_client", lambda: client if client is not None else object())
+
+
+# --- unarmed: dry-run preview only, ledger never touched --------------------
+
+def test_portal_unarmed_filled_goes_ready_with_evidence(mod, monkeypatch, tmp_path):
+    from cv_tailor.portal import PortalResult
+
+    _portal_queue(tmp_path)
     trail = _spy_update_entry(mod, monkeypatch)
+    evidence_dir = str(tmp_path / "pkg" / "portal")
 
     monkeypatch.setattr(mod, "assemble_package", _fake_assemble(package_dir=tmp_path / "pkg"))
-    monkeypatch.setattr(mod, "send_application", lambda *a, **kw: pytest.fail("must not send"))
+    _stub_portal_prereqs(mod, monkeypatch)
+    fake_run = _FakeRunPortal([PortalResult(status="filled", reason="", evidence_dir=evidence_dir)])
+    monkeypatch.setattr(mod, "run_portal_application", fake_run)
+    monkeypatch.setattr(mod, "send_application", lambda *a, **kw: pytest.fail("must not send email"))
     monkeypatch.setattr(mod, "crm_mark_applied", lambda *a, **kw: pytest.fail("must not be called"))
     texts = []
     monkeypatch.setattr(mod, "send_text", lambda *a, **kw: texts.append(a) or True)
@@ -248,7 +286,260 @@ def test_portal_job_goes_ready_no_send(mod, monkeypatch, tmp_path):
     assert trail == ["assembling", "ready"]
     entry = _read_entry(tmp_path, "2026-07-10", "job-1")
     assert entry["status"] == "ready"
+    assert entry["evidence_dir"] == evidence_dir
     assert len(texts) == 1
+    assert fake_run.calls[0]["dry_run"] is True
+
+
+def test_portal_unarmed_needs_human_no_send(mod, monkeypatch, tmp_path):
+    from cv_tailor.portal import PortalResult
+
+    _portal_queue(tmp_path)
+    trail = _spy_update_entry(mod, monkeypatch)
+    evidence_dir = str(tmp_path / "pkg" / "portal")
+
+    monkeypatch.setattr(mod, "assemble_package", _fake_assemble(package_dir=tmp_path / "pkg"))
+    _stub_portal_prereqs(mod, monkeypatch)
+    monkeypatch.setattr(
+        mod, "run_portal_application",
+        _FakeRunPortal([PortalResult(status="needs_human", reason="captcha", evidence_dir=evidence_dir)]),
+    )
+    monkeypatch.setattr(mod, "send_application", lambda *a, **kw: pytest.fail("must not send"))
+    monkeypatch.setattr(mod, "crm_mark_applied", lambda *a, **kw: pytest.fail("must not be called"))
+    texts = []
+    monkeypatch.setattr(mod, "send_text", lambda *a, **kw: texts.append(a) or True)
+    monkeypatch.setattr(mod, "send_document", lambda *a, **kw: True)
+
+    rc = mod.main(["2026-07-10", "job-1"])
+
+    assert rc == 0
+    assert trail == ["assembling", "needs_human"]
+    entry = _read_entry(tmp_path, "2026-07-10", "job-1")
+    assert entry["status"] == "needs_human"
+    assert entry["error"] == "captcha"
+    assert entry["evidence_dir"] == evidence_dir
+    assert len(texts) == 1
+
+
+def test_portal_unarmed_failed_returns_1(mod, monkeypatch, tmp_path):
+    from cv_tailor.portal import PortalResult
+
+    _portal_queue(tmp_path)
+    trail = _spy_update_entry(mod, monkeypatch)
+    evidence_dir = str(tmp_path / "pkg" / "portal")
+
+    monkeypatch.setattr(mod, "assemble_package", _fake_assemble(package_dir=tmp_path / "pkg"))
+    _stub_portal_prereqs(mod, monkeypatch)
+    monkeypatch.setattr(
+        mod, "run_portal_application",
+        _FakeRunPortal([PortalResult(status="failed", reason="TimeoutError: nav timeout", evidence_dir=evidence_dir)]),
+    )
+    monkeypatch.setattr(mod, "send_application", lambda *a, **kw: pytest.fail("must not send"))
+    monkeypatch.setattr(mod, "crm_mark_applied", lambda *a, **kw: pytest.fail("must not be called"))
+    monkeypatch.setattr(mod, "send_text", lambda *a, **kw: True)
+    monkeypatch.setattr(mod, "send_document", lambda *a, **kw: True)
+
+    rc = mod.main(["2026-07-10", "job-1"])
+
+    assert rc == 1
+    assert trail == ["assembling", "failed"]
+    entry = _read_entry(tmp_path, "2026-07-10", "job-1")
+    assert entry["status"] == "failed"
+    assert "nav timeout" in entry["error"]
+    assert entry["evidence_dir"] == evidence_dir
+
+
+def test_portal_unarmed_threads_profile_answers_and_client_into_run_portal_application(mod, monkeypatch, tmp_path):
+    from cv_tailor.portal import PortalResult
+
+    _portal_queue(tmp_path)
+    _spy_update_entry(mod, monkeypatch)
+
+    monkeypatch.setattr(mod, "assemble_package", _fake_assemble(package_dir=tmp_path / "pkg"))
+    fake_answers = {"work_authorization": "EU citizen"}
+    sentinel_client = object()
+    _stub_portal_prereqs(mod, monkeypatch, answers=fake_answers, client=sentinel_client)
+    fake_run = _FakeRunPortal(
+        [PortalResult(status="filled", reason="", evidence_dir=str(tmp_path / "pkg" / "portal"))])
+    monkeypatch.setattr(mod, "run_portal_application", fake_run)
+    monkeypatch.setattr(mod, "send_text", lambda *a, **kw: True)
+
+    rc = mod.main(["2026-07-10", "job-1"])
+
+    assert rc == 0
+    call = fake_run.calls[0]
+    assert call["answers"] == fake_answers
+    assert call["client"] is sentinel_client
+    assert call["profile"]["contact"]["name"] == "Test User"  # tests/fixtures/profile_minimal.yaml
+
+
+# --- armed: ledger gates, record-then-submit ---------------------------------
+
+def test_portal_armed_submitted_goes_sending_sent_and_records_ledger(mod, monkeypatch, tmp_path):
+    from cv_tailor.cache import application_exists, connect
+    from cv_tailor.portal import PortalResult
+
+    monkeypatch.setenv("APPLY_ARMED", "1")
+    _portal_queue(tmp_path)
+    trail = _spy_update_entry(mod, monkeypatch)
+    evidence_dir = str(tmp_path / "pkg" / "portal")
+
+    monkeypatch.setattr(mod, "assemble_package", _fake_assemble(package_dir=tmp_path / "pkg"))
+    _stub_portal_prereqs(mod, monkeypatch)
+    fake_run = _FakeRunPortal([PortalResult(status="submitted", reason="", evidence_dir=evidence_dir)])
+    monkeypatch.setattr(mod, "run_portal_application", fake_run)
+    monkeypatch.setattr(mod, "send_application", lambda *a, **kw: pytest.fail("must not send email"))
+    crm_calls = []
+    monkeypatch.setattr(mod, "crm_mark_applied", lambda *a, **kw: crm_calls.append(a) or True)
+    texts = []
+    monkeypatch.setattr(mod, "send_text", lambda *a, **kw: texts.append(a) or True)
+    monkeypatch.setattr(mod, "send_document", lambda *a, **kw: True)
+
+    rc = mod.main(["2026-07-10", "job-1"])
+
+    assert rc == 0
+    assert trail == ["assembling", "sending", "sent"]
+    entry = _read_entry(tmp_path, "2026-07-10", "job-1")
+    assert entry["status"] == "sent"
+    assert entry.get("applied_at")
+    assert entry["evidence_dir"] == evidence_dir
+    assert fake_run.calls[0]["dry_run"] is False
+    assert crm_calls == [("Acme Inc.", "AI Engineer", "https://acme.example/jobs/1")]
+    assert len(texts) == 1
+
+    conn = connect(tmp_path / "jobs.db")
+    assert application_exists(conn, job_id="job-1", company="Acme Inc.", role="AI Engineer") is True
+
+
+def test_portal_armed_needs_human_keeps_ledger_row(mod, monkeypatch, tmp_path):
+    """Ambiguous outcome: the submission MAY have gone through -- the ledger
+    row recorded before the attempt must survive, so the job is never
+    silently re-submitted, and crm_mark_applied must NOT fire (it isn't
+    confirmed sent)."""
+    from cv_tailor.cache import application_exists, connect
+    from cv_tailor.portal import PortalResult
+
+    monkeypatch.setenv("APPLY_ARMED", "1")
+    _portal_queue(tmp_path)
+    trail = _spy_update_entry(mod, monkeypatch)
+    evidence_dir = str(tmp_path / "pkg" / "portal")
+
+    monkeypatch.setattr(mod, "assemble_package", _fake_assemble(package_dir=tmp_path / "pkg"))
+    _stub_portal_prereqs(mod, monkeypatch)
+    monkeypatch.setattr(
+        mod, "run_portal_application",
+        _FakeRunPortal([PortalResult(status="needs_human", reason="no-confirmation", evidence_dir=evidence_dir)]),
+    )
+    monkeypatch.setattr(mod, "send_application", lambda *a, **kw: pytest.fail("must not send"))
+    monkeypatch.setattr(mod, "crm_mark_applied", lambda *a, **kw: pytest.fail("must not be called on an ambiguous outcome"))
+    texts = []
+    monkeypatch.setattr(mod, "send_text", lambda *a, **kw: texts.append(a) or True)
+    monkeypatch.setattr(mod, "send_document", lambda *a, **kw: True)
+
+    rc = mod.main(["2026-07-10", "job-1"])
+
+    assert rc == 0
+    assert trail == ["assembling", "sending", "needs_human"]
+    entry = _read_entry(tmp_path, "2026-07-10", "job-1")
+    assert entry["status"] == "needs_human"
+    assert entry["error"] == "no-confirmation"
+    assert entry["evidence_dir"] == evidence_dir
+    assert len(texts) == 1
+
+    conn = connect(tmp_path / "jobs.db")
+    assert application_exists(conn, job_id="job-1", company="Acme Inc.", role="AI Engineer") is True
+
+
+def test_portal_armed_failed_rolls_back_ledger_row(mod, monkeypatch, tmp_path):
+    from cv_tailor.cache import application_exists, connect
+    from cv_tailor.portal import PortalResult
+
+    monkeypatch.setenv("APPLY_ARMED", "1")
+    _portal_queue(tmp_path)
+    trail = _spy_update_entry(mod, monkeypatch)
+    evidence_dir = str(tmp_path / "pkg" / "portal")
+
+    monkeypatch.setattr(mod, "assemble_package", _fake_assemble(package_dir=tmp_path / "pkg"))
+    _stub_portal_prereqs(mod, monkeypatch)
+    monkeypatch.setattr(
+        mod, "run_portal_application",
+        _FakeRunPortal([PortalResult(status="failed", reason="RuntimeError: browser crashed", evidence_dir=evidence_dir)]),
+    )
+    monkeypatch.setattr(mod, "send_application", lambda *a, **kw: pytest.fail("must not send"))
+    monkeypatch.setattr(mod, "crm_mark_applied", lambda *a, **kw: pytest.fail("must not be called"))
+    texts = []
+    monkeypatch.setattr(mod, "send_text", lambda *a, **kw: texts.append(a) or True)
+    monkeypatch.setattr(mod, "send_document", lambda *a, **kw: True)
+
+    rc = mod.main(["2026-07-10", "job-1"])
+
+    assert rc == 1
+    assert trail == ["assembling", "sending", "failed"]
+    entry = _read_entry(tmp_path, "2026-07-10", "job-1")
+    assert entry["status"] == "failed"
+    assert "browser crashed" in entry["error"]
+    assert entry["evidence_dir"] == evidence_dir
+    assert len(texts) == 1  # best-effort failure notification attempted
+
+    conn = connect(tmp_path / "jobs.db")
+    assert application_exists(conn, job_id="job-1", company="Acme Inc.", role="AI Engineer") is False
+
+
+def test_portal_armed_duplicate_blocks_before_browser_attempt(mod, monkeypatch, tmp_path):
+    from cv_tailor.cache import connect, record_application
+
+    monkeypatch.setenv("APPLY_ARMED", "1")
+    _portal_queue(tmp_path)
+    trail = _spy_update_entry(mod, monkeypatch)
+
+    conn = connect(tmp_path / "jobs.db")
+    record_application(conn, job_id="job-1", company="Acme Inc.", role="AI Engineer",
+                        url="https://acme.example/jobs/1", channel="portal")
+
+    monkeypatch.setattr(mod, "assemble_package", _fake_assemble(package_dir=tmp_path / "pkg"))
+    _stub_portal_prereqs(mod, monkeypatch)
+    monkeypatch.setattr(
+        mod, "run_portal_application",
+        lambda *a, **kw: pytest.fail("must not attempt the browser on a duplicate"),
+    )
+    monkeypatch.setattr(mod, "send_text", lambda *a, **kw: True)
+
+    rc = mod.main(["2026-07-10", "job-1"])
+
+    assert rc == 1
+    assert trail == ["assembling", "failed"]
+    entry = _read_entry(tmp_path, "2026-07-10", "job-1")
+    assert entry["status"] == "failed"
+    assert entry["error"] == "duplicate"
+
+
+def test_portal_armed_daily_cap_blocks_before_browser_attempt(mod, monkeypatch, tmp_path):
+    from cv_tailor.cache import connect, record_application
+
+    monkeypatch.setenv("APPLY_ARMED", "1")
+    monkeypatch.setenv("APPLY_DAILY_CAP", "1")
+    _portal_queue(tmp_path)
+    trail = _spy_update_entry(mod, monkeypatch)
+
+    conn = connect(tmp_path / "jobs.db")
+    record_application(conn, job_id="other-job", company="Other Co", role="Other Role",
+                        url="https://other.example", channel="email")
+
+    monkeypatch.setattr(mod, "assemble_package", _fake_assemble(package_dir=tmp_path / "pkg"))
+    _stub_portal_prereqs(mod, monkeypatch)
+    monkeypatch.setattr(
+        mod, "run_portal_application",
+        lambda *a, **kw: pytest.fail("must not attempt the browser over the daily cap"),
+    )
+    monkeypatch.setattr(mod, "send_text", lambda *a, **kw: True)
+
+    rc = mod.main(["2026-07-10", "job-1"])
+
+    assert rc == 1
+    assert trail == ["assembling", "failed"]
+    entry = _read_entry(tmp_path, "2026-07-10", "job-1")
+    assert entry["status"] == "failed"
+    assert entry["error"] == "daily-cap"
 
 
 def test_assemble_raises_marks_failed_with_error(mod, monkeypatch, tmp_path):

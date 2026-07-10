@@ -197,7 +197,8 @@ class GreenhouseAdapter(PortalAdapter):
     CONFIRM_TIMEOUT_MS = 30_000
 
     def apply(self, page, entry: dict, package: dict, profile: dict,
-              answers: dict, *, dry_run: bool) -> PortalResult:
+              answers: dict, *, dry_run: bool, client: Any = None,
+              deployment: str | None = None) -> PortalResult:
         evidence_dir = Path(package["package_dir"]) / "portal"
 
         # Greenhouse's real Job Board is a React app: the "load" event
@@ -265,14 +266,12 @@ class GreenhouseAdapter(PortalAdapter):
                                          evidence_dir=str(evidence_dir))
                 continue
 
-            # No LLM client is wired into the adapter (apply()'s signature
-            # is fixed by the base class), so answer_question always runs
-            # deterministic-tier-only -- per its own contract that means
-            # ANY ungrounded question returns None, not just required ones
-            # (client=None: "anything that would need the LLM returns
-            # None"). Only abort when the question was actually required;
-            # an ungrounded optional question is a normal skip.
-            answer = answer_question(question, profile, answers)
+            # client is forwarded from apply() (None by default, meaning
+            # deterministic-tier-only -- per answer_question's own contract
+            # that means ANY ungrounded question returns None, not just
+            # required ones). Only abort when the question was actually
+            # required; an ungrounded optional question is a normal skip.
+            answer = answer_question(question, profile, answers, client=client, deployment=deployment)
             if answer is None:
                 if not question.required:
                     continue

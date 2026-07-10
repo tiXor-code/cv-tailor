@@ -513,3 +513,86 @@ def test_probe_eeo_birth_date_declines():
     q = _q("Birth date", kind="select", options=("18-25", "26-35", "Prefer not to say"))
     out = answer_question(q, _PROFILE, _FULL_ANSWERS)
     assert out == Answer("Prefer not to say", "policy:eeo-decline")
+
+
+# ---------------------------------------------------------------------------
+# Current company/employer (Lever's `org` field). Grounded in
+# profile.experiences, not profile.contact -- and must skip self-employment
+# (Founder) / freelance entries in favor of a genuine employer, mirroring
+# Teodor's real profile.yaml shape (Ministeru' Creativ founder + Wolff
+# freelance + EA employee, all three dated "... - Present").
+# ---------------------------------------------------------------------------
+
+_PROFILE_MULTI_CURRENT = {
+    **_PROFILE,
+    "experiences": [
+        {"id": "agency", "role": "Founder", "company": "Acme Creative",
+         "dates": "Mar 2026 - Present"},
+        {"id": "gig", "role": "Content Producer (freelance, ongoing)",
+         "company": "Freelance Studio", "dates": "Jan 2026 - Present"},
+        {"id": "job", "role": "Assistant Engineer", "company": "Big Corp",
+         "dates": "Aug 2024 - Present"},
+        {"id": "old", "role": "Intern", "company": "Old Co",
+         "dates": "Jan 2020 - Dec 2021"},
+    ],
+}
+
+_PROFILE_NO_EXPERIENCES = {**_PROFILE, "experiences": []}
+
+
+@pytest.mark.parametrize("label", ["Current company", "Current employer", "Present employer"])
+def test_current_company_grounds_in_the_genuine_employer_not_founder_or_freelance(label):
+    q = _q(label)
+    out = answer_question(q, _PROFILE_MULTI_CURRENT, _ANSWERS)
+    assert out == Answer("Big Corp", "profile:experiences.current")
+
+
+def test_current_company_no_experiences_returns_none():
+    q = _q("Current company")
+    assert answer_question(q, _PROFILE_NO_EXPERIENCES, _ANSWERS) is None
+
+
+def test_current_company_only_self_employed_present_entries_returns_none():
+    profile = {
+        **_PROFILE,
+        "experiences": [
+            {"id": "agency", "role": "Founder", "company": "Acme Creative", "dates": "Mar 2026 - Present"},
+        ],
+    }
+    q = _q("Current company")
+    assert answer_question(q, profile, _ANSWERS) is None
+
+
+def test_current_company_falls_through_to_llm_when_no_genuine_employer():
+    """No grounded experience -> client=None returns None (never guesses);
+    with a client, the LLM tier gets a shot, same as any other unmatched
+    deterministic category."""
+    profile = {
+        **_PROFILE,
+        "experiences": [
+            {"id": "agency", "role": "Founder", "company": "Acme Creative", "dates": "Mar 2026 - Present"},
+        ],
+    }
+    client = _FakeClient(["Acme Creative (self-employed)"])
+    q = _q("Current company")
+    out = answer_question(q, profile, _ANSWERS, client=client)
+    assert out == Answer("Acme Creative (self-employed)", "llm:grounded")
+    assert client.calls == 1
+
+
+def test_current_company_select_option_mismatch_fails_closed_required():
+    q = _q("Current company", kind="select", required=True, options=("Google", "Meta"))
+    out = answer_question(q, _PROFILE_MULTI_CURRENT, _ANSWERS)
+    assert out is None
+
+
+def test_current_company_never_confused_with_generic_company_name_routing():
+    """A plain "Company name" question (no "current"/"employer" wording) must
+    never route to the current-employer tier -- "company name" is a generic
+    field (references, prior employer history, etc.), not specifically "my
+    own present employer". It happens to match profile.contact.name instead
+    (pre-existing \\bname\\b routing, unrelated to this tier) -- the point
+    here is only that it is NOT grounded in profile.experiences.current."""
+    q = _q("Company name")
+    out = answer_question(q, _PROFILE_MULTI_CURRENT, _ANSWERS)
+    assert out != Answer("Big Corp", "profile:experiences.current")
