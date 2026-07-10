@@ -1,0 +1,162 @@
+<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>Software Engineer - AI Systems @ Ashby Fixture Co</title></head>
+<body>
+<!--
+  Ashby application-form fixture. Field names/ids and the tab/panel
+  structure are copied from a real live posting's rendered DOM
+  (jobs.ashbyhq.com/xbowcareers/<job-id>/application, fetched 2026-07-10
+  with headless chromium) so the adapter under test exercises the real
+  selectors (_systemfield_name, _systemfield_email, _systemfield_resume,
+  role=tablist/tab/tabpanel with ids job-overview/job-application-form).
+
+  Simplifications from the real Ashby DOM (documented, same spirit as
+  blocked_form.html's recaptcha-iframe simplification):
+  - Ashby's client router serves Overview/Application as separate routes;
+    here both panels live in one static page and a JS click handler on the
+    "Application" tab toggles which is visible.
+  - Ashby's Yes/No questions render as a custom button pair backed by a
+    hidden checkbox, and there is no native <select> anywhere in the real
+    form. This fixture's screening "select question" uses a native
+    <select> as the equivalent single-choice control, for testability.
+  - The real location field is an autocomplete combobox (role="combobox",
+    no name attribute); simplified here to a plain named text input.
+  - Submission is fixture-only: the submit handler swaps the form panel
+    for a local #confirmation panel instead of a real network POST.
+  - Real Ashby forms do not carry a phone field by default; this fixture
+    adds one as a custom systemfield-style input (some org configs do add
+    a custom "Phone Number" question) so the adapter's contact-fill path
+    has real coverage.
+
+  Query-string variants (kept in this one file, per the task's exclusive
+  file list, instead of extra fixture files):
+  - ?variant=unanswerable  -- swaps the required screening question's
+    label to an ungrounded one, for the required-unanswerable test path.
+  - ?variant=captcha       -- injects a reCAPTCHA iframe into the DOM only
+    once the Application tab is opened (not present at initial page
+    load), so the scenario exercises the ADAPTER's own post-navigation
+    blocker recheck, not just the C1 harness's pre-dispatch check.
+  - ?variant=nosubmit      -- the submit button does a real (same-origin)
+    form GET instead of the JS-handled fixture "submit", so no
+    confirmation text ever appears -- exercises the no-confirmation path.
+-->
+<nav role="tablist">
+  <a id="job-overview" role="tab" aria-selected="true" href="#overview">Overview</a>
+  <a id="job-application-form" role="tab" aria-selected="false" href="#form">Application</a>
+</nav>
+
+<div id="overview" role="tabpanel">
+  <h1>Software Engineer - AI Systems</h1>
+  <p>Fixture Co is hiring a software engineer for its AI systems team.</p>
+</div>
+
+<div id="form" role="tabpanel" style="display:none">
+  <form id="application-form">
+    <h2>Personal details</h2>
+
+    <div class="ashby-application-form-field-entry" data-field-path="_systemfield_name">
+      <label for="_systemfield_name">Name</label>
+      <input type="text" name="_systemfield_name" id="_systemfield_name" placeholder="Type here..." required>
+    </div>
+
+    <div class="ashby-application-form-field-entry" data-field-path="_systemfield_email">
+      <label for="_systemfield_email">Email</label>
+      <input type="email" name="_systemfield_email" id="_systemfield_email" placeholder="hello@example.com..." required>
+    </div>
+
+    <div class="ashby-application-form-field-entry" data-field-path="_systemfield_phone">
+      <label for="_systemfield_phone">Phone Number</label>
+      <input type="tel" name="_systemfield_phone" id="_systemfield_phone" placeholder="Type here...">
+    </div>
+
+    <div class="ashby-application-form-field-entry" data-field-path="_systemfield_location">
+      <label for="_systemfield_location">Location</label>
+      <input type="text" name="_systemfield_location" id="_systemfield_location" placeholder="Start typing..." role="combobox">
+    </div>
+
+    <div class="ashby-application-form-field-entry" data-field-path="_systemfield_resume">
+      <label for="_systemfield_resume">Resume</label>
+      <input type="file" id="_systemfield_resume" required>
+    </div>
+
+    <div class="ashby-application-form-field-entry" data-field-path="_systemfield_cover_letter">
+      <label for="_systemfield_cover_letter">Cover Letter (optional)</label>
+      <textarea name="_systemfield_cover_letter" id="_systemfield_cover_letter" placeholder="Type here..."></textarea>
+    </div>
+
+    <h2>Screening questions</h2>
+
+    <div class="ashby-application-form-field-entry" data-field-path="q_source">
+      <label for="q_source">How did you hear about us?</label>
+      <select name="q_source" id="q_source">
+        <option value="">Select...</option>
+        <option value="LinkedIn">LinkedIn</option>
+        <option value="Referral">Referral</option>
+        <option value="Job Board">Job Board</option>
+        <option value="Other">Other</option>
+      </select>
+    </div>
+
+    <div class="ashby-application-form-field-entry" data-field-path="q_required_text">
+      <label for="q_required_text" id="q_required_text_label">What is your notice period?</label>
+      <input type="text" name="q_required_text" id="q_required_text" placeholder="Type here..." required>
+    </div>
+
+    <button type="submit" id="submit-btn">Submit Application</button>
+  </form>
+
+  <div id="confirmation" style="display:none">
+    <p>Your application has been submitted!</p>
+  </div>
+</div>
+
+<script>
+(function () {
+  var params = new URLSearchParams(window.location.search);
+  var variant = params.get("variant");
+
+  if (variant === "unanswerable") {
+    document.getElementById("q_required_text_label").textContent =
+      "Briefly describe a recent project or challenge you're proud of.";
+  }
+
+  var appTab = document.getElementById("job-application-form");
+  var overviewTab = document.getElementById("job-overview");
+  var overviewPanel = document.getElementById("overview");
+  var formPanel = document.getElementById("form");
+
+  appTab.addEventListener("click", function (ev) {
+    ev.preventDefault();
+    overviewTab.setAttribute("aria-selected", "false");
+    appTab.setAttribute("aria-selected", "true");
+    overviewPanel.style.display = "none";
+    formPanel.style.display = "block";
+
+    if (variant === "captcha" && !document.getElementById("captcha-frame")) {
+      var iframe = document.createElement("iframe");
+      iframe.id = "captcha-frame";
+      iframe.title = "reCAPTCHA challenge";
+      iframe.src = "about:blank?recaptcha=1";
+      formPanel.appendChild(iframe);
+    }
+  });
+
+  overviewTab.addEventListener("click", function (ev) {
+    ev.preventDefault();
+    appTab.setAttribute("aria-selected", "false");
+    overviewTab.setAttribute("aria-selected", "true");
+    formPanel.style.display = "none";
+    overviewPanel.style.display = "block";
+  });
+
+  if (variant !== "nosubmit") {
+    document.getElementById("application-form").addEventListener("submit", function (ev) {
+      ev.preventDefault();
+      document.getElementById("application-form").style.display = "none";
+      document.getElementById("confirmation").style.display = "block";
+    });
+  }
+})();
+</script>
+</body>
+</html>

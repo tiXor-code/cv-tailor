@@ -7,6 +7,7 @@ from cv_tailor.portal.base import (
     adapter_for,
     run_portal_application,
 )
+from cv_tailor.portal import ashby  # noqa
 from cv_tailor.portal import greenhouse  # noqa
 from cv_tailor.portal import lever  # noqa
 
