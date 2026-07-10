@@ -1,0 +1,10 @@
+salary_fulltime_gross_eur_month: 1234
+salary_fulltime_net_eur_month: "900-1100"
+hourly_rate_min_eur: 15
+availability_parttime: "weekends"
+work_authorization: "Test citizen, test authorization."
+notice_period: "10 days"
+links:
+  website: "https://fixture.test"
+  linkedin: "https://linkedin.com/in/fixture"
+  github: "https://github.com/fixture"

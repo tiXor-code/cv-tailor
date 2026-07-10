@@ -1,0 +1,15 @@
+# Copy this file to answers.yaml and fill in your real values.
+# answers.yaml is gitignored and must never be committed.
+salary_fulltime_gross_eur_month: 4000
+salary_fulltime_net_eur_month: "2000-2400"
+hourly_rate_min_eur: 25
+availability_parttime: "Tuesday and Thursday evenings"
+work_authorization: >-
+  EU citizen (example). Can work as an employee for any company hiring in the
+  EU, or as an independent contractor.
+notice_period: "30 calendar days"
+relocation: "Not open to relocation; remote only (example)."
+links:
+  website: "https://example.com"
+  linkedin: "https://linkedin.com/in/example"
+  github: "https://github.com/example"

@@ -1,6 +1,7 @@
 # Secrets
 .env
 .secrets/
+answers.yaml
 
 # Job artifacts (per-application output)
 jobs/
