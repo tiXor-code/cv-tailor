@@ -44,3 +44,15 @@ def test_cc_address_is_not_a_candidate():
 def test_single_line_second_sentence_email_does_not_downgrade():
     d = "Send your CV to jobs@acme.dev to apply. Questions? reach out to hello@acme.dev anytime."
     assert detect_apply_channel(d) == ("email", "jobs@acme.dev")
+
+def test_slash_joined_no_space_is_ambiguous():
+    assert detect_apply_channel("Apply via careers@acme.dev/hr@acme.dev") == ("portal", None)
+
+def test_slash_joined_no_space_company_domain_wins():
+    m, t = detect_apply_channel("Send your CV to jobs@thirdparty.com/careers@acme.dev please",
+                                company_domain="acme.dev")
+    assert (m, t) == ("email", "careers@acme.dev")
+
+def test_or_without_trailing_space_does_not_glue():
+    # 'or' with no space after it must NOT be treated as a joiner
+    assert detect_apply_channel("Send your CV to jobs@acme.dev orbit@space.dev is unrelated") == ("email", "jobs@acme.dev")

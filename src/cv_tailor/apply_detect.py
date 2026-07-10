@@ -16,7 +16,7 @@ _PATTERNS = [
 # joiner, so any sentence-ending punctuation (. ! ?) or newline between the
 # previous email and the joiner breaks the chain -- it can never be consumed
 # by this pattern, keeping the match bounded to the same sentence/line.
-_OR_JOINED = re.compile(r"[ \t]*(?:,[ \t]*)?(?:or|and|/)[ \t]+(" + _EMAIL + ")", re.I)
+_OR_JOINED = re.compile(r"[ \t]*(?:,[ \t]*)?(?:(?:or|and)[ \t]+|/[ \t]*)(" + _EMAIL + ")", re.I)
 _BLOCKED_LOCAL = ("noreply", "no-reply", "donotreply", "privacy", "gdpr", "support", "unsubscribe")
 
 
