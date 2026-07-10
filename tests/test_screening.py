@@ -446,3 +446,70 @@ def test_probe_llm_decline_backstop_no_option_required_none():
     out = answer_question(q, _PROFILE, _FULL_ANSWERS, client=client)
     assert out is None
     assert client.calls == 1
+
+
+# ---------------------------------------------------------------------------
+# Fix round 2 probes.
+# ---------------------------------------------------------------------------
+
+# Finding 1: "tell us" / "let us" pronoun must not resolve to USA jurisdiction.
+def test_probe_tell_us_pronoun_not_usa_yes():
+    q = _q("Please tell us whether you are authorized to work.", kind="select", options=("Yes", "No"))
+    out = answer_question(q, _PROFILE, _FULL_ANSWERS)
+    assert out is None  # no jurisdiction detected -> falls to LLM tier -> None with client=None
+
+
+def test_probe_let_us_know_pronoun_not_usa():
+    q = _q("Are you authorized to work? Please let us know.", kind="select", options=("Yes", "No"))
+    out = answer_question(q, _PROFILE, _FULL_ANSWERS)
+    assert out is None
+
+
+# Real "US" jurisdiction must still resolve deterministically.
+def test_probe_authorized_in_the_us_still_resolves_no():
+    q = _q("Are you authorized to work in the US?", kind="select", options=("Yes", "No"))
+    out = answer_question(q, _PROFILE, _FULL_ANSWERS)
+    assert out == Answer("No", "answers:work_authorization")
+
+
+def test_probe_authorized_for_the_us_market_still_resolves_no():
+    q = _q("Are you authorized to work for the US market?", kind="select", options=("Yes", "No"))
+    out = answer_question(q, _PROFILE, _FULL_ANSWERS)
+    assert out == Answer("No", "answers:work_authorization")
+
+
+# Finding 2: "network engineer" / "internet" must not misroute gross->net band.
+def test_probe_network_engineer_salary_is_gross_not_net():
+    q = _q("What salary do you expect as a network engineer?")
+    out = answer_question(q, _PROFILE, _FULL_ANSWERS)
+    assert "gross" in out.value
+    assert "net" not in out.value
+
+
+# Finding 3: LLM tier must run the same kind gate as the deterministic tier,
+# so a select field with no options doesn't accept raw LLM prose.
+def test_probe_llm_select_no_options_required_returns_none():
+    client = _FakeClient(["Blue"])
+    q = _q("Favorite color?", kind="select", required=True, options=())
+    out = answer_question(q, _PROFILE, _FULL_ANSWERS, client=client)
+    assert out is None
+
+
+def test_probe_llm_select_no_options_optional_skips():
+    client = _FakeClient(["Blue"])
+    q = _q("Favorite color?", kind="select", required=False, options=())
+    out = answer_question(q, _PROFILE, _FULL_ANSWERS, client=client)
+    assert out == Answer("", "policy:skip")
+
+
+# Finding 4: EEO recall for "dob" / "birth date" (reversed order from "date of birth").
+def test_probe_eeo_dob_declines():
+    q = _q("DOB", kind="select", options=("18-25", "26-35", "Prefer not to say"))
+    out = answer_question(q, _PROFILE, _FULL_ANSWERS)
+    assert out == Answer("Prefer not to say", "policy:eeo-decline")
+
+
+def test_probe_eeo_birth_date_declines():
+    q = _q("Birth date", kind="select", options=("18-25", "26-35", "Prefer not to say"))
+    out = answer_question(q, _PROFILE, _FULL_ANSWERS)
+    assert out == Answer("Prefer not to say", "policy:eeo-decline")

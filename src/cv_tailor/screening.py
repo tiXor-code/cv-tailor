@@ -84,7 +84,7 @@ _EEO_RE = re.compile(
     r"\bhispanic\b|\blatin[oax]\b|\blgbtq\+?|"
     r"\btransgender\b|\bnon-?binary\b|"
     r"\breligio|\bnational origin\b|"
-    r"\bdate of birth\b|\bage\b",
+    r"\bdate of birth\b|\bdob\b|\bbirth\s*date\b|\bage\b",
     re.I,
 )
 
@@ -276,6 +276,10 @@ _NON_EU_JURISDICTION_RE = re.compile(
     r"uae|dubai|qatar|saudi|south africa|nigeria|turkey|russia)\b",
     re.I,
 )
+# Standalone "US" only counts as the USA when it appears in a jurisdiction-
+# shaped context ("authorized to work in the US", "for the US market") --
+# never bare, so pronoun uses ("tell us", "let us know") don't misfire.
+_US_CONTEXT_RE = re.compile(r"\b(?:in|within|for)\s+(?:the\s+)?us\b", re.I)
 
 
 def _detect_jurisdiction(label: str) -> str | None:
@@ -283,10 +287,10 @@ def _detect_jurisdiction(label: str) -> str | None:
     # Non-EU first so "northern ireland" isn't swallowed by EU "ireland".
     if _NON_EU_JURISDICTION_RE.search(low):
         return "non_eu"
-    # standalone "US" with a pronoun guard ("with/join/for us" is not the USA).
-    if re.search(r"\bus\b", low) and not re.search(
-        r"\b(?:with|join|for|contact|reach|email|help)\s+us\b", low
-    ):
+    # standalone "US" requires a jurisdiction-shaped context ("in/within/for
+    # (the) US") so pronoun uses ("tell us", "let us know") are never mistaken
+    # for the USA.
+    if _US_CONTEXT_RE.search(low):
         return "non_eu"
     if _EU_JURISDICTION_RE.search(low):
         return "eu"
@@ -382,7 +386,7 @@ _EUR_RE = re.compile(r"€|\beur\b|\beuros?\b", re.I)
 
 def _salary_answer(q: Question, answers: dict) -> Answer | _FailClosed | None:
     label = q.label.lower()
-    net = "net" in label
+    net = bool(re.search(r"\bnet\b", label))
     key = "salary_fulltime_net_eur_month" if net else "salary_fulltime_gross_eur_month"
     raw = _from_answers(answers, key)
     if raw is None:
@@ -520,21 +524,17 @@ def _llm_answer(
             return Answer(decline, "policy:eeo-decline")
         return _fail_closed_result(q)
 
-    if q.options:
-        matched = _match_option(raw, q.options)
-        raw = matched if matched is not None else "UNKNOWN"
-
     if not raw or raw.strip().upper() == "UNKNOWN":
         return _fail_closed_result(q)
 
-    # Kind gate: a number field must receive a bare, unambiguous number.
-    if q.kind == "number":
-        num = _bare_number(raw)
-        if num is None:
-            return _fail_closed_result(q)
-        raw = num
-
-    return Answer(raw, "llm:grounded")
+    # Single choke point: the same kind/option gate the deterministic tier
+    # uses. select/radio/checkbox must exact-match an option -- a kind="select"
+    # with no options() can never be satisfied by raw LLM prose; number must be
+    # a bare number; text/textarea pass through.
+    gated = _kind_gate(q, Answer(raw, "llm:grounded"))
+    if gated is _FAIL_CLOSED:
+        return _fail_closed_result(q)
+    return gated
 
 
 # ---------------------------------------------------------------------------
