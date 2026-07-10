@@ -137,13 +137,15 @@ def main(argv=None):
     for j in survivors:
         try:
             hint = smb_hint(j, conn)
-            r = score_job(profile, j.title, f"{j.location} [{hint}]", j.description, client=client)
+            track = getattr(j, "track", "ai")
+            r = score_job(profile, j.title, f"{j.location} [{hint}]", j.description,
+                          client=client, track=track)
             s = int(r.get("score", 0))
             mark_seen(conn, j, score=s)
             if s >= args.min_score:
                 scored.append({"job": j, "score": s, "reason": r.get("reason", ""),
                                "keywords": r.get("key_keywords_matched", []),
-                               "track": getattr(j, "track", "ai")})
+                               "track": track})
         except Exception as e:
             # A bad/expired credential fails EVERY job identically. Abort loudly instead
             # of grinding through the whole list and writing an empty queue.

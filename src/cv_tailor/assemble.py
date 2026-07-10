@@ -61,6 +61,43 @@ def build_jd_text(entry: dict, jd_body: str) -> str:
     )
 
 
+def _select_track(profile: dict, entry: dict) -> tuple[str, dict | None]:
+    """Resolve the entry's track id and its `tracks:` config block.
+
+    A missing `track` key defaults to "ai". An id that isn't a key in
+    profile["tracks"] (a typo, or an id from a newer schema this profile
+    predates) also falls back to "ai" -- per the brief, unknown/missing
+    track resolves to the ai track's config. If profile.yaml has no
+    `tracks:` block at all (older profile, or the ai id isn't configured
+    either), the config is None and callers fall back to current
+    (unrestricted) behavior -- this never crashes on legacy entries.
+    """
+    tracks_cfg = profile.get("tracks") or {}
+    track = entry.get("track") or "ai"
+    cfg = tracks_cfg.get(track)
+    if cfg is None and track != "ai":
+        track = "ai"
+        cfg = tracks_cfg.get("ai")
+    return track, cfg
+
+
+def _profile_for_tailor(profile: dict, track_cfg: dict | None) -> dict:
+    """Constrain the summary_pool the tailor LLM sees to exactly the track's
+    summary_id, so chosen_summary_id/summary_rewrite are grounded in the
+    right background (ai vs content) instead of the LLM picking freely from
+    the whole pool. No track config (or the configured summary_id isn't in
+    the pool) -> return profile unchanged, the pre-track behavior."""
+    if not track_cfg:
+        return profile
+    summary_id = track_cfg.get("summary_id")
+    matched = [s for s in profile.get("summary_pool", []) if s.get("id") == summary_id]
+    if not matched:
+        return profile
+    constrained = dict(profile)
+    constrained["summary_pool"] = matched
+    return constrained
+
+
 def assemble_package(entry: dict, scan_date: str, *, queue_dir=None, client=None) -> dict:
     """Tailor + render + validate one job into a package dir. Returns the
     meta dict plus package_dir/cv_path/cover_letter_path (str paths). Does
@@ -84,10 +121,20 @@ def assemble_package(entry: dict, scan_date: str, *, queue_dir=None, client=None
     templates_dir = Path(os.environ.get("CV_TAILOR_TEMPLATES", ROOT / "templates"))
     profile = load_profile(profile_path, strict=True)
 
+    track, track_cfg = _select_track(profile, entry)
+    tailor_profile = _profile_for_tailor(profile, track_cfg)
+
     client = client or build_azure_client()
-    fields = tailor(profile, jd_text, client=client)
+    fields = tailor(tailor_profile, jd_text, client=client)
     fields.setdefault("job_meta", {})["company"] = company
     fields["job_meta"]["role"] = role
+
+    # Restrict which skill groups the CV template renders/orders to the
+    # track's list (templates/cv.html.j2's optional fields.skills_groups).
+    # No track config -> leave fields alone, every profile.skills group
+    # renders (current/pre-track behavior).
+    if track_cfg and track_cfg.get("skill_groups"):
+        fields["skills_groups"] = list(track_cfg["skill_groups"])
 
     # canonical-case skills (LLMs lowercase), then drop any skill the LLM
     # invented that isn't in profile.skills at all. Dropping a claimed
@@ -125,7 +172,7 @@ def assemble_package(entry: dict, scan_date: str, *, queue_dir=None, client=None
         "job_id": entry.get("id"), "company": company, "role": role,
         "url": entry.get("url"), "source": entry.get("source"),
         "apply_method": entry.get("apply_method"), "slug": slug,
-        "jd_source": jd_source, "assembled_at": now,
+        "jd_source": jd_source, "assembled_at": now, "track": track,
         "one_line_pitch": fields.get("one_line_pitch"),
         "gaps_honest": fields.get("gaps_honest", []),
         "jd_keywords_matched": fields.get("jd_keywords_matched", []),

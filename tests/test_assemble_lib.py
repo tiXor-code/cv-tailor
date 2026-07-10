@@ -193,3 +193,108 @@ def test_assemble_package_skills_dropped_empty_when_none_dropped(tmp_path):
     result = assemble_package(entry, "2026-07-10", queue_dir=tmp_path, client="unused-sentinel")
 
     assert result["skills_dropped"] == []
+
+
+# --- Task B2: track-aware scoring + assembly ---------------------------------
+
+TRACKS_PROFILE = str(ROOT / "tests" / "fixtures" / "profile_tracks.yaml")
+
+
+def _fake_tailor_capturing(captured, chosen_summary_id):
+    """Records the exact profile dict handed to tailor() (so a test can
+    inspect what summary_pool the LLM prompt would have been built from) and
+    returns FIELDS with chosen_summary_id overridden to the track's id."""
+    def _tailor(profile, jd_text, *, client=None, deployment=None):
+        captured["profile"] = profile
+        fields = json.loads(json.dumps(FIELDS))
+        fields["chosen_summary_id"] = chosen_summary_id
+        return fields
+    return _tailor
+
+
+def _capturing_cover_letter_factory(seen_fields):
+    def _cover_letter(profile, jd_text, fields, *, client=None, deployment=None):
+        seen_fields["skills_groups"] = fields.get("skills_groups")
+        return CLEAN_LETTER
+    return _cover_letter
+
+
+def test_assemble_package_content_track_selects_summary_and_groups(tmp_path, monkeypatch):
+    """track='content' constrains the tailor prompt's summary_pool to only the
+    content track's summary_id, and restricts fields.skills_groups (the
+    template's selectable-groups hook) to the content track's list."""
+    monkeypatch.setenv("CV_TAILOR_PROFILE", TRACKS_PROFILE)
+    captured = {}
+    monkeypatch.setattr(assemble_mod, "tailor", _fake_tailor_capturing(captured, "content_summary"))
+    seen_fields = {}
+    monkeypatch.setattr(assemble_mod, "cover_letter", _capturing_cover_letter_factory(seen_fields))
+
+    entry = _entry(id="content-job", track="content")
+    _seed_description(tmp_path, "2026-07-10", entry["id"], "We need a freelance video editor.")
+
+    result = assemble_package(entry, "2026-07-10", queue_dir=tmp_path, client="unused-sentinel")
+
+    tailor_pool_ids = {s["id"] for s in captured["profile"]["summary_pool"]}
+    assert tailor_pool_ids == {"content_summary"}
+
+    assert seen_fields["skills_groups"] == ["content", "tools"]
+    assert result["track"] == "content"
+
+    meta_on_disk = json.loads((Path(result["package_dir"]) / "meta.json").read_text())
+    assert meta_on_disk["track"] == "content"
+
+
+def test_assemble_package_legacy_entry_no_track_key_defaults_to_ai(tmp_path, monkeypatch):
+    """An entry with no 'track' key at all (a pre-B1 queue row) resolves to the
+    ai track when profile.yaml has a tracks: config -- real track-aware
+    behavior, not just 'no restriction'."""
+    monkeypatch.setenv("CV_TAILOR_PROFILE", TRACKS_PROFILE)
+    captured = {}
+    monkeypatch.setattr(assemble_mod, "tailor", _fake_tailor_capturing(captured, "ai_summary"))
+    seen_fields = {}
+    monkeypatch.setattr(assemble_mod, "cover_letter", _capturing_cover_letter_factory(seen_fields))
+
+    entry = _entry(id="legacy-job")
+    entry.pop("track", None)
+    assert "track" not in entry
+    _seed_description(tmp_path, "2026-07-10", entry["id"], "We need a Python engineer.")
+
+    result = assemble_package(entry, "2026-07-10", queue_dir=tmp_path, client="unused-sentinel")
+
+    tailor_pool_ids = {s["id"] for s in captured["profile"]["summary_pool"]}
+    assert tailor_pool_ids == {"ai_summary"}
+    assert seen_fields["skills_groups"] == ["languages", "tools"]
+    assert result["track"] == "ai"
+
+
+def test_assemble_package_unknown_track_falls_back_to_ai(tmp_path, monkeypatch):
+    """A track id that isn't in profile['tracks'] (typo, or a newer schema this
+    profile predates) falls back to the ai track's config, not a crash."""
+    monkeypatch.setenv("CV_TAILOR_PROFILE", TRACKS_PROFILE)
+    captured = {}
+    monkeypatch.setattr(assemble_mod, "tailor", _fake_tailor_capturing(captured, "ai_summary"))
+
+    entry = _entry(id="bogus-track-job", track="design")
+    _seed_description(tmp_path, "2026-07-10", entry["id"], "We need a Python engineer.")
+
+    result = assemble_package(entry, "2026-07-10", queue_dir=tmp_path, client="unused-sentinel")
+
+    tailor_pool_ids = {s["id"] for s in captured["profile"]["summary_pool"]}
+    assert tailor_pool_ids == {"ai_summary"}
+    assert result["track"] == "ai"
+
+
+def test_assemble_package_missing_tracks_config_no_restriction(tmp_path):
+    """profile.yaml with no tracks: block at all (profile_minimal.yaml, used by
+    every other test in this file) must never crash, and must not inject
+    fields.skills_groups -- every profile.skills group renders, unrestricted,
+    exactly as before this track-aware assembly existed."""
+    entry = _entry(id="no-tracks-config-job")
+    assert "track" not in entry
+    _seed_description(tmp_path, "2026-07-10", entry["id"], "We need a Python engineer.")
+
+    result = assemble_package(entry, "2026-07-10", queue_dir=tmp_path, client="unused-sentinel")
+
+    assert result["track"] == "ai"
+    html = (Path(result["package_dir"]) / "cv.html").read_text()
+    assert "Languages:" in html

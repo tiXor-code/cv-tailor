@@ -1,0 +1,39 @@
+contact:
+  name: Test User
+  email: test@example.com
+  phone: "+1 555 555 5555"
+  location: Nowhere
+  linkedin: linkedin.com/in/test
+  github: github.com/test
+tracks:
+  ai:
+    summary_id: ai_summary
+    skill_groups: [languages, tools]
+  content:
+    summary_id: content_summary
+    skill_groups: [content, tools]
+summary_pool:
+  - id: ai_summary
+    text: An AI engineering summary.
+  - id: content_summary
+    text: A content-producer summary.
+experiences:
+  - id: job1
+    role: Engineer
+    company: TestCo
+    location: Remote
+    dates: Jan 2024 – Present
+    bullets:
+      - Did stuff.
+projects: []
+skills:
+  languages: [Python]
+  content: [Video Editing]
+  tools: [Figma]
+  leadership: [Stakeholder communication]
+education:
+  - degree: BSc Testing
+    institution: Test U
+    year: 2020
+languages_spoken:
+  - { language: English, level: native }
