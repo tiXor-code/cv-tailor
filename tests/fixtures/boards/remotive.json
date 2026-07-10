@@ -1,0 +1,14 @@
+{
+  "jobs": [
+    {
+      "id": 555111,
+      "url": "https://remotive.com/remote-jobs/software-dev/ai-engineer-555111",
+      "title": "AI Engineer",
+      "company_name": "Acme Remote",
+      "category": "Software Development",
+      "candidate_required_location": "Europe",
+      "description": "<p>Build <b>agents</b> in Python.</p>",
+      "tags": ["python", "ai"]
+    }
+  ]
+}

@@ -1,10 +1,12 @@
-"""Fetch open jobs from external job sources (Ashby today; more later)."""
+"""Fetch open jobs from external job sources (Ashby, Greenhouse, Lever, SerpAPI,
+plus the free remote-job boards: Remotive, RemoteOK, Jobicy, WWR)."""
 from __future__ import annotations
 import html
 import os
 import re
 import urllib.request
 import json
+import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from urllib.parse import urlparse, quote_plus
 
@@ -136,6 +138,109 @@ def fetch_serpapi(query: str, location: str | None = None, api_key: str | None =
     return out
 
 
+# Free remote-job boards (no API key). Each fetcher takes one filter param so
+# fetch_all can call it directly from a sources.yaml entry, mirroring the
+# ashby/greenhouse/lever (slug, name) dispatch shape below. Every fetcher
+# catches its own errors -- warns and returns [] -- so one dead board never
+# kills the scan (ported from norina-jobs/src/norina/boards.py).
+_BOARD_UA = "cv-tailor/0.3 (job scan; contact@teodorlutoiu.com)"
+
+
+def fetch_remotive(category: str) -> list[JobPosting]:
+    """Remotive public API, one category at a time (e.g. 'software-dev', 'marketing')."""
+    try:
+        data = _http_json(f"https://remotive.com/api/remote-jobs?category={quote_plus(category)}")
+    except Exception as e:
+        print(f"warning: remotive fetch failed for category={category!r}: {e}")
+        return []
+    out: list[JobPosting] = []
+    for j in data.get("jobs", []):
+        out.append(JobPosting(
+            source="remotive", org=j.get("company_name") or "",
+            title=j.get("title") or "",
+            location=f"Remote — {j.get('candidate_required_location') or 'Anywhere'}",
+            url=j.get("url") or "", description=_strip_html(j.get("description") or ""),
+            raw_id=str(j.get("id") or j.get("url") or ""),
+        ))
+    return out
+
+
+def fetch_remoteok(tag: str) -> list[JobPosting]:
+    """RemoteOK public API filtered by a single tag. Element 0 of the response is
+    always a legal notice, not a job -- skip it."""
+    try:
+        req = urllib.request.Request(
+            f"https://remoteok.com/api?tags={quote_plus(tag)}",
+            headers={"Accept": "application/json", "User-Agent": _BOARD_UA})
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            data = json.load(resp)
+    except Exception as e:
+        print(f"warning: remoteok fetch failed for tag={tag!r}: {e}")
+        return []
+    out: list[JobPosting] = []
+    for j in data[1:] if isinstance(data, list) else []:
+        out.append(JobPosting(
+            source="remoteok", org=j.get("company") or "",
+            title=j.get("position") or "",
+            location=f"Remote — {j.get('location') or 'Anywhere'}",
+            url=j.get("url") or "", description=_strip_html(j.get("description") or ""),
+            raw_id=str(j.get("id") or ""),
+        ))
+    return out
+
+
+def fetch_jobicy(count: int, tag: str) -> list[JobPosting]:
+    """Jobicy public API filtered by tag, capped at count results."""
+    try:
+        data = _http_json(
+            f"https://jobicy.com/api/v2/remote-jobs?count={count}&tag={quote_plus(tag)}")
+    except Exception as e:
+        print(f"warning: jobicy fetch failed for tag={tag!r}: {e}")
+        return []
+    out: list[JobPosting] = []
+    for j in data.get("jobs", []):
+        out.append(JobPosting(
+            source="jobicy", org=j.get("companyName") or "",
+            title=j.get("jobTitle") or "",
+            location=f"Remote — {j.get('jobGeo') or 'Anywhere'}",
+            url=j.get("url") or "", description=_strip_html(j.get("jobDescription") or ""),
+            raw_id=str(j.get("id") or ""),
+        ))
+    return out
+
+
+def _parse_wwr_rss(root: ET.Element) -> list[JobPosting]:
+    out: list[JobPosting] = []
+    for item in root.iter("item"):
+        title = (item.findtext("title") or "").strip()
+        org, _, role = title.partition(":")
+        if not role:
+            org, role = "", title
+        region = (item.findtext("region") or "").strip()
+        out.append(JobPosting(
+            source="wwr", org=org.strip(), title=role.strip(),
+            location=f"Remote — {region or 'Anywhere'}",
+            url=(item.findtext("link") or "").strip(),
+            description=_strip_html(item.findtext("description") or ""),
+            raw_id=(item.findtext("guid") or item.findtext("link") or "").strip(),
+        ))
+    return out
+
+
+def fetch_wwr(category: str) -> list[JobPosting]:
+    """We Work Remotely RSS feed for one category slug (e.g. 'programming',
+    'sales-and-marketing')."""
+    url = f"https://weworkremotely.com/categories/remote-{category}-jobs.rss"
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": _BOARD_UA})
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            root = ET.fromstring(resp.read())
+    except Exception as e:
+        print(f"warning: wwr fetch failed for category={category!r}: {e}")
+        return []
+    return _parse_wwr_rss(root)
+
+
 def fetch_all(sources: list[dict]) -> list[JobPosting]:
     """sources = [{'kind': 'ashby'|'greenhouse'|'lever', 'slug': '...', 'name': '...'}, ...]"""
     dispatch = {
@@ -143,17 +248,30 @@ def fetch_all(sources: list[dict]) -> list[JobPosting]:
         "greenhouse": fetch_greenhouse_org,
         "lever": fetch_lever_org,
     }
+    board_dispatch = {
+        "remotive": lambda s: fetch_remotive(s["category"]),
+        "remoteok": lambda s: fetch_remoteok(s["tag"]),
+        "jobicy": lambda s: fetch_jobicy(s.get("count", 50), s["tag"]),
+        "wwr": lambda s: fetch_wwr(s["category"]),
+    }
     out: list[JobPosting] = []
     for s in sources:
-        if s["kind"] == "serpapi":
+        kind = s["kind"]
+        if kind == "serpapi":
             try:
                 out.extend(fetch_serpapi(s["query"], s.get("location")))
             except Exception as e:
                 print(f"warning: serpapi fetch failed for {s.get('query')!r}: {e}")
             continue
-        fn = dispatch.get(s["kind"])
+        if kind in board_dispatch:
+            try:
+                out.extend(board_dispatch[kind](s))
+            except Exception as e:
+                print(f"warning: {kind} fetch failed (bad source config?): {e}")
+            continue
+        fn = dispatch.get(kind)
         if not fn:
-            print(f"warning: unknown source kind {s['kind']!r}; skipping")
+            print(f"warning: unknown source kind {kind!r}; skipping")
             continue
         try:
             out.extend(fn(s["slug"], s.get("name")))

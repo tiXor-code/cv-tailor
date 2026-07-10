@@ -14,12 +14,37 @@ sources:
   - kind: ashby
     slug: patrianna
     name: Patrianna
+  # Curated EU-startup ATS list (replaces the greenhouse:anthropic + lever:lever
+  # placeholders -- those were smoke-test entries, not real targets).
   - kind: greenhouse
-    slug: anthropic
-    name: Anthropic
-  - kind: lever
-    slug: lever
-    name: Lever
+    slug: gitlab
+    name: GitLab
+  - kind: greenhouse
+    slug: remotecom
+    name: Remote.com
+  - kind: greenhouse
+    slug: canonical
+    name: Canonical
+  # Free remote-job boards (no API key), one entry per track so both the ai
+  # and content tracks (see profile.yaml tracks:) get board coverage.
+  - kind: remotive
+    category: software-dev
+  - kind: remotive
+    category: marketing
+  - kind: remoteok
+    tag: ai
+  - kind: remoteok
+    tag: marketing
+  - kind: jobicy
+    count: 30
+    tag: software
+  - kind: jobicy
+    count: 30
+    tag: copywriting
+  - kind: wwr
+    category: programming
+  - kind: wwr
+    category: sales-and-marketing
   # SerpAPI google_jobs rejects continent locations ("Europe") and city locations
   # return 0; rely on the query text + ltype=1 (remote) and let Gate 1 + the LLM
   # enforce EU-eligibility. No `location` param.

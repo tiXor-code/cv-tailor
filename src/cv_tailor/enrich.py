@@ -71,7 +71,7 @@ def classify_headcount(employees):
 # Boards/ATS used overwhelmingly by startups & scaleups.
 STARTUP_ATS = {"ashby", "greenhouse", "lever", "workable"}
 # Remote-job boards: startup-skewed but mixed; provenance is weaker (Phase 2 refines).
-REMOTE_BOARDS = {"remotive", "remoteok", "wwr", "himalayas"}
+REMOTE_BOARDS = {"remotive", "remoteok", "jobicy", "wwr", "himalayas"}
 # Enterprise HRIS — almost never SMB.
 ENTERPRISE_HRIS = {"workday", "successfactors", "taleo", "icims", "brassring", "smartrecruiters"}
 

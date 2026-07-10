@@ -1,0 +1,16 @@
+{
+  "apiVersion": "2.2.14",
+  "jobCount": 1,
+  "appliedFilters": {"count": 30, "tag": "copywriting"},
+  "jobs": [
+    {
+      "id": 777333,
+      "url": "https://jobicy.com/jobs/777333-content-copywriter",
+      "jobTitle": "Content Copywriter",
+      "companyName": "Jobicy Client GmbH",
+      "jobIndustry": ["Marketing & Sales"],
+      "jobGeo": "Europe",
+      "jobDescription": "<p>Write <strong>copy</strong> for landing pages.</p>"
+    }
+  ]
+}
