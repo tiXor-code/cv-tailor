@@ -158,7 +158,7 @@ def fetch_remotive(category: str) -> list[JobPosting]:
         out.append(JobPosting(
             source="remotive", org=j.get("company_name") or "",
             title=j.get("title") or "",
-            location=f"Remote — {j.get('candidate_required_location') or 'Anywhere'}",
+            location=f"Remote - {j.get('candidate_required_location') or 'Anywhere'}",
             url=j.get("url") or "", description=_strip_html(j.get("description") or ""),
             raw_id=str(j.get("id") or j.get("url") or ""),
         ))
@@ -182,7 +182,7 @@ def fetch_remoteok(tag: str) -> list[JobPosting]:
         out.append(JobPosting(
             source="remoteok", org=j.get("company") or "",
             title=j.get("position") or "",
-            location=f"Remote — {j.get('location') or 'Anywhere'}",
+            location=f"Remote - {j.get('location') or 'Anywhere'}",
             url=j.get("url") or "", description=_strip_html(j.get("description") or ""),
             raw_id=str(j.get("id") or ""),
         ))
@@ -202,7 +202,7 @@ def fetch_jobicy(count: int, tag: str) -> list[JobPosting]:
         out.append(JobPosting(
             source="jobicy", org=j.get("companyName") or "",
             title=j.get("jobTitle") or "",
-            location=f"Remote — {j.get('jobGeo') or 'Anywhere'}",
+            location=f"Remote - {j.get('jobGeo') or 'Anywhere'}",
             url=j.get("url") or "", description=_strip_html(j.get("jobDescription") or ""),
             raw_id=str(j.get("id") or ""),
         ))
@@ -219,7 +219,7 @@ def _parse_wwr_rss(root: ET.Element) -> list[JobPosting]:
         region = (item.findtext("region") or "").strip()
         out.append(JobPosting(
             source="wwr", org=org.strip(), title=role.strip(),
-            location=f"Remote — {region or 'Anywhere'}",
+            location=f"Remote - {region or 'Anywhere'}",
             url=(item.findtext("link") or "").strip(),
             description=_strip_html(item.findtext("description") or ""),
             raw_id=(item.findtext("guid") or item.findtext("link") or "").strip(),
