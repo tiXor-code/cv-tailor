@@ -80,18 +80,23 @@ def test_deterministic_answers_yaml_keys(label, key):
 
 
 def test_deterministic_salary_gross_by_default():
+    # CHANGED (fix 4): a text salary field now STATES the currency instead of
+    # typing a bare number a US employer could read as USD.
     q = _q("What is your expected monthly salary?")
     out = answer_question(q, _PROFILE, _ANSWERS)
     assert out == Answer(
-        str(_ANSWERS["salary_fulltime_gross_eur_month"]), "answers:salary_fulltime_gross_eur_month"
+        f"{_ANSWERS['salary_fulltime_gross_eur_month']} EUR gross per month",
+        "answers:salary_fulltime_gross_eur_month",
     )
 
 
 def test_deterministic_salary_net_when_label_says_net():
+    # CHANGED (fix 4): net salary text field states the currency too.
     q = _q("What is your expected net monthly salary?")
     out = answer_question(q, _PROFILE, _ANSWERS)
     assert out == Answer(
-        str(_ANSWERS["salary_fulltime_net_eur_month"]), "answers:salary_fulltime_net_eur_month"
+        f"{_ANSWERS['salary_fulltime_net_eur_month']} EUR net per month",
+        "answers:salary_fulltime_net_eur_month",
     )
 
 
@@ -289,3 +294,155 @@ def test_no_client_optional_no_deterministic_match_still_returns_none():
     q = _q("Why do you want this role?", required=False)
     out = answer_question(q, _PROFILE, _ANSWERS)
     assert out is None
+
+
+# ---------------------------------------------------------------------------
+# Adversarial probes (fix round 1). These use the REAL answers.yaml values so
+# the outcomes match what a live form would produce. Every probe below is a
+# thing the OLD screener got wrong (misroute, wrong yes/no, currency confusion,
+# EEO recall/leak). "Wrong output = a lie to an employer" -- these are the gate.
+# ---------------------------------------------------------------------------
+
+_FULL_ANSWERS = {
+    "salary_fulltime_gross_eur_month": 4700,
+    "salary_fulltime_net_eur_month": "2100-2600",
+    "hourly_rate_min_eur": 18,
+    "availability_parttime": "Wednesday evenings and weekends",
+    "work_authorization": (
+        "EU citizen (test). Can work as an employee for any company hiring in "
+        "the EU, or as an independent contractor."
+    ),
+    "notice_period": "approximately 45 working days (test fixture)",
+    "relocation": "Open to discussing relocation for the right role; strong preference for full remote.",
+}
+
+
+# P1: "capacity" must not route to city/location (substring bug).
+def test_probe_p1_capacity_routes_nowhere():
+    q = _q("In what capacity did you previously work overtime?", kind="radio", options=("Full", "Partial"))
+    assert answer_question(q, _PROFILE, _FULL_ANSWERS) is None
+
+
+# P2: "home-based" must not route to location (bare "based" substring bug).
+def test_probe_p2_home_based_not_location():
+    q = _q("Is a home-based schedule acceptable to you?", kind="radio", options=("Yes", "No"))
+    assert answer_question(q, _PROFILE, _FULL_ANSWERS) is None
+
+
+# P3: US authorization -> "No" (non-EU jurisdiction, authorized-style polarity).
+def test_probe_p3_us_authorized_maps_to_no():
+    q = _q("Are you authorized to work in the US?", kind="select", options=("Yes", "No"))
+    assert answer_question(q, _PROFILE, _FULL_ANSWERS) == Answer("No", "answers:work_authorization")
+
+
+# P4: US sponsorship -> "Yes" (non-EU jurisdiction, sponsorship-style polarity).
+def test_probe_p4_us_sponsorship_maps_to_yes():
+    q = _q("Will you require visa sponsorship to work in the United States?", kind="select", options=("Yes", "No"))
+    assert answer_question(q, _PROFILE, _FULL_ANSWERS) == Answer("Yes", "answers:work_authorization")
+
+
+# P5: salary asked in USD -> fail closed (never type the EUR figure into a USD field).
+def test_probe_p5_salary_usd_number_required_none():
+    q = _q("What is your expected monthly salary in USD?", kind="number", required=True)
+    assert answer_question(q, _PROFILE, _FULL_ANSWERS) is None
+
+
+def test_probe_p5_salary_usd_number_optional_skips():
+    q = _q("What is your expected monthly salary in USD?", kind="number", required=False)
+    assert answer_question(q, _PROFILE, _FULL_ANSWERS) == Answer("", "policy:skip")
+
+
+# P6: "portfolio project" must not route to the website field (substring bug).
+def test_probe_p6_portfolio_project_not_website():
+    q = _q("Describe a portfolio project you are proud of.", kind="textarea", required=True)
+    assert answer_question(q, _PROFILE, _FULL_ANSWERS) is None
+
+
+# P7: "willing to relocate?" Yes/No -> "Yes" (open-to-discussing maps to yes-like).
+def test_probe_p7_relocation_radio_maps_to_yes():
+    q = _q("Are you willing to relocate?", kind="radio", options=("Yes", "No"))
+    assert answer_question(q, _PROFILE, _FULL_ANSWERS) == Answer("Yes", "answers:relocation")
+
+
+# P8: "race conditions" is a concurrency question, NOT EEO.
+def test_probe_p8_race_conditions_not_eeo():
+    q = _q("How do you avoid race conditions in concurrent code?", kind="textarea", required=True)
+    assert answer_question(q, _PROFILE, _FULL_ANSWERS) is None
+
+
+# P9: Hispanic/Latino demographic with a decline option -> decline (recall).
+def test_probe_p9_hispanic_latino_declines():
+    q = _q("Are you Hispanic or Latino?", kind="select", options=("Yes", "No", "I prefer not to answer"))
+    assert answer_question(q, _PROFILE, _FULL_ANSWERS) == Answer("I prefer not to answer", "policy:eeo-decline")
+
+
+# P10: bare "Sex" with a decline option -> decline (word-boundary recall).
+def test_probe_p10_bare_sex_declines():
+    q = _q("Sex", kind="select", options=("Male", "Female", "Prefer not to say"))
+    assert answer_question(q, _PROFILE, _FULL_ANSWERS) == Answer("Prefer not to say", "policy:eeo-decline")
+
+
+# P11: "prior notice of criminal proceedings" must not route to notice_period.
+def test_probe_p11_criminal_notice_not_notice_period():
+    q = _q("Have you received prior notice of criminal proceedings?", kind="radio", options=("Yes", "No"))
+    assert answer_question(q, _PROFILE, _FULL_ANSWERS) is None
+
+
+# P12: "cloud-based" must not route to location (bare "based" substring bug).
+def test_probe_p12_cloud_based_not_location():
+    q = _q("Are you comfortable with a cloud-based workflow?", kind="radio", options=("Yes", "No"))
+    assert answer_question(q, _PROFILE, _FULL_ANSWERS) is None
+
+
+# EU authorization -> "Yes" (EU jurisdiction, authorized-style polarity).
+def test_probe_eu_authorized_maps_to_yes():
+    q = _q("Are you authorized to work in the EU?", kind="select", options=("Yes", "No"))
+    assert answer_question(q, _PROFILE, _FULL_ANSWERS) == Answer("Yes", "answers:work_authorization")
+
+
+# Salary in a number field with EUR explicit -> the bare number.
+def test_probe_salary_eur_explicit_number_bare():
+    q = _q("Expected monthly salary in EUR?", kind="number", required=True)
+    assert answer_question(q, _PROFILE, _FULL_ANSWERS) == Answer("4700", "answers:salary_fulltime_gross_eur_month")
+
+
+# Salary in a text field, currency unspecified -> a value that STATES EUR.
+def test_probe_salary_unspecified_text_states_currency():
+    q = _q("What is your expected monthly salary?", kind="text", required=True)
+    out = answer_question(q, _PROFILE, _FULL_ANSWERS)
+    assert out.grounded_in == "answers:salary_fulltime_gross_eur_month"
+    assert "EUR" in out.value
+    assert "4700" in out.value
+
+
+# Relocation that declines -> maps to the No-like option.
+def test_probe_relocation_radio_maps_to_no_when_declined():
+    ans = {**_FULL_ANSWERS, "relocation": "Not open to relocation; fully remote only."}
+    q = _q("Are you willing to relocate?", kind="radio", options=("Yes", "No"))
+    assert answer_question(q, _PROFILE, ans) == Answer("No", "answers:relocation")
+
+
+# Number gate: notice ("approximately 20 working days") is NOT a bare number.
+def test_probe_notice_number_kind_fails_closed():
+    q = _q("How many days is your notice period?", kind="number", required=True)
+    assert answer_question(q, _PROFILE, _FULL_ANSWERS) is None
+
+
+# LLM DECLINE backstop: a demographic question that slips past the deterministic
+# EEO tier and the model replies DECLINE -> we pick the decline option.
+def test_probe_llm_decline_backstop_picks_decline_option():
+    client = _FakeClient(["DECLINE"])
+    q = _q("Please indicate your marital status.", kind="select", required=True,
+           options=("Single", "Married", "Prefer not to say"))
+    out = answer_question(q, _PROFILE, _FULL_ANSWERS, client=client)
+    assert out == Answer("Prefer not to say", "policy:eeo-decline")
+    assert client.calls == 1
+
+
+# LLM DECLINE backstop with no decline option available on a required question.
+def test_probe_llm_decline_backstop_no_option_required_none():
+    client = _FakeClient(["DECLINE"])
+    q = _q("Please state your marital status.", kind="text", required=True)
+    out = answer_question(q, _PROFILE, _FULL_ANSWERS, client=client)
+    assert out is None
+    assert client.calls == 1
