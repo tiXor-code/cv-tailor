@@ -182,6 +182,66 @@ def test_apply_resume_missing_cv_path_aborts_to_resume_upload_failed(chromium_pa
     assert not (evidence_dir / "filled.png").exists()
 
 
+# --- resume upload: widget-state verification (the live-verified bug) ------------
+
+def test_apply_dry_run_resume_widget_state_settles_asynchronously_still_verified(
+    chromium_page, package
+):
+    """?variant=(default) delays the dropzone's placeholder->filename swap by
+    400ms behind the file input's own `change` event -- same event
+    set_input_files() dispatches -- so a caller that checked input.files the
+    instant after upload would see it populated well before the widget
+    itself agrees. This must still resolve to "filled": the adapter's poll
+    is bounded well above 400ms."""
+    page = chromium_page
+    entry = {"id": "job-1"}
+
+    with serve_fixtures() as base_url:
+        _goto(page, base_url)
+        result = Micro1Adapter().apply(page, entry, package, _PROFILE, _ANSWERS, dry_run=True)
+
+        dropzone_text = page.locator("#resume-dropzone-text").inner_text()
+
+    assert result.status == "filled"
+    assert dropzone_text == "cv.pdf"
+
+
+def test_apply_resume_widget_never_updates_aborts_to_resume_upload_failed(
+    chromium_page, package, monkeypatch
+):
+    """?variant=resumewidgetstuck reproduces the real, live-verified bug
+    exactly: set_input_files() still flips input.files synchronously (the
+    old, wrong signal this adapter used to trust), but the dropzone's own
+    widget state never updates away from its "Click to upload..."
+    placeholder -- what the real posting's Next-click validator actually
+    gates on. Four real armed runs hit exactly this and were all rejected
+    with "Resume is required" despite a apparently-successful upload. The
+    adapter must now catch it as needs_human instead of reporting "filled".
+    APPLY_RESUME_WIDGET_TIMEOUT_MS is lowered so the (necessarily real)
+    timeout doesn't slow the suite down."""
+    monkeypatch.setenv("APPLY_RESUME_WIDGET_TIMEOUT_MS", "300")
+    page = chromium_page
+    entry = {"id": "job-1"}
+
+    with serve_fixtures() as base_url:
+        _goto(page, base_url, variant="resumewidgetstuck")
+        result = Micro1Adapter().apply(page, entry, package, _PROFILE, _ANSWERS, dry_run=True)
+
+        # input.files DID flip -- proving this isn't caught by files.length,
+        # only by the widget's own text never leaving its placeholder.
+        files_length = page.locator("input[type='file']").evaluate("el => el.files.length")
+        dropzone_text = page.locator("#resume-dropzone-text").inner_text()
+
+    assert files_length == 1
+    assert dropzone_text == "Click to upload or drag & drop (.pdf)"
+    assert result.status == "needs_human"
+    assert result.reason.startswith("resume-upload-failed:")
+    assert "dropzone widget never left" in result.reason
+    evidence_dir = Path(result.evidence_dir)
+    assert (evidence_dir / "aborted.png").exists()
+    assert not (evidence_dir / "filled.png").exists()
+
+
 # --- armed submit: happy path ----------------------------------------------------
 
 def test_apply_armed_submit_default_variant_returns_submitted(chromium_page, package):

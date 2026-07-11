@@ -43,6 +43,23 @@
                               States (tel "+1") instead of Romania, so the
                               adapter must switch it before filling the
                               number
+    ?variant=resumewidgetstuck -> reproduces the real, live-verified bug:
+                              set_input_files() still flips input.files
+                              synchronously, but the dropzone's own change
+                              listener is never attached, so its "Click to
+                              upload..." placeholder text never updates --
+                              exercises the adapter's widget-state poll
+                              actually catching a stuck widget instead of
+                              trusting input.files alone
+
+  Resume dropzone: the real widget's own React state (what the Next-click
+  validator gates on, "Resume is required") updates ASYNCHRONOUSLY after the
+  file input's `change` event, live-verified against the real posting at
+  roughly 1.4s (presumably a resume-parse round trip) -- reproduced below via
+  a delayed (400ms) textContent swap on the file input's own `change` event,
+  which is exactly the event set_input_files() dispatches. This is the event
+  path the real widget uses; the fixture does not special-case
+  set_input_files vs. any other upload mechanism.
 -->
 <html>
 <head><meta charset="utf-8"><title>Content Producer | Apply on Job</title></head>
@@ -66,7 +83,7 @@
 
       <label for="file" role="button">
         <input accept=".pdf" id="file" type="file" name="file" style="display:none">
-        <div>Click to upload or drag &amp; drop (.pdf)</div>
+        <div id="resume-dropzone-text">Click to upload or drag &amp; drop (.pdf)</div>
       </label>
     </div>
 
@@ -87,12 +104,33 @@
       var confirmation = document.getElementById("confirmation");
       var countrySelect = document.querySelector("select.PhoneInputCountrySelect");
       var telInput = document.querySelector("input.PhoneInputInput");
+      var fileInput = document.getElementById("file");
+      var dropzoneText = document.getElementById("resume-dropzone-text");
       var DIAL = { RO: "40", US: "1", GB: "44" };
       var step = 1;
 
       if (variant === "notromania") {
         countrySelect.value = "US";
         telInput.value = "+1";
+      }
+
+      // Reproduces the real widget's live-verified ASYNC settle: the file
+      // input's own `change` event (exactly what set_input_files()
+      // dispatches) fires immediately, but the visible placeholder swap
+      // lands ~400ms later here (~1.4s on the real posting) -- long enough
+      // that a caller reading input.files right after the upload sees a
+      // populated files list while the dropzone still shows its placeholder.
+      // ?variant=resumewidgetstuck skips this listener entirely: input.files
+      // still flips, but the placeholder text never updates, reproducing
+      // the real bug the adapter's widget-state poll must catch.
+      if (variant !== "resumewidgetstuck") {
+        fileInput.addEventListener("change", function () {
+          setTimeout(function () {
+            if (fileInput.files && fileInput.files.length > 0) {
+              dropzoneText.textContent = fileInput.files[0].name;
+            }
+          }, 400);
+        });
       }
 
       countrySelect.addEventListener("change", function () {

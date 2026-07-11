@@ -19,6 +19,20 @@ note and documented simplifications):
         <label for=file>, accept=".pdf")
     button[type=submit] labeled "Next"
 
+Resume upload, live-verified (see this module's git history / build notes,
+and CV-1092-style report at .superpowers/sdd/scout-c/micro1-report.md):
+`set_input_files()` on the file input flips `input.files` SYNCHRONOUSLY, but
+the dropzone widget's own React state -- the thing the Next-click validator
+actually gates on ("Resume is required") -- updates roughly 1.4s later
+(presumably a resume-parse round trip), replacing its "Click to upload or
+drag & drop (.pdf)" placeholder text with the filename. Verifying by
+`input.files` alone (four real armed runs did exactly this and all four
+failed identically) reports success while the widget still shows an empty
+dropzone and Next rejects the submission. `_upload_and_verify_resume`
+therefore polls the dropzone's own visible text for the placeholder to be
+replaced, bounded by APPLY_RESUME_WIDGET_TIMEOUT_MS (default 8000ms, well
+above the observed 1.4s).
+
 Phone field, live-verified (see this module's git history / build notes):
 the posting geo-defaults the country select to Romania and pre-fills the
 tel input with just the dial code ("+40"). `.fill()`-ing that input with
@@ -60,6 +74,8 @@ made at all". Flow after dry_run (which never clicks anything):
 """
 from __future__ import annotations
 
+import json
+import os
 import re
 import time
 from pathlib import Path
@@ -95,6 +111,21 @@ _ERROR_BANNER_SELECTOR = "[role='alert'], .error, .form-error, [aria-invalid='tr
 _ROMANIA_OPTION_LABEL = "Romania"
 _ROMANIA_DIAL_CODE = "40"
 _PHONE_DIGITS_RE = re.compile(r"\D")
+
+# Substring of the dropzone's own placeholder copy ("Click to upload or
+# drag & drop (.pdf)"). Its disappearance -- not input.files -- is the real
+# signal that the widget registered the upload; see the module docstring.
+_RESUME_PLACEHOLDER_SNIPPET = "Click to upload"
+
+
+def _resume_widget_settle_timeout_ms() -> float:
+    """Bound for polling the resume dropzone's own UI state after
+    set_input_files (see _wait_for_resume_widget_state). Overridable via
+    APPLY_RESUME_WIDGET_TIMEOUT_MS so tests can prove the negative case (the
+    widget never updates) without a real multi-second wait every run. The
+    8000ms default sits well above the ~1.4s settle observed live against
+    the real posting."""
+    return float(os.environ.get("APPLY_RESUME_WIDGET_TIMEOUT_MS", "8000"))
 
 # Never click Next/submit more than this many times in one run: the first
 # click (contact+resume step) plus at most two more answered-question steps.
@@ -250,6 +281,9 @@ class Micro1Adapter(PortalAdapter):
     def _upload_and_verify_resume(page, cv_path) -> tuple[bool, str]:
         if not cv_path:
             return False, "no cv_path provided"
+        # Re-query rather than reuse any earlier handle: a SPA remount
+        # between this adapter's top-level networkidle settle and here
+        # would otherwise leave the locator pointed at a detached node.
         locator = page.locator(_RESUME_SELECTOR)
         if locator.count() == 0:
             return False, f"no file input found ({_RESUME_SELECTOR} matched 0 elements)"
@@ -257,12 +291,53 @@ class Micro1Adapter(PortalAdapter):
             locator.first.set_input_files(str(cv_path))
         except PlaywrightError as exc:
             return False, f"set_input_files raised {type(exc).__name__}: {exc}"
-        if verify_file_attached(page, _RESUME_SELECTOR):
+
+        if not verify_file_attached(page, _RESUME_SELECTOR):
+            return False, (
+                "set_input_files ran against a matched file input but files.length "
+                "was 0 after upload"
+            )
+
+        # input.files is necessary but NOT sufficient: live-verified against
+        # the real posting, it flips synchronously while the dropzone
+        # widget's own React state -- what the Next-click validator actually
+        # gates on -- updates ~1.4s later. Four real armed runs trusted
+        # files.length alone and all four got rejected with "Resume is
+        # required". Poll the widget's own visible text instead.
+        timeout_ms = _resume_widget_settle_timeout_ms()
+        if Micro1Adapter._wait_for_resume_widget_state(page, _RESUME_SELECTOR, timeout_ms):
             return True, ""
         return False, (
-            "set_input_files ran against a matched file input but files.length "
-            "was 0 after upload"
+            "input.files shows the file attached but the dropzone widget never "
+            f"left its \"{_RESUME_PLACEHOLDER_SNIPPET}...\" placeholder state "
+            f"within {timeout_ms:.0f}ms -- verify-by-input.files is not proof "
+            "the widget (and the Next-click validator gating on it) registered "
+            "the upload"
         )
+
+    @staticmethod
+    def _wait_for_resume_widget_state(page, selector: str, timeout_ms: float) -> bool:
+        """Poll the resume dropzone's own visible text (its parent element's
+        innerText) for the placeholder copy to be replaced by an
+        uploaded-file indicator (filename chip / remove control) -- the only
+        signal the real widget's Next-click validator actually trusts.
+        Bounded by timeout_ms; a timeout or any Playwright error is a plain
+        False, never a raise."""
+        selector_js = json.dumps(selector)
+        placeholder_js = json.dumps(_RESUME_PLACEHOLDER_SNIPPET)
+        try:
+            page.wait_for_function(
+                f"""() => {{
+                    const el = document.querySelector({selector_js});
+                    if (!el || !el.parentElement) return false;
+                    const text = (el.parentElement.innerText || "").trim();
+                    return text.length > 0 && !text.includes({placeholder_js});
+                }}""",
+                timeout=timeout_ms,
+            )
+            return True
+        except PlaywrightError:
+            return False
 
     # --- submission ----------------------------------------------------------------
 
