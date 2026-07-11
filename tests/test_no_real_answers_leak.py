@@ -25,6 +25,21 @@ def _sensitive_strings(data):
     if wa:
         # the distinctive tail, not the generic EU-citizen opener
         vals.append(wa.strip().splitlines()[-1].strip()[-40:])
+
+    # start_availability_days / hourly_rate_ask_usd / hours_per_week_available
+    # (micro1's post-Next start/rate/hours step, see answers.py) are short
+    # numbers (e.g. "7", "40", "20") -- the len(v) >= 4 filter below and the
+    # word-isolation check in test_real_answers_never_in_tracked_files would
+    # either drop them outright or false-fire on any unrelated short number
+    # (a timeout, a loop count) that happens to equal one of them. Guard the
+    # KEY: VALUE pairing itself instead -- long enough to pass the length
+    # filter and specific enough that only a real fixture copy-paste of the
+    # actual answers.yaml line (not a coincidental bare number) trips it.
+    for key in ("start_availability_days", "hourly_rate_ask_usd", "hours_per_week_available"):
+        v = data.get(key)
+        if v is not None:
+            vals.append(f"{key}: {v}")
+
     return [v for v in vals if len(v) >= 4]
 
 

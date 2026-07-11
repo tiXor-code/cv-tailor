@@ -13,3 +13,9 @@ links:
   website: "https://example.com"
   linkedin: "https://linkedin.com/in/example"
   github: "https://github.com/example"
+
+# Optional -- not in REQUIRED_KEYS, only used by portals that ask these
+# specific questions (e.g. micro1's post-Next "start/rate/hours" step).
+start_availability_days: 14
+hourly_rate_ask_usd: 25
+hours_per_week_available: 10

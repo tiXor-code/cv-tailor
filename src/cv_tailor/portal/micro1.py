@@ -71,6 +71,37 @@ made at all". Flow after dry_run (which never clicks anything):
                                    -> neither signal -> ambiguous, degrades
                                       to the standard no-confirmation
                                       needs_human after _MAX_STEPS clicks
+
+A real live run (2026-07-11, ai-labs "Content Producer" posting) hit exactly
+that ambiguous no-confirmation degrade: the second step it revealed was NOT
+a `[data-micro1-question]`-wrapped custom field at all, but a fixed
+"Answer a few questions to complete your application" card with three known
+controls -- "How soon can you start the work? (in days)" (a stepper: minus
+button / numeric display / plus button), "What is your expected hourly rate
+in USD?" (a plain numeric input with a "/hour" suffix), and "How many hours
+per week are you available to work?" (the same stepper widget as the first)
+-- followed by Back/Submit buttons instead of the usual "Next". Because
+these carry no `[data-micro1-question]` wrapper (only known from that run's
+screenshot, never a fetched live DOM), `_discover_known_step2_fields`
+matches them by LABEL TEXT REGEX instead, climbing from each matched label
+to its nearest ancestor containing an `<input>` (the `ancestor::*[.//input]`
+XPath idiom, robust to whatever the real wrapper's tag/class turns out to
+be). Values come straight from answers.yaml's `start_availability_days` /
+`hourly_rate_ask_usd` / `hours_per_week_available` (all optional keys --
+missing -> the usual unanswerable-required needs_human), not through
+cv_tailor.screening's grounded-answer machinery, since these three questions
+and their answers.yaml keys are fixed and known in advance. Writing a
+stepper is a plain `.fill()` first (works for the plain rate input); when
+the target isn't editable (a real stepper's numeric display is read-only,
+mutated only by its own +/- buttons -- confirmed live-testing a readonly
+input against Playwright's `fill()`, which otherwise blocks for its full
+default actionability timeout before failing, hence the `is_editable()`
+pre-check) it falls back to clicking the +/- button the required number of
+times. This flow runs alongside (not instead of) the existing
+`[data-micro1-question]` discovery above, so any OTHER, unexpected question
+sharing the same step still goes through the normal answer_question path.
+The "Next" button's own text relabels to "Submit" once this step is
+showing, so the click selector matches either.
 """
 from __future__ import annotations
 
@@ -104,9 +135,32 @@ _LINKEDIN_SELECTOR = "input[name='linkedin_url']"
 _PHONE_COUNTRY_SELECT_SELECTOR = "select.PhoneInputCountrySelect"
 _PHONE_TEL_SELECTOR = "input.PhoneInputInput"
 _RESUME_SELECTOR = "input[type='file']"
-_NEXT_SELECTOR = "button:has-text('Next')"
+# Step 1's submit button is labeled "Next"; the known start/rate/hours step
+# (see module docstring) relabels the SAME button to "Submit" once it's
+# showing -- match either so the loop's unconditional click still lands.
+_NEXT_SELECTOR = "button:has-text('Next'), button:has-text('Submit')"
 _QUESTION_WRAPPER_SELECTOR = "[data-micro1-question]"
 _ERROR_BANNER_SELECTOR = "[role='alert'], .error, .form-error, [aria-invalid='true']"
+
+# The three known start/rate/hours questions (see module docstring), matched
+# by label text regex -- they carry no [data-micro1-question] wrapper, only
+# ever observed via a live screenshot. Order matches the real card's Q1/Q2/Q3.
+_STEP2_KNOWN_FIELDS: tuple[tuple[str, re.Pattern[str]], ...] = (
+    ("start_availability_days", re.compile(r"how soon.*start", re.I)),
+    ("hourly_rate_ask_usd", re.compile(r"expected.*hourly rate", re.I)),
+    ("hours_per_week_available", re.compile(r"hours per week.*available", re.I)),
+)
+
+# Bound on a known-field's own fill() attempt. is_editable() is checked
+# first (a synchronous, non-waiting state read) so this only ever guards
+# against something checking editable-but-not-actually-fillable; without
+# it, a misdetected readonly stepper would otherwise block on Playwright's
+# full default (30s) actionability timeout before falling back to the
+# +/- buttons -- live-verified against a readonly input in this repo.
+_KNOWN_FIELD_FILL_TIMEOUT_MS = 1000
+
+_STEPPER_MINUS_TEXT_RE = re.compile(r"^\s*[-−]\s*$")
+_STEPPER_PLUS_TEXT_RE = re.compile(r"^\s*\+\s*$")
 
 _ROMANIA_OPTION_LABEL = "Romania"
 _ROMANIA_DIAL_CODE = "40"
@@ -370,17 +424,28 @@ class Micro1Adapter(PortalAdapter):
                 capture_evidence(page, evidence_dir, "submitted")
                 return PortalResult(status="submitted", reason="", evidence_dir=str(evidence_dir))
 
+            # Two independent discovery paths for the same step: the known
+            # start/rate/hours card (label-regex matched, see module
+            # docstring) and any other [data-micro1-question]-wrapped field.
+            # Neither found -> nothing more to answer -- ambiguous.
+            known_fields = self._discover_known_step2_fields(page)
             questions = self._discover_step_questions(page)
-            if not questions:
-                break  # neither confirmed nor more to answer -- ambiguous
+            if not known_fields and not questions:
+                break
 
             if handoff:
                 return self._await_handoff_step(page, company, evidence_dir, notify)
 
-            aborted = self._answer_step_questions(page, questions, profile, answers,
-                                                   evidence_dir, client=client, deployment=deployment)
-            if aborted is not None:
-                return aborted
+            if known_fields:
+                aborted = self._answer_known_step2_fields(page, known_fields, answers, evidence_dir)
+                if aborted is not None:
+                    return aborted
+
+            if questions:
+                aborted = self._answer_step_questions(page, questions, profile, answers,
+                                                       evidence_dir, client=client, deployment=deployment)
+                if aborted is not None:
+                    return aborted
             # loop: click Next/submit again on the now-answered step, bounded
             # by _MAX_STEPS above.
 
@@ -475,6 +540,171 @@ class Micro1Adapter(PortalAdapter):
         except PlaywrightError:
             pass
         return None, None
+
+    # --- known start/rate/hours step (label-regex matched, no wrapper) --------------
+
+    def _discover_known_step2_fields(self, page) -> list[tuple[str, str, Any]]:
+        """Locate whichever of the three known start/rate/hours questions
+        (_STEP2_KNOWN_FIELDS) are present on the current step, by LABEL TEXT
+        alone -- these carry no [data-micro1-question] wrapper in the real
+        posting (see module docstring), so label matching is the only stable
+        anchor. get_by_text's regex match returns the smallest element whose
+        combined text contains the match, which is the label itself even
+        when part of it (e.g. "hourly rate") sits inside a nested <strong>.
+        From there, climbs to the nearest ancestor that also contains an
+        <input> descendant -- the `ancestor::*[.//input][1]` XPath idiom
+        (a reverse axis, so "[1]" is the NEAREST such ancestor, not the
+        root) -- which is robust to whatever the real wrapper's tag/class
+        turns out to be. Returns (key, label_text, container_locator)
+        tuples, in _STEP2_KNOWN_FIELDS order, for exactly the questions
+        found (0 to 3).
+
+        A [data-micro1-question]-wrapped container is deliberately excluded
+        here even if its label happens to match one of these regexes (the
+        existing generic fixture's "How many hours per week are you
+        available?" custom question does, coincidentally) -- that wrapper is
+        this adapter's own signal for "an arbitrary employer-authored
+        question, answer via cv_tailor.screening", so it always defers to
+        _discover_step_questions instead of being double-claimed here."""
+        out: list[tuple[str, str, Any]] = []
+        for key, label_re in _STEP2_KNOWN_FIELDS:
+            try:
+                matches = page.get_by_text(label_re)
+                if matches.count() == 0:
+                    continue
+                label_loc = matches.first
+                label_text = label_loc.inner_text().strip()
+                container = label_loc.locator("xpath=ancestor::*[.//input][1]")
+                if container.count() == 0:
+                    continue
+                if container.get_attribute("data-micro1-question") is not None:
+                    continue
+            except PlaywrightError:
+                continue
+            out.append((key, label_text, container))
+        return out
+
+    def _answer_known_step2_fields(self, page, fields: list[tuple[str, str, Any]],
+                                    answers: dict, evidence_dir: Path) -> PortalResult | None:
+        """answers.yaml is the sole source here (no LLM/deterministic
+        screening tiers -- these three questions and their keys are fixed
+        and known in advance). A missing/blank key degrades exactly like an
+        unanswerable required screening question."""
+        for key, label_text, container in fields:
+            value = (answers or {}).get(key)
+            if value in (None, ""):
+                capture_evidence(page, evidence_dir, "aborted")
+                return PortalResult(status="needs_human",
+                                     reason=f"unanswerable-required:{label_text}",
+                                     evidence_dir=str(evidence_dir))
+            if not self._write_known_field(container, str(value)):
+                capture_evidence(page, evidence_dir, "aborted")
+                return PortalResult(status="needs_human",
+                                     reason=f"unwritable-required:{label_text}",
+                                     evidence_dir=str(evidence_dir))
+        return None
+
+    @staticmethod
+    def _write_known_field(container, value: str) -> bool:
+        """Write `value` into the container's control: a direct fill (works
+        for the plain rate input) tried first, falling back to the stepper
+        +/- buttons when the target isn't editable -- a real stepper's own
+        numeric display is read-only, mutated only by its own buttons.
+        is_editable() is a synchronous, non-waiting state check, so a
+        readonly stepper is routed straight to the button fallback instead
+        of blocking on fill()'s full default actionability timeout."""
+        input_loc = container.locator("input").first
+        if input_loc.count() == 0:
+            return False
+
+        try:
+            editable = input_loc.is_editable()
+        except PlaywrightError:
+            editable = False
+
+        if editable:
+            try:
+                input_loc.fill(value, timeout=_KNOWN_FIELD_FILL_TIMEOUT_MS)
+                # Belt-and-braces on top of fill()'s own native input event:
+                # explicitly (re)set the value and dispatch input/change so a
+                # React-controlled field that listens for either still syncs.
+                input_loc.evaluate(
+                    "(el, v) => { el.value = v; "
+                    "el.dispatchEvent(new Event('input', {bubbles: true})); "
+                    "el.dispatchEvent(new Event('change', {bubbles: true})); }",
+                    value,
+                )
+            except PlaywrightError:
+                pass
+            else:
+                try:
+                    if input_loc.input_value().strip() == value.strip():
+                        return True
+                except PlaywrightError:
+                    pass
+
+        return Micro1Adapter._stepper_to_value(container, input_loc, value)
+
+    @staticmethod
+    def _stepper_buttons(container):
+        """The container's minus/plus buttons, matched by their own exact
+        text ("-"/"+", allowing a unicode minus). Returns (minus, plus),
+        either of which may be None if not found."""
+        try:
+            buttons = container.locator("button")
+            count = buttons.count()
+        except PlaywrightError:
+            return None, None
+        minus = plus = None
+        for i in range(count):
+            btn = buttons.nth(i)
+            try:
+                text = btn.inner_text().strip()
+            except PlaywrightError:
+                continue
+            if _STEPPER_MINUS_TEXT_RE.match(text):
+                minus = btn
+            elif _STEPPER_PLUS_TEXT_RE.match(text):
+                plus = btn
+        return minus, plus
+
+    @staticmethod
+    def _stepper_to_value(container, input_loc, target: str) -> bool:
+        """Click the container's +/- button the exact number of times
+        needed to move the input's current integer value to `target`,
+        reading the current value first (never assumes a starting point).
+        False on a non-integer target, no matching buttons, or a click that
+        raises; the final read-back is the only source of truth for success."""
+        try:
+            target_num = int(str(target).strip())
+        except (TypeError, ValueError):
+            return False
+
+        minus, plus = Micro1Adapter._stepper_buttons(container)
+        if minus is None and plus is None:
+            return False
+
+        try:
+            current = int((input_loc.input_value() or "0").strip())
+        except (PlaywrightError, ValueError):
+            current = 0
+
+        delta = target_num - current
+        button = plus if delta >= 0 else minus
+        if button is None:
+            return False
+
+        for _ in range(abs(delta)):
+            try:
+                button.click()
+            except PlaywrightError:
+                return False
+
+        try:
+            actual = int((input_loc.input_value() or "").strip())
+        except (PlaywrightError, ValueError):
+            return False
+        return actual == target_num
 
     def _answer_step_questions(self, page, questions, profile: dict, answers: dict,
                                 evidence_dir: Path, *, client, deployment) -> PortalResult | None:

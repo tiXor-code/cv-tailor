@@ -45,6 +45,16 @@ _PROFILE = {
 _ANSWERS = {
     "availability_parttime": "Wednesday evenings and weekends",
 }
+# Test-only dummy values for the known start/rate/hours step (see this
+# module's "known start/rate/hours step" section below and micro1.py's
+# module docstring) -- deliberately different from Teodor's real
+# answers.yaml values so nothing here can collide with the leak canary
+# (tests/test_no_real_answers_leak.py), which guards the real 7/40/20.
+_STEP2_KNOWN_ANSWERS = {
+    "start_availability_days": 5,
+    "hourly_rate_ask_usd": 33,
+    "hours_per_week_available": 12,
+}
 
 
 @pytest.fixture
@@ -288,6 +298,92 @@ def test_apply_armed_second_step_unanswerable_required_aborts_to_needs_human(chr
     evidence_dir = Path(result.evidence_dir)
     assert (evidence_dir / "aborted.png").exists()
     assert not (evidence_dir / "submitted.png").exists()
+
+
+# --- known start/rate/hours step (label-regex matched, no wrapper) ---------------
+#
+# ?variant=step2startratehours reproduces the real, live-verified "Answer a
+# few questions to complete your application" card (2026-07-11 ai-labs
+# Content Producer run -- see micro1.py's module docstring): three known
+# questions, none wrapped in [data-micro1-question], matched by label text
+# regex instead. The start-days and hours-per-week steppers' own numeric
+# display is readonly in the fixture -- ignores a direct fill entirely,
+# mutated only by their own -/+ buttons -- so a correct final value
+# (starting from "1") is only reachable through the adapter's
+# is_editable()-gated fallback to clicking them, not through fill_field.
+
+def test_apply_armed_step2_start_rate_hours_answered_then_submitted(chromium_page, package):
+    page = chromium_page
+    entry = {"id": "job-1"}
+    answers = {**_ANSWERS, **_STEP2_KNOWN_ANSWERS}
+
+    with serve_fixtures() as base_url:
+        _goto(page, base_url, variant="step2startratehours")
+        result = Micro1Adapter().apply(page, entry, package, _PROFILE, answers, dry_run=False)
+
+    assert result.status == "submitted"
+    assert result.reason == ""
+    evidence_dir = Path(result.evidence_dir)
+    assert (evidence_dir / "submitted.png").exists()
+
+    # The three fields carry `name` attributes in this fixture (for this
+    # test's own convenience only -- the adapter finds them by label text,
+    # never by name), so their final values -- reached via the stepper
+    # button fallback for Q1/Q3 and a plain fill for Q2 -- are readable
+    # straight out of the "submitted" evidence's form_state.json.
+    state = json.loads((evidence_dir / "form_state.json").read_text())
+    assert state["start_availability_days"] == "5"
+    assert state["hourly_rate_ask_usd"] == "33"
+    assert state["hours_per_week_available"] == "12"
+
+
+def test_apply_armed_step2_start_rate_hours_missing_answer_aborts_to_needs_human(chromium_page, package):
+    page = chromium_page
+    entry = {"id": "job-1"}
+    answers = {**_ANSWERS, **_STEP2_KNOWN_ANSWERS}
+    del answers["hourly_rate_ask_usd"]  # optional key genuinely absent
+
+    with serve_fixtures() as base_url:
+        _goto(page, base_url, variant="step2startratehours")
+        result = Micro1Adapter().apply(page, entry, package, _PROFILE, answers, dry_run=False)
+
+    assert result.status == "needs_human"
+    assert result.reason.startswith("unanswerable-required:")
+    assert "hourly rate" in result.reason.lower()
+    evidence_dir = Path(result.evidence_dir)
+    assert (evidence_dir / "aborted.png").exists()
+    assert not (evidence_dir / "submitted.png").exists()
+
+
+def test_apply_handoff_step2_start_rate_hours_notifies_and_times_out_without_auto_answering(
+    chromium_page, package, monkeypatch
+):
+    """Handoff mode is unchanged by this known-fields card: the adapter
+    still never answers it itself, exactly like an arbitrary
+    [data-micro1-question] question (see the existing
+    test_apply_handoff_second_step_notifies_and_times_out_without_auto_answering
+    above)."""
+    monkeypatch.setenv("APPLY_HANDOFF_TIMEOUT", "0")
+    page = chromium_page
+    entry = {"id": "job-1", "company": "Micro1"}
+    answers = {**_ANSWERS, **_STEP2_KNOWN_ANSWERS}
+    notified = []
+
+    with serve_fixtures() as base_url:
+        _goto(page, base_url, variant="step2startratehours")
+        result = Micro1Adapter().apply(page, entry, package, _PROFILE, answers,
+                                        dry_run=False, handoff=True, notify=notified.append)
+
+        start_days_value = page.locator("input[name='start_availability_days']").input_value()
+        rate_value = page.locator("input[name='hourly_rate_ask_usd']").input_value()
+        hours_value = page.locator("input[name='hours_per_week_available']").input_value()
+
+    assert result.status == "needs_human"
+    assert result.reason == "handoff-timeout: not submitted, form left as-is"
+    assert start_days_value == "1"  # never auto-answered
+    assert rate_value == ""  # never auto-answered
+    assert hours_value == "1"  # never auto-answered
+    assert notified == ["Micro1 micro1 form needs more info: waiting for a human to continue"]
 
 
 # --- captcha mid-flow --------------------------------------------------------------

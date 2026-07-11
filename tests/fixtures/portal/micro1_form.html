@@ -51,6 +51,26 @@
                               exercises the adapter's widget-state poll
                               actually catching a stuck widget instead of
                               trusting input.files alone
+    ?variant=step2startratehours -> reproduces the real, live-verified
+                              "Answer a few questions to complete your
+                              application" card (2026-07-11 ai-labs Content
+                              Producer run, see this adapter's module
+                              docstring): three known questions, none
+                              wrapped in [data-micro1-question] --
+                              "How soon can you start the work? (in days)"
+                              and "How many hours per week are you available
+                              to work?" are steppers whose numeric display is
+                              READONLY (mutated only by their own -/+
+                              buttons, ignoring any direct fill -- exercises
+                              the adapter's is_editable()-gated fallback to
+                              clicking them the required number of times),
+                              "What is your expected hourly rate in USD?" is
+                              a plain fillable input with a "/hour" suffix.
+                              The submit button's own text relabels from
+                              "Next" to "Submit" once this step is showing.
+                              All three carry `name` attributes so their
+                              final values are readable straight out of
+                              form_state.json.
 
   Resume dropzone: the real widget's own React state (what the Next-click
   validator gates on, "Resume is required") updates ASYNCHRONOUSLY after the
@@ -190,6 +210,58 @@
             step1.style.display = "none";
             step2.innerHTML = questionHTML("planet", "What's your favorite fictional planet?");
             step2.style.display = "";
+            step = 2;
+            return;
+          }
+          if (variant === "step2startratehours") {
+            step1.style.display = "none";
+            // None of these three carry [data-micro1-question] -- the
+            // real card's own markup, only ever seen live via a
+            // screenshot, is unknown; the adapter must find them by label
+            // text alone (see micro1.py's module docstring). `name`
+            // attributes are for THIS TEST's own convenience (reading
+            // form_state.json), not something the adapter relies on.
+            step2.innerHTML =
+              '<div class="q-block">' +
+              '<label>Q1. How soon can you start the work? (in days)</label>' +
+              '<div class="stepper">' +
+              '<button type="button" class="stepper-minus">-</button>' +
+              '<input type="text" class="stepper-input" name="start_availability_days" value="1" readonly>' +
+              '<button type="button" class="stepper-plus">+</button>' +
+              "</div></div>" +
+              '<div class="q-block">' +
+              '<label>Q2. What is your expected <strong>hourly rate</strong> in USD?</label>' +
+              '<div class="rate-wrap">' +
+              '<input type="text" class="rate-input" name="hourly_rate_ask_usd" value="">' +
+              '<span class="rate-suffix">/hour</span>' +
+              "</div></div>" +
+              '<div class="q-block">' +
+              '<label>Q3. How many hours per week are you available to work?</label>' +
+              '<div class="stepper">' +
+              '<button type="button" class="stepper-minus">-</button>' +
+              '<input type="text" class="stepper-input" name="hours_per_week_available" value="1" readonly>' +
+              '<button type="button" class="stepper-plus">+</button>' +
+              "</div></div>";
+            step2.style.display = "";
+            // Real evidence: the button relabels "Next" -> "Submit" once
+            // this step is showing.
+            document.querySelector(".next-btn").textContent = "Submit";
+            // The steppers' own numeric display is readonly (real widgets
+            // gate on their internal state, not the raw input value) --
+            // mutated ONLY by these button handlers, exactly mirroring the
+            // resume dropzone's own "ignore fill, honor real interaction"
+            // shape elsewhere in this fixture.
+            step2.querySelectorAll(".stepper").forEach(function (stepperEl) {
+              var input = stepperEl.querySelector("input");
+              var minus = stepperEl.querySelector(".stepper-minus");
+              var plus = stepperEl.querySelector(".stepper-plus");
+              minus.addEventListener("click", function () {
+                input.value = String(Math.max(0, parseInt(input.value || "0", 10) - 1));
+              });
+              plus.addEventListener("click", function () {
+                input.value = String(parseInt(input.value || "0", 10) + 1);
+              });
+            });
             step = 2;
             return;
           }
