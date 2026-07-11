@@ -1,0 +1,170 @@
+<!doctype html>
+<!--
+  Local static snapshot of a Micro1 (jobs.micro1.ai) posting's "Interested?"
+  application card, built from a real posting fetched live while building
+  this adapter (jobs.micro1.ai/post/c368cc32-d267-490e-abed-e9521cdf628e,
+  "Content Producer"). Field markup -- input[name=first_name/last_name/
+  email_id/linkedin_url], the select.PhoneInputCountrySelect +
+  input.PhoneInputInput pair (react-phone-number-input, NEITHER carries a
+  `name` attribute on the real DOM), the hidden input[type=file][id=file]
+  behind a styled <label for=file> dropzone, and the submit button's own
+  "Next" label -- is copied faithfully.
+
+  Simplifications, all necessary because the real page is a Next.js SPA with
+  no static equivalent: the country select here lists only Romania/United
+  States/United Kingdom (the real one lists all ~245 ISO countries) --
+  enough to exercise the adapter's "select isn't Romania yet" branch; the
+  phone widget's live reformatting-on-input behavior (confirmed against the
+  real page: filling the tel input with bare local digits while Romania is
+  selected reformats to "+40 xxx xxx xxx", and filling a value carrying a
+  DIFFERENT country's dial code while that other country is selected is
+  silently rejected) is reproduced with a small input-event handler below,
+  not the real react-phone-number-input library; and "the interview
+  process" the real posting's copy warns about is stood in for by a second
+  step of one custom question, gated behind the ?variant= query param
+  (mirrors every other fixture's query-string-variant convention in this
+  directory).
+
+  Variants:
+    (none)                -> step 1 submits straight to a confirmation panel
+    ?variant=step2answerable   -> step 1 reveals ONE more required question
+                                  ("How many hours per week are you
+                                  available?", grounded by answers.yaml's
+                                  availability_parttime) before confirming
+    ?variant=step2unanswerable -> same shape, but the extra required
+                                  question ("What's your favorite fictional
+                                  planet?") has no possible grounded answer
+    ?variant=captcha       -> the page loads clean; clicking Next reveals a
+                              captcha-shaped div instead of progressing,
+                              exercising the adapter's post-click recheck
+    ?variant=nosubmit      -> clicking Next does nothing at all, ever
+                              (no confirmation, no second step)
+    ?variant=notromania    -> the country select geo-defaults to United
+                              States (tel "+1") instead of Romania, so the
+                              adapter must switch it before filling the
+                              number
+-->
+<html>
+<head><meta charset="utf-8"><title>Content Producer | Apply on Job</title></head>
+<body>
+  <form id="application-form">
+    <div id="step1-fields">
+      <input type="text" placeholder="Enter your first name" name="first_name" value="">
+      <input type="text" placeholder="Enter your last name" name="last_name" value="">
+      <input type="text" placeholder="Enter your email address" name="email_id" value="">
+
+      <div class="PhoneInput">
+        <select aria-label="Phone number country" class="PhoneInputCountrySelect">
+          <option value="RO">Romania</option>
+          <option value="US">United States</option>
+          <option value="GB">United Kingdom</option>
+        </select>
+        <input autocomplete="tel" class="PhoneInputInput" type="tel" value="+40">
+      </div>
+
+      <input type="text" placeholder="Enter your LinkedIn URL" name="linkedin_url" value="">
+
+      <label for="file" role="button">
+        <input accept=".pdf" id="file" type="file" name="file" style="display:none">
+        <div>Click to upload or drag &amp; drop (.pdf)</div>
+      </label>
+    </div>
+
+    <div id="step2-fields" style="display:none"></div>
+
+    <button type="submit" class="next-btn">Next</button>
+  </form>
+
+  <div id="confirmation" style="display:none"></div>
+
+  <script>
+    (function () {
+      var params = new URLSearchParams(location.search);
+      var variant = params.get("variant") || "";
+      var form = document.getElementById("application-form");
+      var step1 = document.getElementById("step1-fields");
+      var step2 = document.getElementById("step2-fields");
+      var confirmation = document.getElementById("confirmation");
+      var countrySelect = document.querySelector("select.PhoneInputCountrySelect");
+      var telInput = document.querySelector("input.PhoneInputInput");
+      var DIAL = { RO: "40", US: "1", GB: "44" };
+      var step = 1;
+
+      if (variant === "notromania") {
+        countrySelect.value = "US";
+        telInput.value = "+1";
+      }
+
+      countrySelect.addEventListener("change", function () {
+        telInput.value = "+" + (DIAL[countrySelect.value] || "");
+      });
+
+      // Reproduces the real widget's live-verified reformat-on-input
+      // behavior: whatever raw digits arrive, re-render as
+      // "+<selected country's dial code> <grouped digits>".
+      telInput.addEventListener("input", function () {
+        var code = DIAL[countrySelect.value] || "";
+        var digits = telInput.value.replace(/\D/g, "");
+        if (code && digits.indexOf(code) === 0) {
+          digits = digits.slice(code.length);
+        }
+        var grouped = digits.replace(/(\d{3})(?=\d)/g, "$1 ");
+        telInput.value = "+" + code + (grouped ? " " + grouped : "");
+      });
+
+      function questionHTML(id, label) {
+        return (
+          '<div data-micro1-question="' + id + '">' +
+          "<label>" + label + "</label>" +
+          '<input type="text" required>' +
+          "</div>"
+        );
+      }
+
+      function showConfirmation() {
+        form.style.display = "none";
+        confirmation.textContent = "Thank you for applying! We'll be in touch soon.";
+        confirmation.style.display = "";
+      }
+
+      form.addEventListener("submit", function (e) {
+        e.preventDefault();
+
+        if (step === 1) {
+          if (variant === "captcha") {
+            var captcha = document.createElement("div");
+            captcha.className = "g-recaptcha";
+            captcha.setAttribute("data-sitekey", "fixture-only");
+            document.body.appendChild(captcha);
+            return;
+          }
+          if (variant === "nosubmit") {
+            return;
+          }
+          if (variant === "step2answerable") {
+            step1.style.display = "none";
+            step2.innerHTML = questionHTML("hours", "How many hours per week are you available?");
+            step2.style.display = "";
+            step = 2;
+            return;
+          }
+          if (variant === "step2unanswerable") {
+            step1.style.display = "none";
+            step2.innerHTML = questionHTML("planet", "What's your favorite fictional planet?");
+            step2.style.display = "";
+            step = 2;
+            return;
+          }
+          showConfirmation();
+          return;
+        }
+
+        // step === 2: this fixture always confirms once a second-step Next
+        // is actually clicked -- the adapter itself is what must refuse to
+        // ever reach here on an unanswerable-required question.
+        showConfirmation();
+      });
+    })();
+  </script>
+</body>
+</html>
