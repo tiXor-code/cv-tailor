@@ -13,9 +13,9 @@ a real job while armed, from the orchestrator built in a later task).
 
 Per-ATS adapters (Ashby/Greenhouse/Lever, later tasks) subclass PortalAdapter
 and call `register_adapter(SomeAdapter())` at import time. `adapter_for`
-matches by substring against `hosts`, so registration order only matters if
-two adapters' host substrings could ever both match the same URL (they
-should not).
+matches the URL's parsed hostname against `hosts` (exact or subdomain), so
+registration order only matters if two adapters' hosts could ever both match
+the same hostname (they should not).
 """
 from __future__ import annotations
 
@@ -24,6 +24,7 @@ import os
 import time
 from pathlib import Path
 from typing import Any, NamedTuple
+from urllib.parse import urlparse
 
 from playwright.sync_api import Error as PlaywrightError
 from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
@@ -38,7 +39,8 @@ class PortalResult(NamedTuple):
 
 class PortalAdapter:
     """Base class for one ATS's fill/submit logic. Subclasses set `hosts`
-    (url substrings this adapter claims) and `name`, and implement `apply`.
+    (hostnames this adapter claims, matched exactly or as a subdomain
+    suffix) and `name`, and implement `apply`.
 
     `client`/`deployment` are optional: None means the LLM tier of
     cv_tailor.screening.answer_question is unreachable and screening runs
@@ -63,17 +65,22 @@ _REGISTRY: list[PortalAdapter] = []
 
 
 def register_adapter(adapter: PortalAdapter) -> PortalAdapter:
-    """Add an adapter instance to the host-substring registry. Returns the
+    """Add an adapter instance to the hostname registry. Returns the
     adapter unchanged so it can be used as `SOME_ADAPTER = register_adapter(X())`."""
     _REGISTRY.append(adapter)
     return adapter
 
 
 def adapter_for(url: str) -> PortalAdapter | None:
-    """First registered adapter whose `hosts` substring appears in `url`,
-    or None when no adapter claims this host (caller degrades to needs_human)."""
+    """First registered adapter whose `hosts` matches the URL's parsed
+    hostname (exact or subdomain), or None when no adapter claims it (caller
+    degrades to needs_human). apply_target URLs come from open job boards,
+    so this must never match a lookalike that merely embeds an allowed name
+    (jobs.ashbyhq.com.evil.com, userinfo tricks, hosts in the query/path)."""
+    host = (urlparse(url).hostname or "").lower()
     for adapter in _REGISTRY:
-        if any(host in url for host in adapter.hosts):
+        if any(host == allowed or host.endswith("." + allowed)
+               for allowed in adapter.hosts):
             return adapter
     return None
 

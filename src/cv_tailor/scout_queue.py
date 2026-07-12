@@ -9,10 +9,14 @@ import fcntl
 import hashlib
 import json
 import os
+import re
+from datetime import date
 from pathlib import Path
 
 from cv_tailor.apply_detect import detect_apply_channel
 from cv_tailor.enrich import company_domain
+
+_SCAN_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
 
 def queue_root(queue_dir=None) -> Path:
@@ -20,6 +24,17 @@ def queue_root(queue_dir=None) -> Path:
         return Path(queue_dir)
     env = os.environ.get("SCOUT_QUEUE_DIR")
     return Path(env) if env else Path.home() / "clawd" / "var" / "scout"
+
+
+def _validated_day(scan_date_iso: str) -> str:
+    """scan_date_iso arrives from the CLI and is joined into a filesystem
+    path, so it must be a bare YYYY-MM-DD calendar date -- anything else
+    (separators, traversal, garbage) raises ValueError before any path is
+    built."""
+    if not _SCAN_DATE_RE.match(scan_date_iso or ""):
+        raise ValueError(f"invalid scan date: {scan_date_iso!r} (expected YYYY-MM-DD)")
+    date.fromisoformat(scan_date_iso)  # calendar validity, raises ValueError
+    return scan_date_iso
 
 
 def _job_id(job) -> str:
@@ -82,19 +97,42 @@ def write_jobs_queue(scored, scan_date, *, queue_dir=None) -> Path:
     persisted here at scan time."""
     day_dir = queue_root(queue_dir) / scan_date.isoformat()
     day_dir.mkdir(parents=True, exist_ok=True)
-    entries = [_to_entry(it) for it in scored]
+    fresh = [_to_entry(it) for it in scored]
+    entries = list(fresh)
     out = day_dir / "jobs.json"
+
+    # MERGE with any existing same-day queue instead of clobbering it. A second
+    # scan on the same day used to overwrite jobs.json wholesale, silently
+    # dropping entries that had already progressed (2026-07-10: an assembled
+    # Enthuziastic package vanished from the queue when the 13:57Z scan wrote
+    # over the 06:00Z file). Rule: an existing entry always wins over a fresh
+    # "pending" duplicate of itself; fresh ids are appended.
+    if out.exists():
+        try:
+            existing = json.loads(out.read_text())
+        except (json.JSONDecodeError, OSError):
+            existing = []
+        known = {e.get("id") for e in existing}
+        entries = existing + [e for e in entries if e["id"] not in known]
     _write_atomic(out, json.dumps(entries, indent=2))
-    descriptions = {e["id"]: _job_description(it) for e, it in zip(entries, scored)}
-    (day_dir / "descriptions.json").write_text(
-        json.dumps(descriptions, indent=2, ensure_ascii=False))
+
+    descriptions = {}
+    desc_path = day_dir / "descriptions.json"
+    if desc_path.exists():
+        try:
+            descriptions = json.loads(desc_path.read_text())
+        except (json.JSONDecodeError, OSError):
+            descriptions = {}
+    for e, it in zip(fresh, scored):
+        descriptions.setdefault(e["id"], _job_description(it))
+    desc_path.write_text(json.dumps(descriptions, indent=2, ensure_ascii=False))
     return out
 
 
 def read_description(scan_date_iso: str, job_id: str, *, queue_dir=None) -> str:
     """Full JD text for a queued job, from the descriptions.json sidecar. Empty
     string if the sidecar is missing (older scans predate it) or the id is absent."""
-    p = queue_root(queue_dir) / scan_date_iso / "descriptions.json"
+    p = queue_root(queue_dir) / _validated_day(scan_date_iso) / "descriptions.json"
     if not p.exists():
         return ""
     try:
@@ -153,7 +191,7 @@ def update_entry(scan_date_iso: str, job_id: str, mutator, *, queue_dir=None,
     queue -- the caller decides how to report that (print + exit 2 for the
     orchestrator).
     """
-    day_dir = queue_root(queue_dir) / scan_date_iso
+    day_dir = queue_root(queue_dir) / _validated_day(scan_date_iso)
     path = day_dir / "jobs.json"
     lock_path = day_dir / ".jobs.lock"
     lock_fd = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o644)

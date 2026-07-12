@@ -122,6 +122,14 @@ def _normalize_org(name: str) -> str:
     return re.sub(r"[^a-z0-9]", "", name.lower())
 
 
+def _host_is(host: str, domain: str) -> bool:
+    """True when `host` IS `domain` or a subdomain of it -- never a lookalike
+    that merely embeds the name (boards.greenhouse.io.evil.com, acmegoogle.com).
+    apply_options links are externally supplied, so board/ATS recognition must
+    not be a substring check."""
+    return host == domain or host.endswith("." + domain)
+
+
 def _best_company_url(org, apply_options, share_link):
     """Rank apply links by how confidently they belong to `org`, so a
     cross-listed apply_options link never gets picked blindly. Real incident:
@@ -143,15 +151,15 @@ def _best_company_url(org, apply_options, share_link):
 
     if org_norm:
         for link in links:
-            host = urlparse(link).netloc.lower()
-            if any(b in host for b in _SERP_JOB_BOARDS):
+            host = (urlparse(link).hostname or "").lower()
+            if any(_host_is(host, b) for b in _SERP_JOB_BOARDS):
                 continue
             if org_norm in _normalize_org(host):
                 return link
 
         for link in links:
-            host = urlparse(link).netloc.lower()
-            if not any(a in host for a in _ATS_HOSTS):
+            host = (urlparse(link).hostname or "").lower()
+            if not any(_host_is(host, a) for a in _ATS_HOSTS):
                 continue
             parsed = urlparse(link)
             if org_norm in _normalize_org(parsed.netloc + parsed.path):

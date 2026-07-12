@@ -20,14 +20,26 @@ STATUSES = [
 
 PIPELINE_TAB = "Pipeline"
 
+_FORMULA_PREFIXES = ("=", "+", "-", "@", "\t", "\r")
+
+
+def _sanitize_cell(value: str) -> str:
+    """Neutralize spreadsheet formula injection in externally-sourced text
+    (company/role/location/urls scraped from job boards). A leading ' keeps
+    the value inert for USER_ENTERED writes and for later CSV export opened
+    in Excel/Sheets; benign values pass through unchanged."""
+    if value[:1] in _FORMULA_PREFIXES:
+        return "'" + value
+    return value
+
 
 def build_row_from_fields(fields: dict, cv_path: str) -> list[str]:
     meta = fields.get("job_meta", {})
     return [
-        meta.get("company", ""),
-        meta.get("role", ""),
-        meta.get("location") or "",
-        meta.get("jd_url") or "",
+        _sanitize_cell(meta.get("company", "")),
+        _sanitize_cell(meta.get("role", "")),
+        _sanitize_cell(meta.get("location") or ""),
+        _sanitize_cell(meta.get("jd_url") or ""),
         f"file://{cv_path}",
         "",            # Date applied (blank until applied)
         "Saved",       # Status
@@ -109,7 +121,8 @@ def crm_mark_applied(company: str, role: str, url: str) -> bool:
         try:
             update_status(worksheet, company, role, "Applied", date_applied=today)
         except LookupError:
-            worksheet.append_row([company, role, "", url, "", today, "Applied", "", ""])
+            worksheet.append_row([_sanitize_cell(company), _sanitize_cell(role), "",
+                                  _sanitize_cell(url), "", today, "Applied", "", ""])
         return True
     except Exception:
         return False
