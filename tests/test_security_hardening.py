@@ -39,6 +39,31 @@ def test_adapter_for_rejects_lookalike_hosts(clean_registry):
     assert adapter_for("https://evil.com/jobs.ashbyhq.com/apply") is None
 
 
+def test_adapter_for_rejects_backslash_authority_terminator(clean_registry):
+    # WHATWG parser differential (found by adversarial verify): urlparse keeps
+    # the whole "evil.com\.jobs.ashbyhq.com" as hostname (endswith passes), but
+    # Chromium treats "\" as "/" and page.goto navigates to evil.com. The adapter
+    # must NOT match, or the armed pipeline fills PII on the attacker origin.
+    register_adapter(_AshbyLike())
+    assert adapter_for("https://evil.com\\.jobs.ashbyhq.com/acme/apply") is None
+
+
+def test_adapter_for_rejects_whitespace_in_authority(clean_registry):
+    # Browsers strip tab/newline/CR from URLs before parsing, so a raw urlparse
+    # host can differ from where the browser goes. Any such char -> reject.
+    register_adapter(_AshbyLike())
+    assert adapter_for("https://jobs.ashbyhq.com\t.evil.com/acme") is None
+    assert adapter_for("https://jobs.ashbyhq.com\n.evil.com/acme") is None
+    assert adapter_for("https://jobs.ashbyhq.com\r.evil.com/acme") is None
+
+
+def test_best_company_url_rejects_backslash_bypass():
+    # The same differential chains through _best_company_url -> adapter_for.
+    options = [{"link": "https://evil.com\\.jobs.lever.co/acme/apply"}]
+    picked = _best_company_url("Acme", options, "https://share.example/x")
+    assert picked == "https://share.example/x"
+
+
 def test_adapter_for_accepts_exact_subdomain_port_and_case(clean_registry):
     adapter = register_adapter(_AshbyLike())
     assert adapter_for("https://jobs.ashbyhq.com/acme/engineer") is adapter

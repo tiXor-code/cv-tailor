@@ -24,8 +24,8 @@ import os
 import time
 from pathlib import Path
 from typing import Any, NamedTuple
-from urllib.parse import urlparse
 
+from cv_tailor.urlsafe import host_matches, safe_hostname
 from playwright.sync_api import Error as PlaywrightError
 from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
 from playwright.sync_api import sync_playwright
@@ -72,15 +72,16 @@ def register_adapter(adapter: PortalAdapter) -> PortalAdapter:
 
 
 def adapter_for(url: str) -> PortalAdapter | None:
-    """First registered adapter whose `hosts` matches the URL's parsed
+    """First registered adapter whose `hosts` matches the URL's browser-faithful
     hostname (exact or subdomain), or None when no adapter claims it (caller
-    degrades to needs_human). apply_target URLs come from open job boards,
-    so this must never match a lookalike that merely embeds an allowed name
-    (jobs.ashbyhq.com.evil.com, userinfo tricks, hosts in the query/path)."""
-    host = (urlparse(url).hostname or "").lower()
+    degrades to needs_human). apply_target URLs come from open job boards, so
+    this must never match a lookalike that merely embeds an allowed name
+    (jobs.ashbyhq.com.evil.com), a userinfo trick, or a parser-differential
+    host (backslash/whitespace) that urlparse and the browser resolve
+    differently -- safe_hostname returns "" for those, and "" never matches."""
+    host = safe_hostname(url)
     for adapter in _REGISTRY:
-        if any(host == allowed or host.endswith("." + allowed)
-               for allowed in adapter.hosts):
+        if any(host_matches(host, allowed) for allowed in adapter.hosts):
             return adapter
     return None
 

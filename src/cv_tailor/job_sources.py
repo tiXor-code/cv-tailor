@@ -10,6 +10,8 @@ import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from urllib.parse import urlparse, quote_plus
 
+from cv_tailor.urlsafe import host_matches, safe_hostname
+
 
 @dataclass
 class JobPosting:
@@ -125,9 +127,9 @@ def _normalize_org(name: str) -> str:
 def _host_is(host: str, domain: str) -> bool:
     """True when `host` IS `domain` or a subdomain of it -- never a lookalike
     that merely embeds the name (boards.greenhouse.io.evil.com, acmegoogle.com).
-    apply_options links are externally supplied, so board/ATS recognition must
-    not be a substring check."""
-    return host == domain or host.endswith("." + domain)
+    `host` must be a safe_hostname() result so a backslash/whitespace parser
+    differential (which chains into adapter_for) can't slip through as a match."""
+    return host_matches(host, domain)
 
 
 def _best_company_url(org, apply_options, share_link):
@@ -151,14 +153,14 @@ def _best_company_url(org, apply_options, share_link):
 
     if org_norm:
         for link in links:
-            host = (urlparse(link).hostname or "").lower()
+            host = safe_hostname(link)
             if any(_host_is(host, b) for b in _SERP_JOB_BOARDS):
                 continue
             if org_norm in _normalize_org(host):
                 return link
 
         for link in links:
-            host = (urlparse(link).hostname or "").lower()
+            host = safe_hostname(link)
             if not any(_host_is(host, a) for a in _ATS_HOSTS):
                 continue
             parsed = urlparse(link)
