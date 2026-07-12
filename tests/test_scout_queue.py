@@ -221,3 +221,28 @@ def test_update_entry_concurrent_writers_no_crash_no_lost_updates(tmp_path):
 
     day_dir = tmp_path / "2026-06-24"
     assert list(day_dir.glob("*.tmp*")) == []
+
+
+def test_second_same_day_scan_merges_instead_of_clobbering(tmp_path):
+    """2026-07-10 regression: a 13:57Z rescan overwrote jobs.json and silently
+    dropped an already-assembled entry from the queue."""
+    from datetime import date
+    scored1 = [{"job": _job(raw_id="a"), "score": 9, "reason": "", "keywords": []}]
+    out = write_jobs_queue(scored1, date(2026, 6, 24), queue_dir=tmp_path)
+    entries = json.loads(out.read_text())
+    # the entry progresses (assembled by the sidecar between the two scans)
+    entries[0]["status"] = "assembled"
+    entries[0]["package_dir"] = "/pkg"
+    out.write_text(json.dumps(entries))
+    aid = entries[0]["id"]
+
+    scored2 = [{"job": _job(raw_id="a"), "score": 9, "reason": "", "keywords": []},
+               {"job": _job(raw_id="b", title="Other Role"), "score": 8, "reason": "", "keywords": []}]
+    out2 = write_jobs_queue(scored2, date(2026, 6, 24), queue_dir=tmp_path)
+    merged = {e["id"]: e for e in json.loads(out2.read_text())}
+    assert merged[aid]["status"] == "assembled"          # progress preserved
+    assert merged[aid]["package_dir"] == "/pkg"
+    assert len(merged) == 2                              # new id appended
+    # descriptions sidecar keeps both
+    desc = json.loads((tmp_path / "2026-06-24" / "descriptions.json").read_text())
+    assert set(desc) == set(merged)

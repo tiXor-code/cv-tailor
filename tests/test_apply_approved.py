@@ -459,6 +459,47 @@ def test_portal_armed_needs_human_keeps_ledger_row(mod, monkeypatch, tmp_path):
     assert application_exists(conn, job_id="job-1", company="Acme Inc.", role="AI Engineer") is True
 
 
+@pytest.mark.parametrize("reason", [
+    "captcha", "login-required", "no-adapter", "missing-apply-target",
+    "handoff-timeout: captcha not solved",
+])
+def test_portal_armed_needs_human_presubmit_rolls_back_ledger(mod, monkeypatch, tmp_path, reason):
+    """The 2026-07-10 phantom-row cascade: these reasons PROVE no submission
+    happened (blocker checks run before any field is filled; no-adapter returns
+    before a browser launches), yet the pre-recorded row marked the job as
+    applied forever, blocked every same-company|role sibling as 'duplicate',
+    and burned 6 of 10 daily-cap slots on walls. The row must be rolled back."""
+    from cv_tailor.cache import application_exists, connect
+    from cv_tailor.portal import PortalResult
+
+    monkeypatch.setenv("APPLY_ARMED", "1")
+    _portal_queue(tmp_path)
+    _spy_update_entry(mod, monkeypatch)
+    evidence_dir = str(tmp_path / "pkg" / "portal")
+
+    monkeypatch.setattr(mod, "assemble_package", _fake_assemble(package_dir=tmp_path / "pkg"))
+    _stub_portal_prereqs(mod, monkeypatch)
+    monkeypatch.setattr(
+        mod, "run_portal_application",
+        _FakeRunPortal([PortalResult(status="needs_human", reason=reason, evidence_dir=evidence_dir)]),
+    )
+    monkeypatch.setattr(mod, "send_application", lambda *a, **kw: pytest.fail("must not send"))
+    monkeypatch.setattr(mod, "crm_mark_applied", lambda *a, **kw: pytest.fail("must not be called"))
+    monkeypatch.setattr(mod, "send_text", lambda *a, **kw: True)
+    monkeypatch.setattr(mod, "send_document", lambda *a, **kw: True)
+
+    rc = mod.main(["2026-07-10", "job-1"])
+
+    assert rc == 0
+    entry = _read_entry(tmp_path, "2026-07-10", "job-1")
+    assert entry["status"] == "needs_human" and entry["error"] == reason
+    conn = connect(tmp_path / "jobs.db")
+    # the row is gone: the job can be retried, and a same-norm_key sibling
+    # (regional variant of the same role) is no longer blocked as "duplicate"
+    from cv_tailor.cache import application_exists as _exists
+    assert _exists(conn, job_id="job-1", company="Acme Inc.", role="AI Engineer") is False
+
+
 def test_portal_armed_failed_rolls_back_ledger_row(mod, monkeypatch, tmp_path):
     from cv_tailor.cache import application_exists, connect
     from cv_tailor.portal import PortalResult

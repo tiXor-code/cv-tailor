@@ -54,8 +54,16 @@ BUDGET_PATH = ROOT / "data" / "serpapi_budget.json"
 def run_gates(jobs, tracks, conn):
     """Gate 1 (track-aware rules) -> Gate 2 (SMB) -> Gate 3 (dedup). Each
     survivor gains a `.track` attribute set to its winning track id (see
-    gates.passes_gate1_tracks). Returns survivors."""
+    gates.passes_gate1_tracks). Returns survivors.
+
+    Gate 3 also dedupes WITHIN the batch: is_new() checks the DB but mark_seen
+    only runs later in the scoring loop, so N same-norm_key postings fetched in
+    one scan (e.g. 4 regional variants of one Remote.com role on 2026-07-10)
+    all used to pass and queue 4 packages -- then the first armed attempt's
+    ledger row blocked the other 3 as "duplicate"."""
+    from cv_tailor.cache import norm_pair
     survivors = []
+    batch_seen = set()
     for j in jobs:
         track = passes_gate1_tracks(j, tracks)
         if track is None:
@@ -65,6 +73,10 @@ def run_gates(jobs, tracks, conn):
             continue
         if not is_new(conn, j):
             continue
+        key = norm_pair(j.org, j.title)
+        if key in batch_seen:
+            continue
+        batch_seen.add(key)
         survivors.append(j)
     return survivors
 

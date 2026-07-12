@@ -234,6 +234,26 @@ def _handle_portal(args, entry: dict, meta: dict) -> int:
         return 0
 
     if result.status == "needs_human":
+        # Reasons that PROVE no submission could have happened: no-adapter and
+        # missing-apply-target return before a browser is even launched
+        # (base.py:343-349); captcha / login-required come only from
+        # resolve_blocker, whose call sites in every adapter run strictly BEFORE
+        # any field is filled; "captcha not solved" means the human never
+        # cleared the wall, so the flow never reached the form. Keeping the
+        # pre-recorded ledger row for these (a) marks the job as applied
+        # forever, (b) blocks every same-company|role sibling as "duplicate",
+        # and (c) burns daily-cap slots on non-submissions -- 6 of 10 slots on
+        # 2026-07-10 went to walls, not applications. Ambiguous reasons
+        # ("timeout", "no-confirmation", "handoff-timeout: not submitted, form
+        # left as-is") stay OUT of this set: those may have touched or even
+        # submitted the form, so their row keeps the documented semantics.
+        _NO_SUBMIT_REASONS = {
+            "no-adapter", "missing-apply-target", "captcha", "login-required",
+            "handoff-timeout: captcha not solved",
+        }
+        if not own_row_skip and result.reason in _NO_SUBMIT_REASONS:
+            delete_application(conn, job_id=job_id)
+
         def _needs_human(e: dict) -> None:
             e["status"] = "needs_human"
             e["error"] = result.reason

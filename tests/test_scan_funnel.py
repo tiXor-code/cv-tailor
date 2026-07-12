@@ -178,3 +178,23 @@ def test_auto_apply_enabled_gate(monkeypatch):
 
     monkeypatch.setenv("AUTO_APPLY", "0")
     assert scan._auto_apply_enabled(dry_run=False) is False
+
+
+def test_funnel_dedupes_same_norm_key_within_one_batch(tmp_path):
+    """2026-07-10 regression: 4 regional variants of one Remote.com role share a
+    norm_key (region is stripped) and all passed Gate 3 in a single scan, so all
+    four queued and the first attempt's ledger row blocked the other three as
+    "duplicate". Only ONE variant may survive a batch."""
+    conn = connect(tmp_path / "jobs.db")
+    tracks = {"ai": {"keywords": ["ai engineer", "python"]}}
+    variants = [
+        _job("greenhouse", "r1", "AI Engineer", "Remote - EMEA", "Python"),
+        _job("greenhouse", "r2", "AI Engineer", "Remote - Northern EU", "Python"),
+        _job("greenhouse", "r3", "AI Engineer", "Remote - Southern EU", "Python"),
+    ]
+    # same org so the norm_key collides
+    for v in variants:
+        v.org = "Remote.com"
+    survivors = scan.run_gates(variants, tracks, conn)
+    assert len(survivors) == 1
+    assert survivors[0].raw_id == "r1"
