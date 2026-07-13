@@ -49,6 +49,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "src"))
 
 from cv_tailor.answers import load_answers
+from cv_tailor.ats_resolve import resolve_ats_url
 from cv_tailor.assemble import AssembleError, assemble_package
 from cv_tailor.cache import (
     application_exists,
@@ -174,6 +175,19 @@ def _handle_portal(args, entry: dict, meta: dict) -> int:
 
     armed = os.environ.get("APPLY_ARMED", "0") == "1"
     handoff = bool(getattr(args, "handoff", False))
+
+    # Aggregator links (remoteOK/WWR listing pages) have no adapter and would
+    # die needs_human("no-adapter") before a browser launches. Resolve them to
+    # the company's real ATS posting first; on failure the entry is untouched
+    # and the run proceeds to the same needs_human it would have hit anyway.
+    from cv_tailor.portal.base import adapter_for  # lazy: playwright import
+    current_target = (entry.get("apply_target") or entry.get("url") or "").strip()
+    if current_target and adapter_for(current_target) is None:
+        resolved = resolve_ats_url(entry)
+        if resolved:
+            entry = update_entry(args.scan_date, args.job_id, lambda e: e.update(
+                apply_target=resolved, apply_target_original=current_target))
+            print(f"apply_target resolved to ATS: {resolved}", file=sys.stderr)
 
     if not armed and not handoff:
         result = run_portal_application(entry, meta, profile, answers, dry_run=True, client=client)

@@ -948,3 +948,58 @@ def test_load_dotenv_setdefault_semantics(tmp_path, monkeypatch):
     assert os.environ["APPLY_ARMED"] == "0"  # explicit env wins over .env
     assert os.environ["QUOTED"] == "q-value"
     mod._load_dotenv(tmp_path / "missing.env")  # silent no-op
+
+
+def test_portal_aggregator_target_gets_resolved_before_attempt(mod, monkeypatch, tmp_path):
+    """An aggregator apply_target with no adapter is rewritten to the resolved
+    ATS URL (original preserved) before the portal attempt runs."""
+    from cv_tailor.portal import PortalResult
+
+    monkeypatch.setenv("APPLY_ARMED", "0")
+    entry = _entry(apply_method="portal",
+                   apply_target="https://remoteok.example/listing/1",
+                   url="https://remoteok.example/listing/1")
+    _write_queue(Path(mod.queue_root()), "2026-07-10", entry)
+    _spy_update_entry(mod, monkeypatch)
+
+    monkeypatch.setattr(mod, "assemble_package", _fake_assemble(package_dir=tmp_path / "pkg"))
+    _stub_portal_prereqs(mod, monkeypatch)
+    monkeypatch.setattr(mod, "resolve_ats_url",
+                        lambda e: "https://jobs.ashbyhq.com/acme/aaa-bbb")
+    seen_targets = []
+
+    def fake_portal(entry, meta, profile, answers, dry_run=True, client=None, **kw):
+        seen_targets.append(entry.get("apply_target"))
+        return PortalResult(status="filled", reason="", evidence_dir=str(tmp_path))
+
+    monkeypatch.setattr(mod, "run_portal_application", fake_portal)
+    monkeypatch.setattr(mod, "send_text", lambda *a, **kw: True)
+
+    rc = mod.main(["2026-07-10", "job-1"])
+    assert rc == 0
+    assert seen_targets == ["https://jobs.ashbyhq.com/acme/aaa-bbb"]
+    e = _read_entry(Path(mod.queue_root()), "2026-07-10", "job-1")
+    assert e["apply_target"] == "https://jobs.ashbyhq.com/acme/aaa-bbb"
+    assert e["apply_target_original"] == "https://remoteok.example/listing/1"
+
+
+def test_portal_adapter_target_skips_resolver(mod, monkeypatch, tmp_path):
+    """A target an adapter already claims must NOT trigger any resolution."""
+    from cv_tailor.portal import PortalResult
+
+    monkeypatch.setenv("APPLY_ARMED", "0")
+    entry = _entry(apply_method="portal",
+                   apply_target="https://jobs.ashbyhq.com/acme/existing",
+                   url="https://jobs.ashbyhq.com/acme/existing")
+    _write_queue(Path(mod.queue_root()), "2026-07-10", entry)
+    _spy_update_entry(mod, monkeypatch)
+    monkeypatch.setattr(mod, "assemble_package", _fake_assemble(package_dir=tmp_path / "pkg"))
+    _stub_portal_prereqs(mod, monkeypatch)
+    monkeypatch.setattr(mod, "resolve_ats_url",
+                        lambda e: pytest.fail("resolver must not run"))
+    monkeypatch.setattr(
+        mod, "run_portal_application",
+        _FakeRunPortal([PortalResult(status="filled", reason="", evidence_dir=str(tmp_path))]),
+    )
+    monkeypatch.setattr(mod, "send_text", lambda *a, **kw: True)
+    assert mod.main(["2026-07-10", "job-1"]) == 0
