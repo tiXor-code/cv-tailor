@@ -20,6 +20,10 @@ def test_gate_off_is_noop(tmp_path, monkeypatch, capsys):
     monkeypatch.delenv("SCOUT_AUTOPILOT", raising=False)
     monkeypatch.setenv("SCOUT_QUEUE_DIR", str(tmp_path))
     mod = _load_module()
+    # The real repo .env gains SCOUT_AUTOPILOT=1 at go-live; without this stub,
+    # main()'s _load_dotenv would setdefault the flag back after the delenv
+    # above and the gate under test would never disable.
+    mod._load_dotenv = lambda *a, **k: None
     called = []
     mod.run_autopilot = lambda *a, **k: called.append(1)
     assert mod.main([]) == 0
