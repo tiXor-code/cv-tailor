@@ -24,6 +24,11 @@ LOG="$LOG_DIR/$(date +%F).log"
   RC=$?
   echo "=== exit code: $RC ==="
 
+  # Scout autopilot (spec 2026-07-23): auto-approve >=8, expire stale, digest.
+  # Gated INSIDE the script by SCOUT_AUTOPILOT in .env; safe to call always.
+  python "$REPO/scripts/autopilot.py"
+  echo "=== autopilot exit code: $? ==="
+
   DIGEST="$REPO/scans/$(date +%F).md"
   if [[ $RC -eq 0 && -f "$DIGEST" ]]; then
     COUNT=$(grep -cE "^## [0-9]+" "$DIGEST" || echo 0)
