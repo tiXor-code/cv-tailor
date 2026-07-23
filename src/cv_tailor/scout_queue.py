@@ -10,7 +10,7 @@ import hashlib
 import json
 import os
 import re
-from datetime import date
+from datetime import date, datetime, timezone
 from pathlib import Path
 
 from cv_tailor.apply_detect import detect_apply_channel
@@ -190,6 +190,9 @@ def update_entry(scan_date_iso: str, job_id: str, mutator, *, queue_dir=None,
     Raises KeyError(job_id) if no entry with that id exists in the day's
     queue -- the caller decides how to report that (print + exit 2 for the
     orchestrator).
+
+    Any call whose mutator changes the entry's status also stamps
+    status_changed_at (UTC ISO-8601); the autopilot expiry sweep keys off this.
     """
     day_dir = queue_root(queue_dir) / _validated_day(scan_date_iso)
     path = day_dir / "jobs.json"
@@ -206,7 +209,10 @@ def update_entry(scan_date_iso: str, job_id: str, mutator, *, queue_dir=None,
             if expect_status is not None and entry.get("status") != expect_status:
                 raise StatusConflict(job_id, expect_status, entry.get("status"))
 
+            old_status = entry.get("status")
             mutator(entry)
+            if entry.get("status") != old_status:
+                entry["status_changed_at"] = datetime.now(timezone.utc).isoformat()
 
             _write_atomic(path, json.dumps(entries, indent=2, ensure_ascii=False))
             return entry
