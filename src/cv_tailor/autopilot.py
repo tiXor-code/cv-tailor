@@ -34,6 +34,13 @@ AUTO_APPROVE_MIN = 8
 EXPIRE_DAYS = 7
 ORCHESTRATOR_TIMEOUT = 1200  # per-job backstop; portal runs have their own wall clock
 EXPIRABLE_STATUSES = ("pending", "needs_review", "needs_human")
+# Mid-flight statuses written by scripts/apply_approved.py. A killed
+# orchestrator leaves an entry parked in one of these forever: the daily pass
+# only looks at `pending`, and _sweep_expired only looks at EXPIRABLE_STATUSES.
+STRANDED_STATUSES = ("assembling", "sending")
+# Older than this in a mid-flight status = the process that owned it is gone.
+# Comfortably longer than ORCHESTRATOR_TIMEOUT so a live run is never stolen.
+STRANDED_AFTER = timedelta(seconds=ORCHESTRATOR_TIMEOUT * 3)
 _APPLIED = ("sent", "preview_sent")
 _PARKED = ("needs_review", "needs_human", "ready")
 _DAY_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
@@ -48,10 +55,11 @@ class AutopilotReport:
     failed: list = field(default_factory=list)
     queued_new: list = field(default_factory=list)
     expired: list = field(default_factory=list)
+    stranded: list = field(default_factory=list)
 
     def has_activity(self) -> bool:
         return bool(self.applied or self.parked or self.failed
-                    or self.queued_new or self.expired)
+                    or self.queued_new or self.expired or self.stranded)
 
 
 def _day_dirs(queue_dir=None) -> list[tuple[str, Path]]:
@@ -148,6 +156,79 @@ def _sweep_expired(now: datetime, *, queue_dir=None) -> list[tuple[str, dict]]:
     return expired
 
 
+def _ledger_has(job_id: str) -> bool:
+    """True iff the applications ledger already owns a row for this job_id.
+
+    Opened lazily and per-call so the sweep never holds a connection, and so
+    a missing/locked DB degrades to "unknown" rather than killing the pass.
+    Unknown is treated as NOT sent by the caller, which parks the entry for a
+    human instead of retrying it -- the fail-closed direction."""
+    try:
+        from cv_tailor import cache
+        conn = cache.connect(None)
+    except Exception:  # noqa: BLE001 - ledger unavailable, caller parks instead
+        return False
+    try:
+        return cache.own_application_recorded(conn, job_id)
+    except Exception:  # noqa: BLE001
+        return False
+    finally:
+        try:
+            conn.close()
+        except Exception:  # noqa: BLE001
+            pass
+
+
+def _sweep_stranded(now: datetime, *, queue_dir=None,
+                    ledger_has=None) -> list[tuple[str, dict]]:
+    """Resolve entries a killed orchestrator left mid-flight.
+
+    Asymmetric by design, because the two mid-flight statuses carry very
+    different risk:
+
+    `assembling` -- assembly only renders a CV and a cover letter, nothing has
+    left the machine, so the entry goes back to `approved` for a clean retry.
+
+    `sending` -- a send may ALREADY have reached a real employer, and the
+    crash could have landed between the send and the ledger write. There is no
+    safe automatic retry. If the ledger proves the send landed, reconcile to
+    `sent`; otherwise park at `needs_human`. Under no ledger state does a
+    stranded send go back to `approved`: applying twice to the same employer
+    is worse than applying zero times.
+    """
+    ledger_has = ledger_has or _ledger_has
+    cutoff = now - STRANDED_AFTER
+    stranded: list[tuple[str, dict]] = []
+    for scan_date, day_dir in _day_dirs(queue_dir):
+        for entry in _read_day(day_dir):
+            status = entry.get("status")
+            if status not in STRANDED_STATUSES:
+                continue
+            # A fresh mid-flight entry belongs to a process that is probably
+            # still working. Never steal it.
+            if _last_change(entry, scan_date) >= cutoff:
+                continue
+
+            if status == "assembling":
+                new_status, err = "approved", "requeued-after-strand"
+            elif ledger_has(entry["id"]):
+                new_status, err = "sent", "reconciled-after-strand"
+            else:
+                new_status, err = "needs_human", "stranded-sending-unverified"
+
+            def _mut(e: dict, _s=new_status, _e=err) -> None:
+                e["status"] = _s
+                e["error"] = _e
+
+            try:
+                fresh = update_entry(scan_date, entry["id"], _mut,
+                                      queue_dir=queue_dir, expect_status=status)
+                stranded.append((scan_date, fresh))
+            except (StatusConflict, KeyError):
+                continue
+    return stranded
+
+
 def build_digest(report: AutopilotReport) -> str | None:
     if not report.has_activity():
         return None
@@ -169,18 +250,28 @@ def build_digest(report: AutopilotReport) -> str | None:
     _section("Queued for review", report.queued_new,
              lambda e: f" [{e.get('score')}/10]")
     _section("Auto-expired", report.expired, lambda e: "")
+    # Loud, never silent: a stranded send that could not be verified against
+    # the ledger is the one row here that wants a human within the hour.
+    _section("Recovered after a crash", report.stranded,
+             lambda e: f" -> {e.get('status')} ({e.get('error')})")
     lines.append("")
     lines.append(f"Review: {SCOUT_URL}")
     return "\n".join(lines)
 
 
 def run_autopilot(now: datetime | None = None, *, queue_dir=None,
-                  runner=None, notify=None) -> AutopilotReport:
-    """One full autopilot pass. `runner`/`notify` are injectable for tests;
-    production is runner=run_orchestrator, notify=telegram.send_text."""
+                  runner=None, notify=None, ledger_has=None) -> AutopilotReport:
+    """One full autopilot pass. `runner`/`notify`/`ledger_has` are injectable
+    for tests; production is runner=run_orchestrator, notify=telegram.send_text
+    and ledger_has=_ledger_has (the real applications table)."""
     now = now or datetime.now(timezone.utc)
     runner = runner or run_orchestrator
     report = AutopilotReport()
+
+    # Resolve anything a killed orchestrator left mid-flight BEFORE starting
+    # new work, so stranded entries can never accumulate across days.
+    report.stranded = _sweep_stranded(now, queue_dir=queue_dir,
+                                      ledger_has=ledger_has)
     window_start = (now - timedelta(days=EXPIRE_DAYS)).date().isoformat()
     today = now.date().isoformat()
 
