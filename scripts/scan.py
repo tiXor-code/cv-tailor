@@ -152,6 +152,7 @@ def auto_apply_pending(scan_date_iso: str, *, queue_dir=None, runner=None) -> li
     entries = json.loads((day_dir / "jobs.json").read_text())
 
     results: list[tuple[str, int]] = []
+    outcomes: list[str] = []
     for entry in entries:
         if entry.get("status") != "pending":
             continue
@@ -174,9 +175,23 @@ def auto_apply_pending(scan_date_iso: str, *, queue_dir=None, runner=None) -> li
 
         print(f"auto-apply: {job_id} {entry.get('company', '?')} -> rc={rc}", file=sys.stderr)
         results.append((job_id, rc))
+        # rc is the ORCHESTRATOR's exit code, which is 0 for every clean
+        # needs_human park too -- so it can never answer "did we apply?".
+        # Re-read the entry the orchestrator just rewrote and report that.
+        try:
+            after = json.loads((day_dir / "jobs.json").read_text())
+            status = next((e.get("status", "?") for e in after if e.get("id") == job_id), "?")
+        except Exception:  # noqa: BLE001 -- a summary must never kill the scan
+            status = "?"
+        outcomes.append(status)
 
-    ok = sum(1 for _, rc in results if rc == 0)
-    print(f"auto-apply summary: {ok}/{len(results)} succeeded", file=sys.stderr)
+    counts: dict[str, int] = {}
+    for status in outcomes:
+        counts[status] = counts.get(status, 0) + 1
+    rc_failures = sum(1 for _, rc in results if rc != 0)
+    summary = " ".join(f"{k}={v}" for k, v in sorted(counts.items())) or "none"
+    print(f"auto-apply outcomes ({len(results)} run): {summary} "
+          f"[sent={counts.get('sent', 0)} rc!=0: {rc_failures}]", file=sys.stderr)
     return results
 
 
