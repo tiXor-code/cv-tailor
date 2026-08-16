@@ -137,6 +137,19 @@ def _finish_portal_dry_run(args, result) -> int:
     return 0
 
 
+# Reasons that PROVE no submission could have happened -- see the long-form
+# rationale at the use site. Anything NOT listed here keeps its pre-inserted
+# ledger row, because the attempt may have touched or even submitted the form.
+#
+# "handoff-manual: no adapter" is deliberately absent: a human was driving a
+# real browser at the posting, so a genuine application is entirely possible
+# and deleting the row would let a duplicate go out later.
+_NO_SUBMIT_REASONS = {
+    "no-adapter", "missing-apply-target", "captcha", "login-required",
+    "handoff-timeout: captcha not solved",
+}
+
+
 def _handle_portal(args, entry: dict, meta: dict) -> int:
     """Portal apply path (replaces the Phase A stub that parked every portal
     job at `ready` unattempted): unarmed runs a fill-only dry-run for a
@@ -261,10 +274,7 @@ def _handle_portal(args, entry: dict, meta: dict) -> int:
         # ("timeout", "no-confirmation", "handoff-timeout: not submitted, form
         # left as-is") stay OUT of this set: those may have touched or even
         # submitted the form, so their row keeps the documented semantics.
-        _NO_SUBMIT_REASONS = {
-            "no-adapter", "missing-apply-target", "captcha", "login-required",
-            "handoff-timeout: captcha not solved",
-        }
+        # The set itself lives at module scope so the invariant is testable.
         if not own_row_skip and result.reason in _NO_SUBMIT_REASONS:
             delete_application(conn, job_id=job_id)
 
