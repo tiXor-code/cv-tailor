@@ -262,8 +262,10 @@ def _handle_portal(args, entry: dict, meta: dict) -> int:
 
     if result.status == "needs_human":
         # Reasons that PROVE no submission could have happened: no-adapter and
-        # missing-apply-target return before a browser is even launched
-        # (base.py:343-349); captcha / login-required come only from
+        # missing-apply-target return before a browser is even launched -- they
+        # are run_portal_application's early guards (the apply_target scheme
+        # check and the unattended adapter_for gate), both of which return
+        # before it ever enters sync_playwright; captcha / login-required come only from
         # resolve_blocker, whose call sites in every adapter run strictly BEFORE
         # any field is filled; "captcha not solved" means the human never
         # cleared the wall, so the flow never reached the form. Keeping the
