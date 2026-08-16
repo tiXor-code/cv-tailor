@@ -162,6 +162,38 @@ def wait_for_blocker_clear(page, timeout_s: float, notify=None) -> bool:
             return False
 
 
+def wait_for_human_close(page, timeout_s: float, notify=None) -> bool:
+    """Handoff on a host no adapter claims: the browser is open at the posting
+    and the human does the whole application. There is no adapter to detect a
+    confirmation, so the only honest completion signal is the human closing the
+    tab. Poll every 2s until it closes (True) or timeout_s elapses (False).
+
+    Either way the caller returns needs_human -- this function decides how long
+    to hold the browser open, never whether an application happened. Mirrors
+    wait_for_blocker_clear's polling shape; notify is best-effort and fires
+    once, before the wait."""
+    if notify is not None:
+        try:
+            notify("no adapter for this posting -- a browser is open on the mini, "
+                   "apply manually and close the tab when done")
+        except Exception:  # noqa: BLE001 -- notify is best-effort
+            pass
+
+    deadline = time.monotonic() + timeout_s
+    while True:
+        try:
+            if page.is_closed():
+                return True
+        except PlaywrightError:
+            return True
+        if time.monotonic() >= deadline:
+            return False
+        try:
+            page.wait_for_timeout(2000)
+        except PlaywrightError:
+            return False
+
+
 def resolve_blocker(page, blocker: str, evidence_dir, *, stage: str,
                      handoff: bool, notify=None) -> PortalResult | None:
     """Shared blocker-handling policy for an adapter's own mid-flow
@@ -303,8 +335,9 @@ def run_portal_application(entry: dict, package: dict, profile: dict, answers: d
     """Own the full Playwright lifecycle for one job's portal application.
 
     Flow: resolve evidence_dir -> resolve URL -> look up the adapter for its
-    host (no match -> needs_human before any browser is launched) -> launch
-    headless chromium -> navigate (timeout -> needs_human) -> blocker check
+    host (no match, unattended -> needs_human("no-adapter") before any
+    browser is launched; no match, handoff -> keep going, see below) ->
+    launch chromium -> navigate (timeout -> needs_human) -> blocker check
     (captcha/login-required -> needs_human) -> dispatch to the adapter
     (timeout -> needs_human) -> capture evidence at whatever stage was last
     reached, always, even on an adapter exception -> any uncaught exception
@@ -325,6 +358,15 @@ def run_portal_application(entry: dict, package: dict, profile: dict, answers: d
     waiting (see cv_tailor.portal.base.wait_for_blocker_clear /
     resolve_blocker). `notify` is a best-effort `str -> None` callable (e.g.
     Telegram) the adapter uses to tell the human what it's waiting on.
+
+    Handoff also relaxes the adapter gate: a human can apply by hand on ANY
+    site, so a host no adapter claims still gets a headed browser at the
+    posting, held open by wait_for_human_close until the tab closes or the
+    handoff timeout expires. That path always returns
+    needs_human("handoff-manual: no adapter") -- deliberately NOT the
+    unattended "no-adapter" string, because a human at a real browser may
+    genuinely have submitted, so callers must not treat it as proof that
+    nothing was sent.
 
     `timeout_s` is a wall-clock budget for the whole browser interaction,
     not a per-action cap: navigation gets the full budget, but once it
@@ -352,7 +394,11 @@ def run_portal_application(entry: dict, package: dict, profile: dict, answers: d
                              evidence_dir=str(evidence_dir))
 
     adapter = adapter_for(url)
-    if adapter is None:
+    # Unattended: no adapter means nothing can be filled, so don't pay for a
+    # browser. Handoff: a human is watching and can apply by hand on ANY site,
+    # so the browser is the entire point of the button -- open it at the
+    # posting and let them work (see the no-adapter branch after navigation).
+    if adapter is None and not handoff:
         return PortalResult(status="needs_human", reason="no-adapter",
                              evidence_dir=str(evidence_dir))
 
@@ -395,6 +441,20 @@ def run_portal_application(entry: dict, package: dict, profile: dict, answers: d
                                               notify=notify)
                     if blocked is not None:
                         return blocked
+
+                if adapter is None:
+                    # Handoff with no adapter: hand the open page to the human.
+                    # Always needs_human -- we cannot observe whether they
+                    # submitted, and claiming "sent" on a guess would poison
+                    # both the ledger and the CRM. The distinct reason string
+                    # keeps this OUT of apply_approved's _NO_SUBMIT_REASONS:
+                    # unlike an unattended no-adapter abort, a real submission
+                    # may well have happened here.
+                    stage = "handoff"
+                    wait_for_human_close(page, handoff_timeout_s(), notify)
+                    return PortalResult(status="needs_human",
+                                         reason="handoff-manual: no adapter",
+                                         evidence_dir=str(evidence_dir))
 
                 stage = "dispatch"
                 try:
