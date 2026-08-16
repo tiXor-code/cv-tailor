@@ -7,7 +7,7 @@ import re
 import urllib.request
 import json
 import xml.etree.ElementTree as ET
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from urllib.parse import urlparse, quote_plus
 
 from cv_tailor.urlsafe import host_matches, safe_hostname
@@ -22,6 +22,13 @@ class JobPosting:
     url: str          # public job URL
     description: str  # plain text, HTML stripped
     raw_id: str       # source-specific id for dedupe
+    # Every apply link the source offered, normalized to {"label", "url"}.
+    # `url` above is the ONE link chosen for automation (_best_company_url,
+    # which deliberately falls back to a Google Jobs share_link when no link
+    # provably belongs to the org). This list is everything that ranking saw,
+    # kept so the ATS resolver gets a second chance and so a human is never
+    # left with only the SERP link. Empty for sources that offer no such list.
+    apply_options: list[dict] = field(default_factory=list)
 
 
 HTML_TAG_RE = re.compile(r"<[^>]+>")
@@ -170,6 +177,43 @@ def _best_company_url(org, apply_options, share_link):
     return share_link or ""
 
 
+# Upper bound on stored/rendered apply links per job. SerpAPI returns a
+# handful; the cap keeps one pathological response from bloating every queue
+# entry and the /scout card that renders them.
+_MAX_APPLY_OPTIONS = 8
+
+
+def _apply_option_links(apply_options) -> list[dict]:
+    """Normalize a source's raw apply-option list to [{"label", "url"}, ...].
+
+    Untrusted input: these links come straight from the SerpAPI response and
+    end up both in an <a href> on /scout and in a host-allowlist decision in
+    ats_resolve. So each one must survive safe_hostname (which returns "" for
+    parser-differential hosts like `evil.com\\.jobs.ashbyhq.com` -- the
+    1d9c700 fix) and be plain http(s). Anything else is dropped silently:
+    a bad link is not an error, it just isn't offered.
+
+    Order is preserved (SerpAPI ranks by relevance), duplicates collapse to
+    their first occurrence, and the result is capped at _MAX_APPLY_OPTIONS.
+    """
+    out: list[dict] = []
+    seen: set[str] = set()
+    for opt in apply_options or []:
+        if not isinstance(opt, dict):
+            continue
+        url = (opt.get("link") or "").strip()
+        if not url.startswith(("http://", "https://")):
+            continue
+        host = safe_hostname(url)
+        if not host or url in seen:
+            continue
+        seen.add(url)
+        out.append({"label": (opt.get("title") or "").strip() or host, "url": url})
+        if len(out) >= _MAX_APPLY_OPTIONS:
+            break
+    return out
+
+
 def fetch_serpapi(query: str, location: str | None = None, api_key: str | None = None,
                   hl: str = "en", budget=None) -> list[JobPosting]:
     """Google Jobs via SerpAPI. Remote-only (ltype=1). One page (~10 results).
@@ -209,6 +253,7 @@ def fetch_serpapi(query: str, location: str | None = None, api_key: str | None =
             title=j.get("title") or "", location=j.get("location") or "",
             url=_best_company_url(org, j.get("apply_options"), j.get("share_link")),
             description=j.get("description") or "", raw_id=j.get("job_id") or "",
+            apply_options=_apply_option_links(j.get("apply_options")),
         ))
     return out
 
