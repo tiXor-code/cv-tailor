@@ -8,7 +8,11 @@ hosts, so every such job dies needs_human("no-adapter") before a browser even
 launches. Cohere (2026-07-10) arrived as a remoteOK link while Cohere actually
 hires on Ashby, the one confirmed full-auto adapter.
 
-Two strategies, in order:
+Three strategies, in order:
+  0. APPLY OPTIONS -- the apply links the source already handed us (stored on
+     the queue entry as apply_options). No network at all; same org-match rule
+     as the page scrape, because those links are exactly the ones
+     _best_company_url declined to trust blindly.
   1. PAGE SCRAPE -- fetch the aggregator page and look for an outbound link
      whose host an adapter claims AND whose netloc+path contains the company
      slug (never link to a DIFFERENT company's ATS).
@@ -162,12 +166,48 @@ def resolve_from_boards(company: str, title: str) -> str | None:
     return None
 
 
+def resolve_from_apply_options(entry: dict) -> str | None:
+    """Strategy 0: the apply links the source already handed us.
+
+    scout_queue stores every apply link SerpAPI returned (entry["apply_options"]),
+    including the ones _best_company_url rejected when it fell back to the Google
+    Jobs share_link. An adapter-claimed link in that list is the cheapest possible
+    resolution -- no network, no scrape of a bot-walled SERP.
+
+    The org check is NOT optional. _best_company_url rejected these links for a
+    reason: a SerpAPI card can carry a DIFFERENT company's ATS link (an
+    EnthuZiastic posting whose only Workday link was Cisco's). So a link only
+    resolves when an adapter claims its host AND the normalized org name appears
+    in the host+path. Everything else stays None and reaches a human instead --
+    /scout still shows the full list, it just never auto-applies to it.
+    """
+    org_norm = _normalize_org(entry.get("company") or "")
+    if not org_norm:
+        return None
+    for opt in entry.get("apply_options") or []:
+        if not isinstance(opt, dict):
+            continue
+        url = (opt.get("url") or "").strip()
+        if not _adapter_claimed(url):
+            continue
+        parsed = urlsplit(url)
+        if org_norm in _normalize_org(parsed.netloc + parsed.path):
+            return url
+    return None
+
+
 def resolve_ats_url(entry: dict) -> str | None:
     """The full resolution for one queue entry. None = leave the job unchanged."""
     company = (entry.get("company") or "").strip()
     title = (entry.get("title") or "").strip()
     if not company or not title:
         return None
+
+    hit = resolve_from_apply_options(entry)
+    if hit:
+        print(f"[ats-resolve] apply option: {hit}", file=sys.stderr)
+        return hit
+
     url = (entry.get("apply_target") or entry.get("url") or "").strip()
     if url:
         hit = resolve_from_page(_fetch_page(url), company)
