@@ -138,6 +138,25 @@ def handoff_timeout_s() -> float:
         return 600.0
 
 
+def manual_handoff_timeout_s() -> float:
+    """APPLY_MANUAL_HANDOFF_TIMEOUT seconds, read fresh on every call (same
+    never-cached contract as handoff_timeout_s). Default 3600s.
+
+    Deliberately a SEPARATE budget from handoff_timeout_s, because the two
+    measure different human tasks. handoff_timeout_s's 600s is "how long to
+    wait for someone to solve a CAPTCHA or click submit" on a form the adapter
+    already filled -- generous for that. The no-adapter manual handoff is the
+    ENTIRE application done by hand: find the posting on the site, fill every
+    field, upload a CV, answer screening questions. At 600s that wait returns
+    False, the finally runs, and browser.close() takes the window away from a
+    human mid-form. An hour is the sane floor for that, and it lives here in
+    version control rather than in a .env nobody has set."""
+    try:
+        return float(os.environ.get("APPLY_MANUAL_HANDOFF_TIMEOUT", "3600"))
+    except (TypeError, ValueError):
+        return 3600.0
+
+
 def wait_for_blocker_clear(page, timeout_s: float, notify=None) -> bool:
     """When a blocker is detected in handoff mode: notify the human once
     (best-effort -- a notify failure never aborts the wait), then poll
@@ -474,7 +493,12 @@ def run_portal_application(entry: dict, package: dict, profile: dict, answers: d
                     # then overwrites form_state.json with {}, which is fine:
                     # nothing was filled, so the form dump has no value here.
                     capture_evidence(page, evidence_dir, "handoff")
-                    wait_for_human_close(page, handoff_timeout_s(), notify)
+                    # manual_handoff_timeout_s, NOT handoff_timeout_s: this
+                    # wait spans the whole application done by hand, not a
+                    # CAPTCHA on an already-filled form. Reusing the 600s
+                    # captcha budget here closes the browser on a human who is
+                    # still typing.
+                    wait_for_human_close(page, manual_handoff_timeout_s(), notify)
                     return PortalResult(status="needs_human",
                                          reason="handoff-manual: no adapter",
                                          evidence_dir=str(evidence_dir))

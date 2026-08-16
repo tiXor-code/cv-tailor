@@ -8,7 +8,7 @@ import pytest
 from playwright.sync_api import Error as PlaywrightError
 
 import cv_tailor.portal.base as base
-from cv_tailor.portal.base import PortalResult, run_portal_application
+from cv_tailor.portal.base import run_portal_application
 
 
 class FakePage:
@@ -127,9 +127,12 @@ def test_handoff_no_adapter_captures_evidence(monkeypatch, tmp_path):
 
 
 def test_handoff_no_adapter_times_out_without_a_close(monkeypatch, tmp_path):
+    # APPLY_MANUAL_HANDOFF_TIMEOUT, not APPLY_HANDOFF_TIMEOUT: this path is
+    # governed by the manual budget now (see the block at the bottom of this
+    # file), and the fake page never closes, so only that knob ends the wait.
     page, record = FakePage(closed_after=10**9), {}
     _patch(monkeypatch, page, record)
-    monkeypatch.setenv("APPLY_HANDOFF_TIMEOUT", "0")
+    monkeypatch.setenv("APPLY_MANUAL_HANDOFF_TIMEOUT", "0")
     result = run_portal_application(_entry(), _package(tmp_path), {}, {},
                                     dry_run=False, handoff=True)
     assert result.status == "needs_human"
@@ -277,3 +280,59 @@ def test_wait_for_human_close_survives_a_notify_that_raises():
 
     assert base.wait_for_human_close(FakePage(closed_after=0), timeout_s=600,
                                      notify=boom) is True
+
+
+# --- the manual handoff gets its own budget ----------------------------------
+#
+# This wait is not a CAPTCHA wait. handoff_timeout_s's 600s covers "a human
+# solves a challenge on a form the adapter already filled". Here the human does
+# the ENTIRE application by hand -- find the posting, fill it, upload a CV. At
+# 600s wait_for_human_close returns False, the finally runs, and browser.close()
+# pulls the window out from under someone mid-form. APPLY_HANDOFF_TIMEOUT is not
+# set in the live .env, so that 600s was the value actually in force.
+
+def test_manual_handoff_timeout_defaults_to_an_hour(monkeypatch):
+    monkeypatch.delenv("APPLY_MANUAL_HANDOFF_TIMEOUT", raising=False)
+    assert base.manual_handoff_timeout_s() == 3600.0
+
+
+def test_manual_handoff_timeout_reads_the_env_fresh_every_call(monkeypatch):
+    # Never cached at import: the value must follow the environment within a
+    # single process, the same contract handoff_timeout_s has.
+    monkeypatch.setenv("APPLY_MANUAL_HANDOFF_TIMEOUT", "120")
+    assert base.manual_handoff_timeout_s() == 120.0
+    monkeypatch.setenv("APPLY_MANUAL_HANDOFF_TIMEOUT", "240")
+    assert base.manual_handoff_timeout_s() == 240.0
+
+
+@pytest.mark.parametrize("bad", ["", "abc", "10 minutes", "  "])
+def test_manual_handoff_timeout_falls_back_on_a_malformed_value(monkeypatch, bad):
+    # A typo in the env must not degrade to 0 -- that would close the browser
+    # instantly on every manual handoff. Fail back to the sane default.
+    monkeypatch.setenv("APPLY_MANUAL_HANDOFF_TIMEOUT", bad)
+    assert base.manual_handoff_timeout_s() == 3600.0
+
+
+def test_captcha_budget_is_untouched(monkeypatch):
+    """handoff_timeout_s still governs blocker waits and adapter submit waits
+    at 600s -- the manual budget is additive, not a redefinition."""
+    monkeypatch.delenv("APPLY_HANDOFF_TIMEOUT", raising=False)
+    assert base.handoff_timeout_s() == 600.0
+
+
+def test_manual_handoff_call_site_uses_the_manual_budget(monkeypatch, tmp_path):
+    """Pins WHICH budget reaches wait_for_human_close. Set the two knobs to
+    different values: if the call site ever reverts to handoff_timeout_s, this
+    reads 5 instead of 1234."""
+    page, record = FakePage(closed_after=10**9), {}
+    _patch(monkeypatch, page, record)
+    monkeypatch.setenv("APPLY_HANDOFF_TIMEOUT", "5")
+    monkeypatch.setenv("APPLY_MANUAL_HANDOFF_TIMEOUT", "1234")
+    seen = []
+    monkeypatch.setattr(base, "wait_for_human_close",
+                        lambda page, timeout_s, notify=None: seen.append(timeout_s) or True)
+
+    run_portal_application(_entry(), _package(tmp_path), {}, {},
+                           dry_run=False, handoff=True)
+
+    assert seen == [1234.0]
