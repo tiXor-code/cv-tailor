@@ -334,10 +334,12 @@ def run_portal_application(entry: dict, package: dict, profile: dict, answers: d
                             handoff: bool = False, notify: Any = None) -> PortalResult:
     """Own the full Playwright lifecycle for one job's portal application.
 
-    Flow: resolve evidence_dir -> resolve URL -> look up the adapter for its
+    Flow: resolve evidence_dir -> resolve URL (absent or not http(s) ->
+    needs_human("missing-apply-target")) -> look up the adapter for its
     host (no match, unattended -> needs_human("no-adapter") before any
     browser is launched; no match, handoff -> keep going, see below) ->
-    launch chromium -> navigate (timeout -> needs_human) -> blocker check
+    launch chromium -> navigate (timeout -> needs_human) -> [handoff with no
+    adapter returns here, before the blocker check] -> blocker check
     (captcha/login-required -> needs_human) -> dispatch to the adapter
     (timeout -> needs_human) -> capture evidence at whatever stage was last
     reached, always, even on an adapter exception -> any uncaught exception
@@ -362,7 +364,10 @@ def run_portal_application(entry: dict, package: dict, profile: dict, answers: d
     Handoff also relaxes the adapter gate: a human can apply by hand on ANY
     site, so a host no adapter claims still gets a headed browser at the
     posting, held open by wait_for_human_close until the tab closes or the
-    handoff timeout expires. That path always returns
+    handoff timeout expires. That path returns BEFORE the blocker check (a
+    captcha/login is the human's to solve when nothing is being automated)
+    and captures its own "handoff" evidence up front, since the tab is
+    usually gone by the time the finally runs. It always returns
     needs_human("handoff-manual: no adapter") -- deliberately NOT the
     unattended "no-adapter" string, because a human at a real browser may
     genuinely have submitted, so callers must not treat it as proof that
@@ -388,8 +393,16 @@ def run_portal_application(entry: dict, package: dict, profile: dict, answers: d
     evidence_dir = Path(package["package_dir"]) / "portal"
     evidence_dir.mkdir(parents=True, exist_ok=True)
 
+    # Absent, or not an http(s) URL. The scheme check is fail-closed and
+    # matters most in handoff mode, which is the only path that navigates to a
+    # host no adapter claims -- apply_target comes from an untrusted feed, and
+    # a file:// / javascript: target must never reach page.goto. Unattended
+    # behaviour is preserved: such a URL already degraded to needs_human
+    # (safe_hostname -> "" -> no adapter), and "missing-apply-target" and
+    # "no-adapter" are both needs_human and both in apply_approved's
+    # _NO_SUBMIT_REASONS, so the ledger outcome is identical.
     url = (entry.get("apply_target") or entry.get("url") or "").strip()
-    if not url:
+    if not url or not url.lower().startswith(("http://", "https://")):
         return PortalResult(status="needs_human", reason="missing-apply-target",
                              evidence_dir=str(evidence_dir))
 
@@ -430,6 +443,42 @@ def run_portal_application(entry: dict, package: dict, profile: dict, answers: d
                     remaining += handoff_timeout_s()
                 page.set_default_timeout(max(remaining, 5) * 1000)
 
+                if adapter is None:
+                    # Handoff with no adapter: hand the open page to the human.
+                    # Always needs_human -- we cannot observe whether they
+                    # submitted, and claiming "sent" on a guess would poison
+                    # both the ledger and the CRM. The distinct reason string
+                    # keeps this OUT of apply_approved's _NO_SUBMIT_REASONS:
+                    # unlike an unattended no-adapter abort, a real submission
+                    # may well have happened here.
+                    #
+                    # This runs BEFORE detect_blockers on purpose. Blocker
+                    # detection exists to stop an AUTOMATED fill from crashing
+                    # into a wall; here there is no automation, so a captcha or
+                    # login is the human's to solve, not ours to detect.
+                    # Detecting one would be actively harmful: _LOGIN_SELECTOR
+                    # matches any password input on the page (a header login
+                    # box, a footer form), so resolve_blocker would burn the
+                    # whole handoff timeout waiting for a human to "clear"
+                    # something that was never in the way and then return
+                    # "handoff-timeout: captcha not solved" -- which IS in
+                    # _NO_SUBMIT_REASONS, deleting the ledger row for an
+                    # application the human may well have submitted.
+                    stage = "handoff"
+                    # Capture before the wait, not only in the finally: the
+                    # happy path ends with the human closing the tab, so the
+                    # finally's screenshot hits a closed page and handoff.png
+                    # would be missing exactly when the run went well. The
+                    # posting as opened is the better artifact anyway -- it is
+                    # proof the browser landed on the right page. The finally
+                    # then overwrites form_state.json with {}, which is fine:
+                    # nothing was filled, so the form dump has no value here.
+                    capture_evidence(page, evidence_dir, "handoff")
+                    wait_for_human_close(page, handoff_timeout_s(), notify)
+                    return PortalResult(status="needs_human",
+                                         reason="handoff-manual: no adapter",
+                                         evidence_dir=str(evidence_dir))
+
                 blocker = detect_blockers(page)
                 if blocker:
                     stage = blocker
@@ -441,20 +490,6 @@ def run_portal_application(entry: dict, package: dict, profile: dict, answers: d
                                               notify=notify)
                     if blocked is not None:
                         return blocked
-
-                if adapter is None:
-                    # Handoff with no adapter: hand the open page to the human.
-                    # Always needs_human -- we cannot observe whether they
-                    # submitted, and claiming "sent" on a guess would poison
-                    # both the ledger and the CRM. The distinct reason string
-                    # keeps this OUT of apply_approved's _NO_SUBMIT_REASONS:
-                    # unlike an unattended no-adapter abort, a real submission
-                    # may well have happened here.
-                    stage = "handoff"
-                    wait_for_human_close(page, handoff_timeout_s(), notify)
-                    return PortalResult(status="needs_human",
-                                         reason="handoff-manual: no adapter",
-                                         evidence_dir=str(evidence_dir))
 
                 stage = "dispatch"
                 try:

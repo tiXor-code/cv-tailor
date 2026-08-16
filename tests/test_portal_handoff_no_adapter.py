@@ -2,6 +2,9 @@
 handoff on a host no adapter claims hit the same adapter_for gate as the
 unattended run and returned no-adapter without ever opening anything -- the
 button was a no-op on exactly the jobs it existed for."""
+from pathlib import Path
+
+import pytest
 from playwright.sync_api import Error as PlaywrightError
 
 import cv_tailor.portal.base as base
@@ -140,6 +143,98 @@ def test_missing_apply_target_still_short_circuits_in_handoff(monkeypatch, tmp_p
     monkeypatch.setattr(base, "sync_playwright", _boom)
     result = run_portal_application({}, _package(tmp_path), {}, {},
                                     dry_run=False, handoff=True)
+    assert result.reason == "missing-apply-target"
+
+
+# --- the handoff branch runs BEFORE the blocker check ------------------------
+
+def test_handoff_no_adapter_never_consults_detect_blockers(monkeypatch, tmp_path):
+    """detect_blockers exists to stop an AUTOMATED fill from crashing into a
+    wall. On the no-adapter path nothing is automated, so a captcha or login is
+    the human's to solve. Consulting it here is actively harmful: _LOGIN_SELECTOR
+    matches ANY password input (a header login box, a footer form), so the run
+    would burn the whole handoff timeout waiting for a human to 'clear'
+    something that was never in the way, then return 'handoff-timeout: captcha
+    not solved' -- which IS in _NO_SUBMIT_REASONS, deleting the ledger row for
+    an application the human may well have submitted."""
+    page, record = FakePage(closed_after=1), {}
+    monkeypatch.setattr(base, "sync_playwright", lambda: FakePlaywright(page, record))
+    seen = []
+    monkeypatch.setattr(base, "detect_blockers",
+                        lambda p: seen.append(p) or "login-required")
+    monkeypatch.setenv("APPLY_HANDOFF_TIMEOUT", "0")
+
+    result = run_portal_application(_entry(), _package(tmp_path), {}, {},
+                                    dry_run=False, handoff=True)
+
+    assert seen == [], "the no-adapter handoff must return before the blocker check"
+    assert result.reason == "handoff-manual: no adapter"
+
+
+# --- evidence is captured before the wait, not only in the finally -----------
+
+class ClosingPage(FakePage):
+    """The real happy path: the human closes the tab, and every later call
+    against it raises the way playwright does. Writes real bytes while open, so
+    whether the file exists proves WHEN the screenshot was taken."""
+
+    def __init__(self, closed_after=1):
+        super().__init__(closed_after=closed_after)
+        self.closed = False
+
+    def is_closed(self):
+        result = super().is_closed()
+        if result:
+            self.closed = True
+        return result
+
+    def screenshot(self, path=None, full_page=False):
+        if self.closed:
+            raise PlaywrightError("Target page, context or browser has been closed")
+        super().screenshot(path)
+        Path(path).write_bytes(b"fake-png-bytes")
+
+    def eval_on_selector_all(self, sel, js):
+        if self.closed:
+            raise PlaywrightError("Target page, context or browser has been closed")
+        return {}
+
+
+def test_handoff_png_survives_the_human_closing_the_tab(monkeypatch, tmp_path):
+    """The artifact must exist exactly when the run WENT WELL. The finally's
+    capture runs after the human closed the tab, so its screenshot raises --
+    only a capture taken before the wait leaves a file behind."""
+    page, record = ClosingPage(closed_after=1), {}
+    _patch(monkeypatch, page, record)
+
+    result = run_portal_application(_entry(), _package(tmp_path), {}, {},
+                                    dry_run=False, handoff=True)
+
+    assert result.reason == "handoff-manual: no adapter"
+    assert (tmp_path / "portal" / "handoff.png").read_bytes() == b"fake-png-bytes"
+
+
+# --- non-http(s) apply targets never reach the browser -----------------------
+
+@pytest.mark.parametrize("bad_url", [
+    "file:///etc/passwd",
+    "javascript:alert(1)",
+    "ftp://example.com/job",
+    "data:text/html,<h1>x</h1>",
+])
+def test_non_http_apply_target_never_reaches_the_browser(monkeypatch, tmp_path, bad_url):
+    """Handoff is the first path that ever navigates to a host no adapter
+    claims, and apply_target comes from an untrusted feed -- so the URL guard
+    has to be fail-closed on the scheme, not just on emptiness."""
+    def _boom():
+        raise AssertionError(f"browser launched for a non-http(s) target: {bad_url}")
+
+    monkeypatch.setattr(base, "sync_playwright", _boom)
+
+    result = run_portal_application({"apply_target": bad_url}, _package(tmp_path), {}, {},
+                                    dry_run=False, handoff=True)
+
+    assert result.status == "needs_human"
     assert result.reason == "missing-apply-target"
 
 
