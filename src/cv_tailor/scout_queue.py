@@ -58,6 +58,11 @@ def _to_entry(item) -> dict:
         "score": int(item["score"]),
         "why": item.get("reason", ""),
         "matched": list(item.get("keywords", []) or []),
+        # Every apply link the source offered (job_sources._apply_option_links).
+        # `apply_target` below is the single link automation will drive; this is
+        # the full set, so ats_resolve gets a second chance at an adapter host
+        # and /scout can offer a human something better than a Google SERP link.
+        "apply_options": list(getattr(job, "apply_options", []) or []),
         "track": item.get("track", "ai"),
         "package_dir": None,
         "cv_path": None,
