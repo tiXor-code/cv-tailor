@@ -54,16 +54,36 @@ sources:
     pages: 3
   - kind: himalayas
     count: 60
-  # Adzuna: the single biggest EU supply source here (a probe on 2026-08-17
-  # returned four-figure counts on gb/it, three-figure on de/es/pl). Needs
-  # ADZUNA_APP_ID + ADZUNA_APP_KEY in .env -- NEVER here; the dispatch reads
-  # env only and every entry no-ops with a warning until they are set.
+  # Adzuna. Needs ADZUNA_APP_ID + ADZUNA_APP_KEY in .env -- NEVER here; the
+  # dispatch reads env only and every entry no-ops with a warning until set.
+  # fetch_adzuna supports ten EU markets; four are configured below.
   #
-  # `where` is deliberately absent from every entry: it expects a PLACE, and
-  # `where=remote` returns count=0, which looks exactly like a dead
-  # credential. The work mode belongs in `query` (Adzuna ANDs the terms).
-  # max_days_old keeps a daily scan on NEW postings -- unsorted results run
-  # back nine months.
+  # MEASURED YIELD, 2026-08-17, of exactly these six entries as written:
+  # 8 postings total, 6 of which pass Gate 1. NOT four figures -- the raw
+  # `count` numbers that look four-figure come from queries WITHOUT the
+  # "remote" term and without max_days_old, and they do not survive either.
+  #
+  # Why so few: `where` cannot take a work mode (`where=remote` returns
+  # count=0, which looks exactly like a dead credential), so "remote" has to
+  # go in `query` -- but `query` is a full-text AND, and Adzuna only indexes
+  # the 500-char truncated description. Measured cost of that one term:
+  #   gb "AI engineer"          7d -> 794   | + " remote" ->   6
+  #   gb "content producer"     7d -> 181   | + " remote" ->   0
+  #   nl "python developer"     7d ->   5   | + " remote" ->   0
+  # Dropping "remote" and letting Gate 1 filter instead was measured too:
+  # 205 fetched -> 8 Gate 1 survivors (3.9%), i.e. THE SAME 8. The term buys
+  # a 25x smaller fetch for identical survivors, so it stays.
+  #
+  # The three entries measured at 0 are kept deliberately: they cost no quota
+  # and a market that is empty this week is not empty next week. They will
+  # each log one "0 postings" warning per scan -- that is the warning working,
+  # not a fault.
+  #
+  # SCORING CAVEAT, measured on 10 real postings: all 10 scored 3/10 with zero
+  # variance and 0 cleared the autopilot floor of 6. Adzuna's descriptions are
+  # capped at 500 chars server-side (8.3% of the scorer's 6000-char window),
+  # which is too little for the scorer to discriminate. As configured, Adzuna
+  # feeds /scout for human review but produces no auto-applications.
   - kind: adzuna
     query: "AI engineer remote"
     country: gb
@@ -72,10 +92,12 @@ sources:
     query: "AI engineer remote"
     country: de
     max_days_old: 7
+  # measured 0 at both 7d and 30d on 2026-08-17 -- kept, see the note above
   - kind: adzuna
     query: "AI automation engineer remote"
     country: gb
     max_days_old: 7
+  # measured 0 at both 7d and 30d on 2026-08-17
   - kind: adzuna
     query: "python developer remote"
     country: nl
@@ -84,6 +106,7 @@ sources:
     query: "python developer remote"
     country: pl
     max_days_old: 7
+  # measured 0 at both 7d and 30d on 2026-08-17
   - kind: adzuna
     query: "content producer remote"
     country: gb
@@ -98,6 +121,12 @@ sources:
   # outside JSEARCH_MARKETS, and data/jsearch_budget.json caps the pool.
   #
   # 6 queries/day = ~186/mo, comfortably under the 600/mo counter.
+  #
+  # SCORING CAVEAT, measured on 6 real postings 2026-08-17: descriptions here
+  # average 3132 chars (6.3x Adzuna's), which does lift scores -- mean 3.7 vs
+  # 3.0, with two 5s -- but 0 of 6 cleared the autopilot floor of 6 either.
+  # So the shortfall is NOT only Adzuna's truncation: this UK-aggregator
+  # channel as a whole currently produces review candidates, not applications.
   - kind: jsearch
     query: "AI engineer remote UK"
   - kind: jsearch

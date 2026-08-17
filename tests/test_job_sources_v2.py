@@ -1,6 +1,7 @@
 # tests/test_job_sources_v2.py
 import io, json, sys, pathlib
 from unittest import mock
+from urllib.parse import quote_plus
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent / "src"))
 from cv_tailor import job_sources
 
@@ -422,7 +423,7 @@ def test_fetch_adzuna_maps_fields():
     with mock.patch("urllib.request.urlopen",
                     side_effect=_url_router({"/jobs/de/search/1": payload}, calls)):
         jobs = job_sources.fetch_adzuna("AI engineer remote", country="de",
-                                        app_id="id", app_key="key")
+                                        app_id="fixtureid", app_key="key")
     assert len(calls) == 1
     assert "api.adzuna.com/v1/api/jobs/de/search/1" in calls[0]
     # the id-less-and-link-less 4th posting is dropped; the other three map
@@ -436,22 +437,72 @@ def test_fetch_adzuna_maps_fields():
     assert j.apply_options == []
 
 
-def test_fetch_adzuna_never_puts_the_app_id_in_the_stored_url():
-    """MEASURED 2026-08-17: every market's redirect_url carries
-    `utm_source=<ADZUNA_APP_ID>`. job.url is persisted to the queue JSON, to
-    scans/<date>.json, to the Telegram digest and rendered as an <a href> on
-    /scout, so keeping the query string would write a live credential into all
-    four. Stripping it is safe: the bare /jobs/details/<id> path behaves
-    identically (both are bot-walled 403 to a script, both open in a browser)."""
+def test_fetch_adzuna_drops_the_credential_param_and_keeps_every_other():
+    """MEASURED over 53 postings across gb/de/nl/pl: redirect_url comes in two
+    query shapes -- `utm_medium&utm_source` (23) and `se&utm_medium&utm_source&v`
+    (30) -- and ADZUNA_APP_ID rides in `utm_source`, in `utm_source` ONLY, in
+    every sample.
+
+    job.url is persisted to the queue JSON, scans/<date>.json and the Telegram
+    digest and rendered as an <a href> on /scout, so the credential param must
+    go. But job.url also BECOMES apply_target, and nothing shows `se` or `v` are
+    droppable -- discarding a load-bearing param would break every Adzuna
+    application with nothing in the suite or the log to say so. So the two
+    properties are asserted together, and the param is matched on its VALUE
+    (which is the credential) rather than on the name `utm_source`, so the guard
+    survives Adzuna renaming it."""
     payload = _load_fixture_json("adzuna.json")
     with mock.patch("urllib.request.urlopen",
                     side_effect=_url_router({"/jobs/de/search/1": payload})):
         jobs = job_sources.fetch_adzuna("AI engineer remote", country="de",
-                                        app_id="id", app_key="key")
+                                        app_id="fixtureid", app_key="key")
     assert jobs
+    # the security property: the credential is gone from every stored URL
     for j in jobs:
-        assert "utm_source" not in j.url and "?" not in j.url
-    assert jobs[0].url == "https://www.adzuna.de/jobs/details/9000000001"
+        assert "fixtureid" not in j.url
+        assert "utm_source" not in j.url
+    # ...and nothing else was thrown away with it, on either query shape
+    four_param = next(j for j in jobs if j.raw_id == "9000000001")
+    assert four_param.url == (
+        "https://www.adzuna.de/land/ad/9000000001"
+        "?se=fixtureSessionTokenAAA&utm_medium=api"
+        "&v=AAAA1111BBBB2222CCCC3333DDDD4444EEEE5555")
+    two_param = next(j for j in jobs if j.raw_id == "9000000002")
+    assert two_param.url == "https://www.adzuna.de/details/9000000002?utm_medium=api"
+
+
+def test_fetch_adzuna_matches_the_credential_by_value_not_by_param_name():
+    """If the guard keyed on the name `utm_source`, an Adzuna rename would leak
+    silently. Feed the same credential under a different param name."""
+    row = {"id": "1", "title": "Remote Engineer", "company": {"display_name": "Co"},
+           "location": {"display_name": "London"}, "description": "Remote work.",
+           "redirect_url": "https://www.adzuna.co.uk/land/ad/1?tracking_id=s3cret&keep=yes"}
+    with mock.patch("urllib.request.urlopen",
+                    side_effect=_url_router({"adzuna.com": {"count": 1, "results": [row]}})):
+        jobs = job_sources.fetch_adzuna("q", country="gb", app_id="s3cret", app_key="key")
+    assert jobs[0].url == "https://www.adzuna.co.uk/land/ad/1?keep=yes"
+
+
+def test_fetch_adzuna_raw_id_drops_the_rotating_session_token():
+    """The identity half of the same split. MEASURED: `se=` is a PER-REQUEST
+    token -- three consecutive requests returned three different values for the
+    same posting id. An `se` inside a raw_id would make every scan re-see the
+    same posting as new and defeat cache.is_new, so the raw_id fallback keeps no
+    query at all. Same instinct as fetch_himalayas: stable identity, usable
+    URL."""
+    payload = _load_fixture_json("adzuna.json")
+    with mock.patch("urllib.request.urlopen",
+                    side_effect=_url_router({"/jobs/de/search/1": payload})):
+        jobs = job_sources.fetch_adzuna("AI engineer remote", country="de",
+                                        app_id="fixtureid", app_key="key")
+    idless = next(j for j in jobs if j.org == "Fixture Idless GmbH")
+    # no id in the payload -> the fallback, and it carries NO query string
+    assert idless.raw_id == "https://www.adzuna.de/jobs/land/ad/9000000003"
+    assert "se=" not in idless.raw_id and "?" not in idless.raw_id
+    # ...while its url still carries the params, se included
+    assert "se=fixtureSessionTokenAAA" in idless.url
+    for j in jobs:
+        assert "fixtureid" not in j.raw_id
 
 
 def test_fetch_adzuna_gives_gate1_an_english_country_name():
@@ -465,7 +516,7 @@ def test_fetch_adzuna_gives_gate1_an_english_country_name():
     with mock.patch("urllib.request.urlopen",
                     side_effect=_url_router({"/jobs/de/search/1": payload})):
         jobs = job_sources.fetch_adzuna("AI engineer remote", country="de",
-                                        app_id="id", app_key="key")
+                                        app_id="fixtureid", app_key="key")
     j = jobs[0]
     assert "Germany" in j.location and "München" in j.location
     assert is_eu_eligible(j.location, j.description) is True
@@ -484,7 +535,7 @@ def test_fetch_adzuna_does_not_fabricate_remoteness():
     with mock.patch("urllib.request.urlopen",
                     side_effect=_url_router({"/jobs/de/search/1": payload})):
         jobs = job_sources.fetch_adzuna("AI engineer remote", country="de",
-                                        app_id="id", app_key="key")
+                                        app_id="fixtureid", app_key="key")
     by_title = {j.title: j for j in jobs}
     onsite = by_title["Service Technician"]
     assert not onsite.location.startswith("Remote")
@@ -500,11 +551,12 @@ def test_fetch_adzuna_never_emits_an_empty_raw_id():
     with mock.patch("urllib.request.urlopen",
                     side_effect=_url_router({"/jobs/de/search/1": payload})):
         jobs = job_sources.fetch_adzuna("AI engineer remote", country="de",
-                                        app_id="id", app_key="key")
+                                        app_id="fixtureid", app_key="key")
     assert all(j.raw_id for j in jobs)
-    # no id -> the (stripped) posting url, which is still stable per posting
+    # no id -> the query-stripped posting url, which IS stable per posting
+    # (the rotating `se` token lives only in the query -- see the raw_id test)
     idless = next(j for j in jobs if j.org == "Fixture Idless GmbH")
-    assert idless.raw_id == "https://www.adzuna.de/jobs/details/9000000003"
+    assert idless.raw_id == "https://www.adzuna.de/jobs/land/ad/9000000003"
     # neither -> dropped rather than stored blank
     assert "Fixture Ghost GmbH" not in {j.org for j in jobs}
 
@@ -1065,3 +1117,95 @@ def test_env_example_documents_the_jsearch_variable_name():
     for line in text.splitlines():
         if line.startswith("JSEARCH_API_KEYS="):
             assert line.split("=", 1)[1] == ""
+
+
+# --- C2: a metered request that returns nothing must SAY so ------------------
+
+def test_fetch_jsearch_warns_when_a_200_carries_a_non_ok_status(capsys):
+    """HTTP 401 covers a rejected key. Every OTHER 200-with-an-error-body would
+    otherwise be indistinguishable from 'no UK jobs today' -- after a budget
+    unit was already spent. MEMORY.md: an empty output is not evidence of an
+    empty input."""
+    job_sources.reset_jsearch_key_rotation()
+    with mock.patch("urllib.request.urlopen",
+                    side_effect=_kv_router({"openwebninja.com":
+                                            {"status": "FAIL", "data": []}})):
+        out = job_sources.fetch_jsearch("q", api_keys=["k1"])
+    printed = capsys.readouterr().out
+    assert out == []
+    assert "status='FAIL'" in printed and "metered request" in printed
+
+
+def test_fetch_jsearch_warns_when_a_metered_request_returns_zero_rows(capsys):
+    job_sources.reset_jsearch_key_rotation()
+    with mock.patch("urllib.request.urlopen",
+                    side_effect=_kv_router({"openwebninja.com": {"status": "OK", "data": []}})):
+        assert job_sources.fetch_jsearch("AI engineer remote UK", api_keys=["k1"]) == []
+    printed = capsys.readouterr().out
+    assert "0 rows" in printed and "AI engineer remote UK" in printed
+    assert "not evidence of an empty market" in printed
+
+
+def test_fetch_jsearch_stays_quiet_on_a_healthy_page(capsys):
+    """The warning has to mean something -- a good page must not print it."""
+    payload = _load_fixture_json("jsearch.json")
+    job_sources.reset_jsearch_key_rotation()
+    with mock.patch("urllib.request.urlopen",
+                    side_effect=_kv_router({"openwebninja.com": payload})):
+        assert len(job_sources.fetch_jsearch("q", api_keys=["k1"])) == 3
+    assert "warning" not in capsys.readouterr().out
+
+
+def test_fetch_jsearch_warns_when_the_payload_is_not_an_object(capsys):
+    job_sources.reset_jsearch_key_rotation()
+    with mock.patch("urllib.request.urlopen",
+                    side_effect=_kv_router({"openwebninja.com": ["not", "an", "object"]})):
+        assert job_sources.fetch_jsearch("q", api_keys=["k1"]) == []
+    assert "not an object" in capsys.readouterr().out
+
+
+def test_fetch_adzuna_warns_when_page_one_returns_nothing(capsys):
+    """`where=remote` and a wrong market both look exactly like an empty market
+    -- and both cost a request first."""
+    with mock.patch("urllib.request.urlopen",
+                    side_effect=_url_router({"adzuna.com": {"count": 0, "results": []}})):
+        assert job_sources.fetch_adzuna("AI engineer remote", country="gb",
+                                        app_id="id", app_key="key") == []
+    printed = capsys.readouterr().out
+    assert "0 postings" in printed and "AI engineer remote" in printed
+    assert "not evidence of an empty market" in printed
+
+
+def test_fetch_adzuna_does_not_warn_when_a_later_page_is_empty(capsys):
+    """An empty page 2 is ordinary exhaustion, not a signal. Warning on it would
+    train the reader to ignore the warning that matters."""
+    row = {"id": "1", "title": "Remote Engineer", "company": {"display_name": "Co"},
+           "location": {"display_name": "London"}, "description": "Remote work.",
+           "redirect_url": "https://www.adzuna.co.uk/land/ad/1?utm_source=id"}
+    with mock.patch("urllib.request.urlopen",
+                    side_effect=_url_router({"/search/1": {"count": 1, "results": [row]},
+                                             "/search/2": {"count": 1, "results": []}})):
+        jobs = job_sources.fetch_adzuna("q", country="gb", pages=2,
+                                        app_id="id", app_key="key")
+    assert len(jobs) == 1
+    assert "not evidence of an empty market" not in capsys.readouterr().out
+
+
+def test_fetch_adzuna_warns_on_a_payload_with_no_results_key(capsys):
+    with mock.patch("urllib.request.urlopen",
+                    side_effect=_url_router({"adzuna.com": {"count": 3, "oops": True}})):
+        assert job_sources.fetch_adzuna("q", country="gb",
+                                        app_id="id", app_key="key") == []
+    assert "unexpected adzuna payload" in capsys.readouterr().out
+
+
+def test_redact_also_blanks_the_percent_encoded_form():
+    """Credentials reach the URL through quote_plus. Hex keys make that the
+    identity function, so this guard is invisible today and would silently stop
+    working for any credential containing '+', '/' or '='."""
+    secret = "ab+cd/ef=="
+    leaked = f"HTTP 401 for https://api.adzuna.com/x?app_key={quote_plus(secret)}&b=1"
+    assert secret not in job_sources._redact(leaked, secret)
+    assert quote_plus(secret) not in job_sources._redact(leaked, secret)
+    # and the plain form is still blanked
+    assert "plain" not in job_sources._redact("a plain b", "plain")

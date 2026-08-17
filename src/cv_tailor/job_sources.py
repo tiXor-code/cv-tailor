@@ -15,7 +15,7 @@ import urllib.request
 import json
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field
-from urllib.parse import urlparse, quote_plus
+from urllib.parse import urlparse, quote_plus, unquote_plus
 
 from cv_tailor.gates import is_remote
 from cv_tailor.urlsafe import host_matches, safe_hostname
@@ -551,24 +551,67 @@ def _redact(text, *secrets) -> str:
     urllib stringifies the URL it failed on, and an Adzuna URL carries BOTH
     app_id and app_key as query params -- so a bare `{e}` in a warning writes
     two live credentials into scans/logs/<date>.log, which is exactly the
-    class of leak SEC020/SEC022 covers."""
+    class of leak SEC020/SEC022 covers.
+
+    Both the raw AND the quote_plus form of each secret are blanked, because
+    the credential reaches the URL percent-encoded. Today's keys are hex, for
+    which quote_plus is the identity function and the distinction is invisible
+    -- which is exactly why it has to be handled now rather than discovered
+    later by a key containing `+`, `/` or `=`."""
     out = str(text)
     for s in secrets:
-        if s:
-            out = out.replace(str(s), "***")
+        if not s:
+            continue
+        for form in {str(s), quote_plus(str(s))}:
+            out = out.replace(form, "***")
     return out
 
 
 def _strip_query(url: str) -> str:
-    """Posting URL with query string and fragment removed.
+    """Posting URL with query string and fragment removed -- for IDENTITY only.
 
-    Not cosmetic for Adzuna: every market's `redirect_url` carries
-    `utm_source=<ADZUNA_APP_ID>` (verified on all ten, 2026-08-17), and
-    job.url is persisted into the scout queue JSON, scans/<date>.json and the
-    Telegram digest, and rendered as an <a href> on /scout. Stripping is
-    behavior-preserving -- the bare /jobs/details/<id> path responds
-    identically to the full one."""
+    Used for the raw_id fallback, never for the navigation target. MEASURED
+    2026-08-17: 30 of 53 sampled Adzuna postings carry an `se=` param whose
+    value is a PER-REQUEST session token (three consecutive requests returned
+    three different values for the same posting id), so an `se` inside a raw_id
+    would make every scan re-see the same posting as new and defeat
+    cache.is_new entirely. `v=` is stable per posting but adds nothing to an
+    identity that already has the numeric id or the bare path.
+
+    This is the same identity-vs-target split fetch_himalayas documents: the
+    id must be stable, the URL must be usable."""
     return str(url or "").split("#", 1)[0].split("?", 1)[0]
+
+
+def _drop_params_valued(url: str, *values) -> str:
+    """`url` with every query param whose VALUE equals one of `values` removed;
+    order, the remaining params and the fragment are preserved.
+
+    This is the narrow fix for a real leak: MEASURED over 53 postings across
+    gb/de/nl/pl, Adzuna's `redirect_url` embeds ADZUNA_APP_ID as `utm_source`
+    -- and in `utm_source` ONLY, in every single sample. Since job.url is
+    persisted into the scout queue JSON, scans/<date>.json and the Telegram
+    digest, and rendered as an <a href> on /scout, that param has to go.
+
+    Everything else STAYS. The same sample showed two query shapes --
+    `utm_medium&utm_source` (23) and `se&utm_medium&utm_source&v` (30) -- and
+    nobody has shown that `se` or `v` are droppable. job.url becomes the
+    apply_target, so discarding a load-bearing param would break every Adzuna
+    application with nothing in the suite or the log to say so. Matching on the
+    VALUE rather than on the name `utm_source` also means the guard survives
+    Adzuna renaming the param."""
+    drop = {str(v) for v in values if v}
+    head, sep, tail = str(url or "").partition("?")
+    if not sep or not drop:
+        return head + sep + tail
+    query, hsep, frag = tail.partition("#")
+    kept = []
+    for pair in query.split("&"):
+        raw_value = pair.partition("=")[2]
+        if raw_value in drop or unquote_plus(raw_value) in drop:
+            continue
+        kept.append(pair)
+    return head + (("?" + "&".join(kept)) if kept else "") + hsep + frag
 
 
 def fetch_adzuna(query: str, country: str = "gb",
@@ -592,7 +635,16 @@ def fetch_adzuna(query: str, country: str = "gb",
       returned 150 unique postings over 3 pages with zero overlap.
     * unknown query params are rejected with HTTP 400 and bad credentials with
       HTTP 401 -- this API fails loudly, unlike arbeitnow/himalayas which
-      silently ignore filters they do not support.
+      silently ignore filters they do not support. A 200 that yields zero rows
+      on page 1 is still warned about: the request was metered, and
+      `where=remote` looks exactly like an empty market.
+    * `redirect_url` comes in TWO query shapes -- `utm_medium&utm_source` and
+      `se&utm_medium&utm_source&v` (23 and 30 of 53 sampled postings) -- and
+      ADZUNA_APP_ID rides in `utm_source`, in `utm_source` only, in every
+      sample. Only that one param is dropped from job.url; `se` and `v` are
+      kept because nothing shows they are droppable and job.url becomes the
+      apply_target. `se` DOES rotate per request, so the raw_id fallback drops
+      the whole query instead (see _strip_query / _drop_params_valued).
     * `sort_by=date` + `max_days_old` both work (max_days_old=7 cut a query
       from 1304 to 219 hits). Unsorted results run back nine months, so a
       daily scan asks for the newest first.
@@ -644,16 +696,38 @@ def fetch_adzuna(query: str, country: str = "gb",
             print(f"warning: adzuna fetch failed for country={country!r} page={page}: "
                   f"{_redact(e, app_id, app_key)}")
             break
-        rows = (data.get("results") or []) if isinstance(data, dict) else []
+        if not isinstance(data, dict) or "results" not in data:
+            print(f"warning: unexpected adzuna payload for country={country!r} "
+                  f"page={page} (no 'results' key); a metered request was already "
+                  f"spent -- treating as no results")
+            break
+        rows = data.get("results") or []
         if not rows:
+            # An empty page 2+ is ordinary exhaustion. An empty page 1 means a
+            # request was issued and returned nothing, which must never read as
+            # "this market has no jobs" -- `where=remote` and a wrong market
+            # both look exactly like this. MEMORY.md: an empty output is not
+            # evidence of an empty input.
+            if page == 1:
+                print(f"warning: adzuna returned 0 postings for country={country!r} "
+                      f"query={query!r} (count={data.get('count')!r}); an empty "
+                      f"result is not evidence of an empty market -- check the query "
+                      f"terms, and that no work mode leaked into `where`")
             break
         for j in rows:
             if not isinstance(j, dict):
                 continue
-            # redirect_url IS the posting url; there is no second, distinct
+            # redirect_url is the ONLY link Adzuna offers -- it is both the
+            # posting url and the apply target, so there is no second, distinct
             # apply link to promote into apply_options.
-            link = _strip_query(j.get("redirect_url"))
-            raw_id = _first_id(j.get("id"), link)
+            #
+            # Two DIFFERENT derivations of it, deliberately (see the two
+            # helpers): the navigation target keeps every param except the one
+            # carrying the credential, while the identity fallback keeps none,
+            # because `se=` rotates per request.
+            redirect = str(j.get("redirect_url") or "")
+            link = _drop_params_valued(redirect, app_id)
+            raw_id = _first_id(j.get("id"), _strip_query(redirect))
             if not raw_id or raw_id in seen:
                 continue
             seen.add(raw_id)
@@ -822,9 +896,31 @@ def fetch_jsearch(query: str, country: str = "gb", api_keys=None,
               f"dropped {query!r}")
         return []
 
+    # A budget unit has now been spent, so "nothing came back" must never be
+    # allowed to read as "there are no UK jobs today". HTTP 401 covers a
+    # rejected key (handled above), but every OTHER 200-with-an-error-body --
+    # a malformed query, a plan change, an upstream outage -- would otherwise
+    # be indistinguishable from an empty market. MEMORY.md carries this as an
+    # explicit twice-bitten rule: an empty output is not evidence of an empty
+    # input.
+    payload = data if isinstance(data, dict) else {}
+    if not isinstance(data, dict):
+        print(f"warning: jsearch answered with a {type(data).__name__}, not an object, "
+              f"for {query!r} (a metered request was already spent)")
+    status = str(payload.get("status") or "").strip()
+    if status and status.lower() not in ("ok", "success"):
+        print(f"warning: jsearch answered HTTP 200 with status={status!r} for "
+              f"{query!r} (a metered request was already spent); "
+              f"treating as no results")
+    rows = payload.get("data") or []
+    if not rows:
+        print(f"warning: jsearch returned 0 rows for {query!r} -- a metered request "
+              f"produced nothing; an empty result is not evidence of an empty "
+              f"market (check that the query names the UK)")
+
     out: list[JobPosting] = []
     seen: set[str] = set()
-    for j in (data.get("data") or []) if isinstance(data, dict) else []:
+    for j in rows:
         if not isinstance(j, dict):
             continue
         options = _jsearch_apply_options(j.get("apply_options"))

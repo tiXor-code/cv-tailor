@@ -1,5 +1,5 @@
 {
-  "comments": "Fixture mirroring https://api.adzuna.com/v1/api/jobs/de/search/1 -- synthetic postings only. Note: there is NO remote flag field, location.area[0] is the LOCAL-LANGUAGE country name, and redirect_url carries the app_id as utm_source.",
+  "comments": "Fixture mirroring https://api.adzuna.com/v1/api/jobs/de/search/1 -- synthetic postings and synthetic ids only. Three measured traps are encoded here: there is NO remote flag field; location.area[0] is the LOCAL-LANGUAGE country name; and redirect_url comes in TWO real query shapes -- 'utm_medium&utm_source' and 'se&utm_medium&utm_source&v' -- where utm_source (and only utm_source) carries ADZUNA_APP_ID, se rotates per request, and v is stable per posting. Real path shapes are /details/<id>, /jobs/details/<id>, /land/ad/<id> and /jobs/land/ad/<id>.",
   "__CLASS__": "Adzuna::API::Response::JobSearchResults",
   "count": 4,
   "mean": 0,
@@ -15,7 +15,7 @@
         "area": ["Deutschland", "Bayern", "München (Kreis)", "München"]
       },
       "description": "Build agents in Python for our platform. Work with APIs and Docker.…",
-      "redirect_url": "https://www.adzuna.de/jobs/details/9000000001?utm_medium=api&utm_source=fixtureid",
+      "redirect_url": "https://www.adzuna.de/land/ad/9000000001?se=fixtureSessionTokenAAA&utm_medium=api&utm_source=fixtureid&v=AAAA1111BBBB2222CCCC3333DDDD4444EEEE5555",
       "adref": "eyJmaXh0dXJlIjoxfQ",
       "category": {"__CLASS__": "Adzuna::API::Response::Category", "label": "IT Jobs", "tag": "it-jobs"},
       "contract_time": "full_time",
@@ -32,7 +32,7 @@
         "area": ["Deutschland", "Berlin"]
       },
       "description": "Repair machines at customer sites across the region.",
-      "redirect_url": "https://www.adzuna.de/jobs/details/9000000002?utm_medium=api&utm_source=fixtureid",
+      "redirect_url": "https://www.adzuna.de/details/9000000002?utm_medium=api&utm_source=fixtureid",
       "category": {"__CLASS__": "Adzuna::API::Response::Category", "label": "Trade & Construction Jobs", "tag": "trade-construction-jobs"},
       "created": "2026-08-17T08:00:00Z"
     },
@@ -46,7 +46,7 @@
         "area": ["Nederland"]
       },
       "description": "Fully remote role with no id field in the payload.",
-      "redirect_url": "https://www.adzuna.de/jobs/details/9000000003?utm_medium=api&utm_source=fixtureid",
+      "redirect_url": "https://www.adzuna.de/jobs/land/ad/9000000003?se=fixtureSessionTokenAAA&utm_medium=api&utm_source=fixtureid&v=FFFF6666EEEE7777DDDD8888CCCC9999BBBB0000",
       "created": "2026-08-17T07:00:00Z"
     },
     {
