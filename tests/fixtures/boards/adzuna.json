@@ -1,0 +1,61 @@
+{
+  "comments": "Fixture mirroring https://api.adzuna.com/v1/api/jobs/de/search/1 -- synthetic postings only. Note: there is NO remote flag field, location.area[0] is the LOCAL-LANGUAGE country name, and redirect_url carries the app_id as utm_source.",
+  "__CLASS__": "Adzuna::API::Response::JobSearchResults",
+  "count": 4,
+  "mean": 0,
+  "results": [
+    {
+      "__CLASS__": "Adzuna::API::Response::Job",
+      "id": "9000000001",
+      "title": "AI Engineer - Remote",
+      "company": {"__CLASS__": "Adzuna::API::Response::Company", "display_name": "Fixture Adzuna GmbH"},
+      "location": {
+        "__CLASS__": "Adzuna::API::Response::Location",
+        "display_name": "München, München (Kreis)",
+        "area": ["Deutschland", "Bayern", "München (Kreis)", "München"]
+      },
+      "description": "Build agents in Python for our platform. Work with APIs and Docker.…",
+      "redirect_url": "https://www.adzuna.de/jobs/details/9000000001?utm_medium=api&utm_source=fixtureid",
+      "adref": "eyJmaXh0dXJlIjoxfQ",
+      "category": {"__CLASS__": "Adzuna::API::Response::Category", "label": "IT Jobs", "tag": "it-jobs"},
+      "contract_time": "full_time",
+      "created": "2026-08-17T09:00:00Z"
+    },
+    {
+      "__CLASS__": "Adzuna::API::Response::Job",
+      "id": "9000000002",
+      "title": "Service Technician",
+      "company": {"__CLASS__": "Adzuna::API::Response::Company", "display_name": "Fixture Onsite AG"},
+      "location": {
+        "__CLASS__": "Adzuna::API::Response::Location",
+        "display_name": "Berlin, Deutschland",
+        "area": ["Deutschland", "Berlin"]
+      },
+      "description": "Repair machines at customer sites across the region.",
+      "redirect_url": "https://www.adzuna.de/jobs/details/9000000002?utm_medium=api&utm_source=fixtureid",
+      "category": {"__CLASS__": "Adzuna::API::Response::Category", "label": "Trade & Construction Jobs", "tag": "trade-construction-jobs"},
+      "created": "2026-08-17T08:00:00Z"
+    },
+    {
+      "__CLASS__": "Adzuna::API::Response::Job",
+      "title": "Idless But Linked Role",
+      "company": {"__CLASS__": "Adzuna::API::Response::Company", "display_name": "Fixture Idless GmbH"},
+      "location": {
+        "__CLASS__": "Adzuna::API::Response::Location",
+        "display_name": "Nederland",
+        "area": ["Nederland"]
+      },
+      "description": "Fully remote role with no id field in the payload.",
+      "redirect_url": "https://www.adzuna.de/jobs/details/9000000003?utm_medium=api&utm_source=fixtureid",
+      "created": "2026-08-17T07:00:00Z"
+    },
+    {
+      "__CLASS__": "Adzuna::API::Response::Job",
+      "title": "Ghost Role",
+      "company": {"__CLASS__": "Adzuna::API::Response::Company", "display_name": "Fixture Ghost GmbH"},
+      "location": {"__CLASS__": "Adzuna::API::Response::Location", "display_name": "", "area": []},
+      "description": "Remote role with neither an id nor a redirect_url.",
+      "created": "2026-08-17T06:00:00Z"
+    }
+  ]
+}

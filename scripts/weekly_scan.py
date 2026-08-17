@@ -59,7 +59,6 @@ def _normalize(s: str) -> str:
     """Lowercase, strip whitespace, and remove non-alphanumeric so titles like
     'Full Stack Engineer Agent Tools' and 'Full Stack Engineer: Agent Tools'
     dedupe to the same key."""
-    import re
     return re.sub(r"[^a-z0-9]+", "", s.strip().lower())
 
 

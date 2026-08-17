@@ -23,6 +23,13 @@ JOB_BOARD_DOMAINS = {
     # company_domain would hand Hunter "arbeitnow.com" and one cached SMB
     # verdict for the BOARD would then stand in for every job on it.
     "arbeitnow.com",
+    # Same failure mode, ten times over: every Adzuna posting URL is an
+    # adzuna redirect on a PER-COUNTRY TLD (verified on all ten configured
+    # markets, 2026-08-17). _registrable only strips "www.", it does not
+    # compute an eTLD+1, so each market's host has to be listed by name --
+    # "adzuna.de" does not end with ".adzuna.com".
+    "adzuna.at", "adzuna.be", "adzuna.ch", "adzuna.de", "adzuna.es",
+    "adzuna.fr", "adzuna.co.uk", "adzuna.it", "adzuna.nl", "adzuna.pl",
 }
 SMB_EMPLOYEE_CEILING = 500  # startups & scaleups up to ~500
 

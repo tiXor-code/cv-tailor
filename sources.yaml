@@ -54,6 +54,40 @@ sources:
     pages: 3
   - kind: himalayas
     count: 60
+  # Adzuna: the single biggest EU supply source here (a probe on 2026-08-17
+  # returned four-figure counts on gb/it, three-figure on de/es/pl). Needs
+  # ADZUNA_APP_ID + ADZUNA_APP_KEY in .env -- NEVER here; the dispatch reads
+  # env only and every entry no-ops with a warning until they are set.
+  #
+  # `where` is deliberately absent from every entry: it expects a PLACE, and
+  # `where=remote` returns count=0, which looks exactly like a dead
+  # credential. The work mode belongs in `query` (Adzuna ANDs the terms).
+  # max_days_old keeps a daily scan on NEW postings -- unsorted results run
+  # back nine months.
+  - kind: adzuna
+    query: "AI engineer remote"
+    country: gb
+    max_days_old: 7
+  - kind: adzuna
+    query: "AI engineer remote"
+    country: de
+    max_days_old: 7
+  - kind: adzuna
+    query: "AI automation engineer remote"
+    country: gb
+    max_days_old: 7
+  - kind: adzuna
+    query: "python developer remote"
+    country: nl
+    max_days_old: 7
+  - kind: adzuna
+    query: "python developer remote"
+    country: pl
+    max_days_old: 7
+  - kind: adzuna
+    query: "content producer remote"
+    country: gb
+    max_days_old: 7
   # SerpAPI google_jobs rejects continent locations ("Europe") and city locations
   # return 0; rely on the query text + ltype=1 (remote) and let Gate 1 + the LLM
   # enforce EU-eligibility. No `location` param.
