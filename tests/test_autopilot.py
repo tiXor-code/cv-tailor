@@ -1,4 +1,5 @@
-"""Autopilot policy: select >=8, CAS approve, run orchestrator, expire, digest.
+"""Autopilot policy: select at/above the floor, CAS approve, run orchestrator,
+expire, digest.
 
 The orchestrator is injected as `runner(scan_date, job_id) -> int` so no real
 subprocess/browser/SMTP ever runs here; the fake runner mutates the queue the
@@ -8,13 +9,24 @@ import json
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+import pytest
+
 from cv_tailor.autopilot import (
-    AUTO_APPROVE_MIN, EXPIRE_DAYS, AutopilotReport, build_digest, run_autopilot,
+    AUTO_APPROVE_MIN, EXPIRE_DAYS, AutopilotReport, auto_approve_min,
+    build_digest, run_autopilot,
 )
 from cv_tailor.scout_queue import update_entry
 
 NOW = datetime(2026, 7, 23, 9, 0, tzinfo=timezone.utc)
 TODAY = "2026-07-23"
+
+
+@pytest.fixture(autouse=True)
+def _floor_env_is_stated_not_inherited(monkeypatch):
+    """Each test here declares the floor it is proving. A stray
+    SCOUT_AUTO_APPROVE_MIN exported in the shell must never be what decides
+    whether this suite passes."""
+    monkeypatch.delenv("SCOUT_AUTO_APPROVE_MIN", raising=False)
 
 
 def _write_day(root: Path, day: str, entries: list[dict]) -> None:
@@ -36,8 +48,8 @@ def _read(root, day):
     return {e["id"]: e for e in json.loads((root / day / "jobs.json").read_text())}
 
 
-def test_approves_only_eight_plus_highest_first(tmp_path):
-    _write_day(tmp_path, TODAY, [_entry(1, score=7), _entry(2, score=8), _entry(3, score=9)])
+def test_approves_only_at_or_above_the_floor_highest_first(tmp_path):
+    _write_day(tmp_path, TODAY, [_entry(1, score=5), _entry(2, score=6), _entry(3, score=9)])
     ran = []
 
     def runner(day, job_id):
@@ -46,13 +58,63 @@ def test_approves_only_eight_plus_highest_first(tmp_path):
         return 0
 
     report = run_autopilot(NOW, queue_dir=tmp_path, runner=runner)
-    assert ran == ["job-3", "job-2"]  # score desc; the 7 untouched
+    assert ran == ["job-3", "job-2"]  # score desc; the 5 untouched
     q = _read(tmp_path, TODAY)
     assert q["job-1"]["status"] == "pending"
     assert q["job-2"]["approved_by"] == "autopilot"
     assert q["job-2"]["decided_at"] is not None
     assert [e["id"] for _, e in report.applied] == ["job-3", "job-2"]
     assert [e["id"] for _, e in report.queued_new] == ["job-1"]
+
+
+# --- the floor -----------------------------------------------------------
+
+def test_floor_defaults_to_six():
+    assert AUTO_APPROVE_MIN == 6
+    assert auto_approve_min() == 6
+
+
+def test_env_override_can_raise_the_floor_and_is_never_import_cached(tmp_path, monkeypatch):
+    """SCOUT_AUTO_APPROVE_MIN is read fresh on every call, so a value set after
+    this module was imported still governs the pass."""
+    monkeypatch.setenv("SCOUT_AUTO_APPROVE_MIN", "9")
+    assert auto_approve_min() == 9
+
+    _write_day(tmp_path, TODAY, [_entry(1, score=8), _entry(2, score=9)])
+    ran = []
+
+    def runner(day, job_id):
+        ran.append(job_id)
+        update_entry(day, job_id, lambda e: e.update(status="sent"), queue_dir=tmp_path)
+        return 0
+
+    run_autopilot(NOW, queue_dir=tmp_path, runner=runner)
+    assert ran == ["job-2"]
+    assert _read(tmp_path, TODAY)["job-1"]["status"] == "pending"
+
+
+def test_nothing_below_six_is_ever_auto_approved(tmp_path, monkeypatch):
+    """6 is a decision, not a setting: it is the lowest score Teodor is willing
+    to have a real application sent for under his own name. The env var may
+    raise that bar and never lower it, and no malformed value opens a hole --
+    every one of these must clamp back to 6 with nothing below it approved or
+    handed to the orchestrator."""
+    _write_day(tmp_path, TODAY, [_entry(i, score=i) for i in range(6)])
+
+    for value in (None, "5", "1", "0", "-1", "-999", "", " ", "5.9", "six",
+                  "0x6", "1e9", "None", "6; rm -rf /"):
+        if value is None:
+            monkeypatch.delenv("SCOUT_AUTO_APPROVE_MIN", raising=False)
+        else:
+            monkeypatch.setenv("SCOUT_AUTO_APPROVE_MIN", value)
+        assert auto_approve_min() >= 6, f"SCOUT_AUTO_APPROVE_MIN={value!r} lowered the floor"
+
+        ran = []
+        run_autopilot(NOW, queue_dir=tmp_path, runner=lambda d, j: ran.append(j) or 0)
+        assert ran == [], f"SCOUT_AUTO_APPROVE_MIN={value!r} applied a sub-6 job: {ran}"
+        statuses = {i: e["status"] for i, e in _read(tmp_path, TODAY).items()}
+        assert set(statuses.values()) == {"pending"}, \
+            f"SCOUT_AUTO_APPROVE_MIN={value!r} moved a sub-6 job: {statuses}"
 
 
 def test_cas_conflict_skips_without_crash(tmp_path):
@@ -107,7 +169,8 @@ def test_expiry_sweep_boundary_and_statuses(tmp_path):
         _entry(3, status="needs_review", status_changed_at=fresh.isoformat()),  # kept (recent change)
         _entry(4, status="sent"),                                           # terminal -> never expired
     ])
-    _write_day(tmp_path, edge_day, [_entry(5, score=7, status="pending")])  # 6d old, score 7 -> kept, not auto-approved
+    # 6d old and below the floor -> kept by the sweep, not auto-approved
+    _write_day(tmp_path, edge_day, [_entry(5, score=5, status="pending")])
     _write_day(tmp_path, TODAY, [])
 
     report = run_autopilot(NOW, queue_dir=tmp_path, runner=lambda d, j: 0)
@@ -119,7 +182,7 @@ def test_expiry_sweep_boundary_and_statuses(tmp_path):
     assert _read(tmp_path, edge_day)["job-5"]["status"] == "pending"
 
 
-def test_backlog_eights_within_window_are_approved(tmp_path):
+def test_backlog_within_window_is_approved(tmp_path):
     yesterday = (NOW - timedelta(days=1)).date().isoformat()
     _write_day(tmp_path, yesterday, [_entry(1, score=8)])
     _write_day(tmp_path, TODAY, [])
@@ -137,11 +200,11 @@ def test_backlog_eights_within_window_are_approved(tmp_path):
 
 def test_queued_new_counts_only_todays_pendings(tmp_path):
     yesterday = (NOW - timedelta(days=1)).date().isoformat()
-    _write_day(tmp_path, yesterday, [_entry(1, score=7)])   # old 7: not "new"
-    _write_day(tmp_path, TODAY, [_entry(2, score=7)])
+    _write_day(tmp_path, yesterday, [_entry(1, score=5)])   # old sub-floor: not "new"
+    _write_day(tmp_path, TODAY, [_entry(2, score=5)])
     report = run_autopilot(NOW, queue_dir=tmp_path, runner=lambda d, j: 0)
     assert [e["id"] for _, e in report.queued_new] == ["job-2"]
-    assert report.has_activity()  # a new 7 queued for review IS activity
+    assert report.has_activity()  # a new sub-floor job queued for review IS activity
 
 
 def test_no_activity_no_digest(tmp_path):
@@ -152,7 +215,7 @@ def test_no_activity_no_digest(tmp_path):
 
 
 def test_digest_contents(tmp_path):
-    _write_day(tmp_path, TODAY, [_entry(1, score=9), _entry(2, score=7)])
+    _write_day(tmp_path, TODAY, [_entry(1, score=9), _entry(2, score=5)])
 
     def runner(day, job_id):
         update_entry(day, job_id, lambda e: e.update(status="sent"), queue_dir=tmp_path)
@@ -161,7 +224,7 @@ def test_digest_contents(tmp_path):
     report = run_autopilot(NOW, queue_dir=tmp_path, runner=runner)
     text = build_digest(report)
     assert "Co1" in text and "Role 1" in text
-    assert "Co2" in text                       # queued 7
+    assert "Co2" in text                       # queued, below the floor
     assert "admin.teodorlutoiu.com/scout" in text
     assert "—" not in text and "–" not in text  # no em/en dash
 

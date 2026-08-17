@@ -3,12 +3,15 @@
 Spec: clawd docs/superpowers/specs/2026-07-23-scout-autopilot-design.md.
 Runs right after the daily scan (scripts/run_scan.sh -> scripts/autopilot.py).
 
+This is the SOLE owner of approving and applying. scripts/scan.py discovers,
+scores and writes the queue, and stops there.
+
 Policy per run:
-  1. Approve: every `pending` entry with score >= AUTO_APPROVE_MIN in any day
-     directory inside the EXPIRE_DAYS window is CAS-approved
+  1. Approve: every `pending` entry scoring at or above auto_approve_min() in
+     any day directory inside the EXPIRE_DAYS window is CAS-approved
      (pending -> approved, approved_by="autopilot") highest score first, and
      handed to scripts/apply_approved.py -- the same orchestrator the /scout
-     tap spawns. Score-7 entries stay pending for the manual tap.
+     tap spawns. Anything below the floor stays pending for the manual tap.
   2. Expire: `pending` / `needs_review` / `needs_human` entries whose last
      status change (status_changed_at, else decided_at, else the scan date)
      is older than EXPIRE_DAYS auto-reject with error="auto_expired".
@@ -21,6 +24,7 @@ as a subprocess. APPLY_ARMED / APPLY_DAILY_CAP are enforced there, not here.
 """
 from __future__ import annotations
 
+import os
 import re
 import subprocess
 import sys
@@ -30,7 +34,7 @@ from pathlib import Path
 
 from cv_tailor.scout_queue import StatusConflict, queue_root, update_entry
 
-AUTO_APPROVE_MIN = 8
+AUTO_APPROVE_MIN = 6  # hard floor; SCOUT_AUTO_APPROVE_MIN may raise it, never lower it
 EXPIRE_DAYS = 7
 ORCHESTRATOR_TIMEOUT = 1200  # per-job backstop; portal runs have their own wall clock
 EXPIRABLE_STATUSES = ("pending", "needs_review", "needs_human")
@@ -46,6 +50,25 @@ _PARKED = ("needs_review", "needs_human", "ready")
 _DAY_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 _ORCHESTRATOR = Path(__file__).resolve().parents[2] / "scripts" / "apply_approved.py"
 SCOUT_URL = "https://admin.teodorlutoiu.com/scout"
+
+
+def auto_approve_min() -> int:
+    """The score an entry must reach before autopilot approves and applies to it
+    unattended. SCOUT_AUTO_APPROVE_MIN, read fresh on every call (never cached
+    at import time, so tests -- and prod config -- can vary it per-run), same
+    contract as portal.base.handoff_timeout_s. Default AUTO_APPROVE_MIN (6).
+
+    Clamped from below at AUTO_APPROVE_MIN: the env var can only RAISE the bar.
+    6 is Teodor's stated decision about the lowest score worth a real
+    application sent under his own name, so it is not something a .env typo, a
+    malformed value, or a future edit reaching for 5 gets to lower. A value
+    that will not parse as an int falls back to the floor rather than to
+    "no floor"."""
+    try:
+        wanted = int(os.environ.get("SCOUT_AUTO_APPROVE_MIN", AUTO_APPROVE_MIN))
+    except (TypeError, ValueError):
+        return AUTO_APPROVE_MIN
+    return max(AUTO_APPROVE_MIN, wanted)
 
 
 @dataclass
@@ -275,12 +298,16 @@ def run_autopilot(now: datetime | None = None, *, queue_dir=None,
     window_start = (now - timedelta(days=EXPIRE_DAYS)).date().isoformat()
     today = now.date().isoformat()
 
+    # Resolved once per pass so every candidate in one run is judged by the same
+    # floor, and re-resolved on the next run so a config change needs no restart.
+    min_score = auto_approve_min()
+
     candidates: list[tuple[str, dict]] = []
     for scan_date, day_dir in _day_dirs(queue_dir):
         if scan_date < window_start:
             continue
         for entry in _read_day(day_dir):
-            if entry.get("status") == "pending" and int(entry.get("score") or 0) >= AUTO_APPROVE_MIN:
+            if entry.get("status") == "pending" and int(entry.get("score") or 0) >= min_score:
                 candidates.append((scan_date, entry))
     candidates.sort(key=lambda pair: int(pair[1].get("score") or 0), reverse=True)
 
