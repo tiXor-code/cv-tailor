@@ -9,7 +9,7 @@ new qualifying roles exist). Scoring/tailoring/CRM unchanged.
 Discovery only: this script never approves or applies. scripts/autopilot.py,
 which run_scan.sh runs immediately after, is the sole owner of that.
 
-Usage: python scripts/scan.py [--min-score 7] [--max-results 10] [--dry-run]
+Usage: python scripts/scan.py [--min-score 6] [--max-results 10] [--dry-run]
 """
 import argparse
 import json
@@ -116,7 +116,7 @@ def crm_tracked_keys():
 
 def parse_args(argv):
     p = argparse.ArgumentParser()
-    p.add_argument("--min-score", type=int, default=7)
+    p.add_argument("--min-score", type=int, default=6)
     p.add_argument("--max-results", type=int, default=10)
     p.add_argument("--dry-run", action="store_true", help="No Telegram, throwaway DB.")
     return p.parse_args(argv)

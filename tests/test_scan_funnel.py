@@ -84,6 +84,23 @@ def test_scan_owns_no_apply_path():
     assert "AUTO_APPLY" not in src, "the AUTO_APPLY gate is retired, not re-read"
 
 
+def test_queue_threshold_is_six_at_both_sites():
+    """The queue-entry threshold moved 7 -> 6, and it lives in TWO places: the
+    argparse default here, and the --min-score run_scan.sh passes explicitly at
+    09:00 under launchd. The explicit flag wins, so changing only the default is
+    a silent no-op in production -- which is exactly why the launchd wrapper is
+    asserted here and not just the parser."""
+    assert scan.parse_args([]).min_score == 6
+
+    wrapper = (pathlib.Path(scan.__file__).parent / "run_scan.sh").read_text()
+    invocations = [ln for ln in wrapper.splitlines()
+                   if "scan.py" in ln and not ln.lstrip().startswith("#")]
+    assert invocations, "run_scan.sh no longer runs scan.py"
+    for line in invocations:
+        assert "--min-score" not in line or "--min-score 6" in line, (
+            f"run_scan.sh overrides the threshold with a stale value: {line.strip()}")
+
+
 def test_funnel_dedupes_same_norm_key_within_one_batch(tmp_path):
     """2026-07-10 regression: 4 regional variants of one Remote.com role share a
     norm_key (region is stripped) and all passed Gate 3 in a single scan, so all

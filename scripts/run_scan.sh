@@ -20,11 +20,17 @@ LOG="$LOG_DIR/$(date +%F).log"
   set +a
 
   source "$REPO/.venv/bin/activate"
-  python "$REPO/scripts/scan.py" --min-score 7 --max-results 10
+  # --min-score is the queue-entry floor (what gets written for review), NOT the
+  # apply floor -- autopilot below applies only at/above SCOUT_AUTO_APPROVE_MIN.
+  # This value must track scan.py's argparse default; the explicit flag wins, so
+  # editing only the default there changes nothing about this 09:00 run.
+  python "$REPO/scripts/scan.py" --min-score 6 --max-results 10
   RC=$?
   echo "=== exit code: $RC ==="
 
-  # Scout autopilot (spec 2026-07-23): auto-approve >=8, expire stale, digest.
+  # Scout autopilot (spec 2026-07-23): the ONLY thing that approves and applies.
+  # Auto-approves at/above SCOUT_AUTO_APPROVE_MIN (floor 6), sweeps stranded and
+  # stale entries, sends the digest. The scan above only writes the queue.
   # Gated INSIDE the script by SCOUT_AUTOPILOT in .env; safe to call always.
   python "$REPO/scripts/autopilot.py"
   echo "=== autopilot exit code: $? ==="
