@@ -292,7 +292,8 @@ def main(argv=None):
             # of grinding through the whole list and writing an empty queue.
             if _is_auth_error(e):
                 sys.exit(
-                    f"FATAL: Azure auth rejected while scoring ({e}). The scan cannot score any "
+                    f"FATAL: Azure auth rejected while scoring "
+                    f"({_log_safe(str(e), width=300)}). The scan cannot score any "
                     f"job, so it is aborting WITHOUT writing a queue (an empty queue is "
                     f"indistinguishable from 'no good jobs today'). Check AZURE_OPENAI_API_KEY "
                     f"in {ROOT / '.env'} -- the key was rotated on 2026-07-09."

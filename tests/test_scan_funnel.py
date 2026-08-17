@@ -318,3 +318,39 @@ def test_funnel_dedupes_same_norm_key_within_one_batch(tmp_path):
     survivors = scan.run_gates(variants, tracks, conn)
     assert len(survivors) == 1
     assert survivors[0].raw_id == "r1"
+
+
+def test_fatal_auth_message_cannot_be_forged_by_the_exception_text(tmp_path, monkeypatch):
+    """The abort message names the exception, and that text is untrusted: score_job
+    is fed the posting's own description, so a 401 body echoing it back reaches
+    this line verbatim. The adjacent score-failed line is already sanitized;
+    this one is the same exposure with a louder surface (it is the last thing in
+    the log before the scan gives up, so a forged "queue written" line here is
+    exactly the lie a human would act on)."""
+    import pytest
+
+    hostile = _job("greenhouse", "1", "AI Engineer", "Remote - EU", "Python")
+
+    class FakeAuthError(Exception):
+        status_code = 401
+
+    def boom(*a, **kw):
+        raise FakeAuthError(
+            "401 invalid subscription key\n  queue written: 12 jobs\nFATAL: nothing wrong")
+
+    monkeypatch.setattr(scan, "load_profile",
+                        lambda *a, **kw: {"tracks": {"ai": {"keywords": ["ai engineer"]}}})
+    monkeypatch.setattr(scan, "fetch_all", lambda sources, **kw: [hostile])
+    monkeypatch.setattr(scan, "crm_tracked_keys", lambda: set())
+    monkeypatch.setattr(scan, "build_azure_client", lambda *a, **kw: object())
+    monkeypatch.setattr(scan, "score_job", boom)
+    monkeypatch.setattr(scan, "smb_hint", lambda j, conn: "smb")
+
+    with pytest.raises(SystemExit) as exc:
+        scan.main(["--dry-run"])
+
+    message = str(exc.value)
+    assert "invalid subscription key" in message      # the real cause survives
+    assert "\n  queue written" not in message         # ...as content, not a new line
+    assert not any(ln.strip().startswith(("queue written", "FATAL: nothing wrong"))
+                   for ln in message.splitlines()[1:])
