@@ -15,6 +15,7 @@ Writes:
 """
 import argparse
 import json
+import re
 import sys
 from datetime import date
 from pathlib import Path
@@ -31,6 +32,22 @@ from cv_tailor.match import score_job
 from cv_tailor.digest import format_digest
 from cv_tailor.sheets import get_pipeline_worksheet
 from cv_tailor.telegram import format_digest_for_telegram, send_text
+
+
+LOG_WIDTH = 90  # per-sample character cap, so one long title can't own the log
+
+
+def _log_safe(text, width: int = LOG_WIDTH) -> str:
+    """Collapse whitespace and truncate an untrusted string for the scan log.
+
+    Company names, titles AND exception texts come from strangers (anyone can
+    post a job, and score_job is fed the posting's own description, so an
+    HTTP/JSON error can echo it back verbatim). Without this, a newline in any
+    of them lets a posting write its own line into the log a human reads.
+    Twin of scripts/scan.py's _log_safe -- deliberately duplicated rather than
+    imported, because scripts/ is not a package and this script's only job is
+    to be independently runnable."""
+    return re.sub(r"\s+", " ", str(text or "")).strip()[:width]
 
 
 def _normalize(s: str) -> str:
@@ -100,7 +117,8 @@ def main(argv=None):
                 "keywords": r.get("key_keywords_matched", []),
             })
         except Exception as e:
-            print(f"  score failed for {j.org}/{j.title}: {e}", file=sys.stderr)
+            print(f"  score failed for {_log_safe(f'{j.org} / {j.title}')}: "
+                  f"{_log_safe(str(e), width=300)}", file=sys.stderr)
 
     # 4. Filter and sort
     scored = [s for s in scored if s["score"] >= args.min_score]
