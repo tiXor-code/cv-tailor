@@ -149,12 +149,19 @@ def _record_blocked_question(e: dict, reason) -> None:
     the queue entry. `error` keeps the full reason string -- this adds, it does
     not replace.
 
-    Called wherever a portal reason is persisted, so there is one rule and no
-    per-adapter call sites to keep in sync (micro1 has a second reason site
-    that bypasses screening.py entirely). When the reason names no question the
-    fields are REMOVED, never left stale: an entry that failed on a captcha the
-    second time around must not still carry the question the first attempt
-    could not answer."""
+    Called by EVERY mutator that writes a portal outcome -- success included,
+    where the reason is "" -- so there is one rule, no per-adapter call sites
+    to keep in sync (micro1 has a second reason site that bypasses
+    screening.py entirely), and the invariant "these keys describe the LATEST
+    attempt" holds by construction rather than by remembering to clear.
+
+    When the reason names no question the fields are REMOVED, never left
+    stale. Both directions matter and both are real sequences: a second
+    attempt dying on a captcha must not still carry the question the first
+    could not answer, and -- the one that corrupts the metric -- a job that
+    parks on an unanswerable question, gets the answer added and then SUCCEEDS
+    must stop reading as blocked. update_entry mutates the entry in place, so
+    silence here means the old value survives."""
     parsed = parse_blocked_question(reason)
     if parsed is None:
         e.pop("blocked_question", None)
@@ -173,6 +180,7 @@ def _finish_portal_dry_run(args, result) -> int:
         def _ready(e: dict) -> None:
             e["status"] = "ready"
             e["evidence_dir"] = result.evidence_dir
+            _record_blocked_question(e, result.reason)
 
         entry = update_entry(args.scan_date, args.job_id, _ready)
         send_text(
@@ -312,6 +320,7 @@ def _handle_portal(args, entry: dict, meta: dict) -> int:
             e["status"] = "sent"
             e["applied_at"] = now
             e["evidence_dir"] = result.evidence_dir
+            _record_blocked_question(e, result.reason)
 
         entry = update_entry(args.scan_date, args.job_id, _sent)
         crm_mark_applied(entry.get("company", ""), entry.get("title", ""), entry.get("url", ""))

@@ -1123,3 +1123,67 @@ def test_portal_needs_human_on_a_wall_records_no_question(mod, monkeypatch, tmp_
     entry = _read_entry(tmp_path, "2026-07-10", "job-1")
     assert entry["error"] == "captcha"
     assert "blocked_question" not in entry
+
+
+def test_a_later_success_clears_the_earlier_blocking_question(mod, monkeypatch, tmp_path):
+    """Park on an unanswerable question, add the answer, retry, succeed -- the
+    exact workflow blocked_question_kind describes. update_entry mutates the
+    entry in place, so a success that does not clear the field leaves the job
+    counted as still blocked forever, corrupting the one metric this data
+    exists to produce. These keys always describe the LATEST attempt."""
+    from cv_tailor.portal import PortalResult
+
+    _portal_queue(tmp_path)
+    _spy_update_entry(mod, monkeypatch)
+    monkeypatch.setattr(mod, "assemble_package", _fake_assemble(package_dir=tmp_path / "pkg"))
+    _stub_portal_prereqs(mod, monkeypatch)
+    monkeypatch.setattr(mod, "resolve_ats_url", lambda e: None)
+    monkeypatch.setattr(mod, "run_portal_application", _FakeRunPortal([
+        PortalResult(status="needs_human", reason="unanswerable-required:Years of Python",
+                     evidence_dir=str(tmp_path)),
+        PortalResult(status="filled", reason="", evidence_dir=str(tmp_path)),
+    ]))
+    monkeypatch.setattr(mod, "send_text", lambda *a, **kw: True)
+    monkeypatch.setattr(mod, "send_document", lambda *a, **kw: True)
+
+    # attempt 1: parked on the question
+    assert mod.main(["2026-07-10", "job-1"]) == 0
+    parked = _read_entry(tmp_path, "2026-07-10", "job-1")
+    assert parked["blocked_question"] == "Years of Python"
+
+    # the answer gets added and the job is re-approved for another attempt
+    mod.update_entry("2026-07-10", "job-1", lambda e: e.update(status="approved"))
+
+    # attempt 2: the form fills cleanly
+    assert mod.main(["2026-07-10", "job-1"]) == 0
+
+    done = _read_entry(tmp_path, "2026-07-10", "job-1")
+    assert done["status"] == "ready"
+    assert "blocked_question" not in done, "a successful attempt still reads as blocked"
+    assert "blocked_question_kind" not in done
+
+
+def test_armed_submit_clears_a_stale_blocking_question(mod, monkeypatch, tmp_path):
+    """Same invariant on the armed success mutator -- the one that runs in
+    production. The entry arrives carrying a question from an earlier attempt;
+    a real submit must not leave it behind."""
+    from cv_tailor.portal import PortalResult
+
+    monkeypatch.setenv("APPLY_ARMED", "1")
+    _portal_queue(tmp_path, blocked_question="Years of Python",
+                  blocked_question_kind="unanswerable")
+    _spy_update_entry(mod, monkeypatch)
+    monkeypatch.setattr(mod, "assemble_package", _fake_assemble(package_dir=tmp_path / "pkg"))
+    _stub_portal_prereqs(mod, monkeypatch)
+    monkeypatch.setattr(mod, "resolve_ats_url", lambda e: None)
+    monkeypatch.setattr(mod, "run_portal_application", _FakeRunPortal(
+        [PortalResult(status="submitted", reason="", evidence_dir=str(tmp_path))]))
+    monkeypatch.setattr(mod, "crm_mark_applied", lambda *a, **kw: True)
+    monkeypatch.setattr(mod, "send_text", lambda *a, **kw: True)
+    monkeypatch.setattr(mod, "send_document", lambda *a, **kw: True)
+
+    assert mod.main(["2026-07-10", "job-1"]) == 0
+
+    entry = _read_entry(tmp_path, "2026-07-10", "job-1")
+    assert entry["status"] == "sent"
+    assert "blocked_question" not in entry and "blocked_question_kind" not in entry
