@@ -170,6 +170,29 @@ def _record_blocked_question(e: dict, reason) -> None:
     e["blocked_question"], e["blocked_question_kind"] = parsed
 
 
+def _status_mut(status: str, *, error: str | None = None, **extra):
+    """Mutator for a status write that carries no portal reason of its own.
+
+    One rule, no exceptions to remember: wherever a status is persisted, the
+    blocked question is re-derived. The portal outcome mutators do that by
+    calling _record_blocked_question with their reason; everything else --
+    the ledger-gate refusals ("duplicate", "daily-cap"), the mid-flight
+    "sending" and "assembling" writes, and the whole email track -- has no
+    reason to derive from, so the fields are cleared.
+
+    Without this, an entry that parked on an unanswerable required question and
+    then hit a ledger refusal (or an SMTP failure) on a later attempt kept the
+    old question beside the new, unrelated error -- a stale reading of exactly
+    the metric these fields exist to produce."""
+    def _mut(e: dict) -> None:
+        e["status"] = status
+        if error is not None:
+            e["error"] = error
+        e.update(extra)
+        _record_blocked_question(e, "")
+    return _mut
+
+
 def _finish_portal_dry_run(args, result) -> int:
     """Unarmed portal result -> queue status. `filled` means the screening
     honesty guard cleared every required question and the form actually
@@ -280,20 +303,20 @@ def _handle_portal(args, entry: dict, meta: dict) -> int:
     own_row_skip = handoff and own_application_recorded(conn, job_id)
 
     if own_row_skip:
-        entry = update_entry(args.scan_date, args.job_id, lambda e: e.update(status="sending"))
+        entry = update_entry(args.scan_date, args.job_id, _status_mut("sending"))
     else:
         if application_exists(conn, job_id=job_id, company=company, role=role):
-            update_entry(args.scan_date, args.job_id, lambda e: e.update(status="failed", error="duplicate"))
+            update_entry(args.scan_date, args.job_id, _status_mut("failed", error="duplicate"))
             print("portal blocked: duplicate", file=sys.stderr)
             return 1
 
         cap = int(os.environ.get("APPLY_DAILY_CAP", "10"))
         if applications_sent_today(conn) >= cap:
-            update_entry(args.scan_date, args.job_id, lambda e: e.update(status="failed", error="daily-cap"))
+            update_entry(args.scan_date, args.job_id, _status_mut("failed", error="daily-cap"))
             print("portal blocked: daily-cap", file=sys.stderr)
             return 1
 
-        entry = update_entry(args.scan_date, args.job_id, lambda e: e.update(status="sending"))
+        entry = update_entry(args.scan_date, args.job_id, _status_mut("sending"))
 
         # Record BEFORE the browser submit attempt -- the same
         # record-then-submit ordering as sender.py's SMTP path. The INSERT
@@ -304,7 +327,7 @@ def _handle_portal(args, entry: dict, meta: dict) -> int:
             url=entry.get("url", ""), channel="portal",
         )
         if not recorded:
-            update_entry(args.scan_date, args.job_id, lambda e: e.update(status="failed", error="duplicate"))
+            update_entry(args.scan_date, args.job_id, _status_mut("failed", error="duplicate"))
             print("portal blocked: duplicate (race)", file=sys.stderr)
             return 1
 
@@ -431,7 +454,7 @@ def main(argv=None) -> int:
     expect_status = start_status
     try:
         update_entry(
-            args.scan_date, args.job_id, lambda e: e.update(status="assembling"),
+            args.scan_date, args.job_id, _status_mut("assembling"),
             expect_status=expect_status,
         )
     except StatusConflict as exc:
@@ -443,7 +466,7 @@ def main(argv=None) -> int:
     except Exception as exc:  # noqa: BLE001 -- AssembleError or any other assembly
         # failure must land in the queue as `failed`, never crash the orchestrator silently.
         error = str(exc) if isinstance(exc, AssembleError) else f"{type(exc).__name__}: {exc}"
-        update_entry(args.scan_date, args.job_id, lambda e: e.update(status="failed", error=error))
+        update_entry(args.scan_date, args.job_id, _status_mut("failed", error=error))
         print(f"assemble failed: {error}", file=sys.stderr)
         return 1
 
@@ -456,11 +479,8 @@ def main(argv=None) -> int:
 
     warnings = meta.get("cover_letter_warnings") or []
     if warnings and not args.force:
-        def _needs_review(e: dict) -> None:
-            e["status"] = "needs_review"
-            e["warnings"] = warnings
-
-        entry = update_entry(args.scan_date, args.job_id, _needs_review)
+        entry = update_entry(args.scan_date, args.job_id,
+                              _status_mut("needs_review", warnings=warnings))
         send_text(
             f"{entry.get('company')} / {entry.get('title')}: cover letter needs review "
             f"({len(warnings)} warning(s)). Open /scout to send anyway."
@@ -479,7 +499,7 @@ def main(argv=None) -> int:
             # the job wedges at `assembling` forever: no error recorded, no
             # Telegram note, and the detached process just dies silently.
             error = f"{type(exc).__name__}: {exc}"
-            update_entry(args.scan_date, args.job_id, lambda e: e.update(status="failed", error=error))
+            update_entry(args.scan_date, args.job_id, _status_mut("failed", error=error))
             print(f"portal handling failed: {error}", file=sys.stderr)
             try:
                 send_text(f"{entry.get('company')} / {entry.get('title')}: portal handling failed ({error})")
@@ -488,7 +508,7 @@ def main(argv=None) -> int:
             return 1
 
     # email
-    entry = update_entry(args.scan_date, args.job_id, lambda e: e.update(status="sending"))
+    entry = update_entry(args.scan_date, args.job_id, _status_mut("sending"))
 
     profile_path = Path(os.environ.get("CV_TAILOR_PROFILE", ROOT / "profile.yaml"))
     profile = load_profile(profile_path, strict=True)
@@ -501,7 +521,7 @@ def main(argv=None) -> int:
         # Without this the job wedges at `sending` forever: no error recorded,
         # no Telegram note, and the detached process just dies silently.
         error = f"{type(exc).__name__}: {exc}"
-        update_entry(args.scan_date, args.job_id, lambda e: e.update(status="failed", error=error))
+        update_entry(args.scan_date, args.job_id, _status_mut("failed", error=error))
         print(f"send failed: {error}", file=sys.stderr)
         try:
             send_text(
@@ -514,24 +534,21 @@ def main(argv=None) -> int:
     if result.status == "sent":
         now = datetime.now(timezone.utc).isoformat()
 
-        def _sent(e: dict) -> None:
-            e["status"] = "sent"
-            e["applied_at"] = now
-
-        entry = update_entry(args.scan_date, args.job_id, _sent)
+        entry = update_entry(args.scan_date, args.job_id,
+                              _status_mut("sent", applied_at=now))
         crm_mark_applied(entry.get("company", ""), entry.get("title", ""), entry.get("url", ""))
         send_text(f"Sent: {entry.get('company')} / {entry.get('title')}")
         send_document(meta["cv_path"], caption=f"{entry.get('company')} / {entry.get('title')}")
         return 0
 
     if result.status == "preview_sent":
-        entry = update_entry(args.scan_date, args.job_id, lambda e: e.update(status="preview_sent"))
+        entry = update_entry(args.scan_date, args.job_id, _status_mut("preview_sent"))
         send_text(f"[PREVIEW] sent to your inbox: {entry.get('company')} / {entry.get('title')}")
         return 0
 
     # blocked
     entry = update_entry(args.scan_date, args.job_id,
-                          lambda e: e.update(status="failed", error=result.reason))
+                          _status_mut("failed", error=result.reason))
     print(f"send blocked: {result.reason}", file=sys.stderr)
     return 1
 

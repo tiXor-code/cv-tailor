@@ -1187,3 +1187,124 @@ def test_armed_submit_clears_a_stale_blocking_question(mod, monkeypatch, tmp_pat
     entry = _read_entry(tmp_path, "2026-07-10", "job-1")
     assert entry["status"] == "sent"
     assert "blocked_question" not in entry and "blocked_question_kind" not in entry
+
+
+# --- the blocked-question invariant holds on the non-portal writes too -------
+#
+# The portal outcome mutators all call _record_blocked_question, success
+# included, so the fields always describe the LATEST attempt. The ledger-gate
+# refusals ("duplicate", "daily-cap"), the mid-flight "sending" write and the
+# email-track writes did not, so a job that parked on an unanswerable required
+# question and then hit one of those on a later attempt ended up with a stale
+# question sitting beside an unrelated error -- which corrupts the one metric
+# these fields exist to produce.
+
+def _spy_question_trail(mod, monkeypatch):
+    """Record (status, blocked_question) after EVERY write, so the invariant can
+    be asserted at each intermediate state and not just at the end."""
+    real = mod.update_entry
+    trail = []
+
+    def spy(scan_date_iso, job_id, mutator, *, queue_dir=None, expect_status=None):
+        result = real(scan_date_iso, job_id, mutator, queue_dir=queue_dir,
+                      expect_status=expect_status)
+        trail.append((result.get("status"), result.get("blocked_question")))
+        return result
+
+    monkeypatch.setattr(mod, "update_entry", spy)
+    return trail
+
+
+def test_duplicate_refusal_clears_a_stale_blocking_question(mod, monkeypatch, tmp_path):
+    from cv_tailor.cache import connect, record_application
+
+    monkeypatch.setenv("APPLY_ARMED", "1")
+    _portal_queue(tmp_path, blocked_question="Years of Python",
+                  blocked_question_kind="unanswerable")
+    conn = connect(tmp_path / "jobs.db")
+    record_application(conn, job_id="job-1", company="Acme Inc.", role="AI Engineer",
+                        url="https://acme.example/jobs/1", channel="portal")
+
+    monkeypatch.setattr(mod, "assemble_package", _fake_assemble(package_dir=tmp_path / "pkg"))
+    _stub_portal_prereqs(mod, monkeypatch)
+    monkeypatch.setattr(mod, "resolve_ats_url", lambda e: None)
+    monkeypatch.setattr(mod, "run_portal_application",
+                        lambda *a, **kw: pytest.fail("must not attempt the browser"))
+    monkeypatch.setattr(mod, "send_text", lambda *a, **kw: True)
+
+    assert mod.main(["2026-07-10", "job-1"]) == 1
+
+    entry = _read_entry(tmp_path, "2026-07-10", "job-1")
+    assert entry["status"] == "failed" and entry["error"] == "duplicate"
+    assert "blocked_question" not in entry and "blocked_question_kind" not in entry
+
+
+def test_daily_cap_refusal_clears_a_stale_blocking_question(mod, monkeypatch, tmp_path):
+    from cv_tailor.cache import connect, record_application
+
+    monkeypatch.setenv("APPLY_ARMED", "1")
+    monkeypatch.setenv("APPLY_DAILY_CAP", "1")
+    _portal_queue(tmp_path, blocked_question="Work Authorization",
+                  blocked_question_kind="unwritable")
+    conn = connect(tmp_path / "jobs.db")
+    record_application(conn, job_id="other-job", company="Other Co", role="Other Role",
+                        url="https://other.example", channel="email")
+
+    monkeypatch.setattr(mod, "assemble_package", _fake_assemble(package_dir=tmp_path / "pkg"))
+    _stub_portal_prereqs(mod, monkeypatch)
+    monkeypatch.setattr(mod, "resolve_ats_url", lambda e: None)
+    monkeypatch.setattr(mod, "run_portal_application",
+                        lambda *a, **kw: pytest.fail("must not attempt the browser"))
+    monkeypatch.setattr(mod, "send_text", lambda *a, **kw: True)
+
+    assert mod.main(["2026-07-10", "job-1"]) == 1
+
+    entry = _read_entry(tmp_path, "2026-07-10", "job-1")
+    assert entry["status"] == "failed" and entry["error"] == "daily-cap"
+    assert "blocked_question" not in entry and "blocked_question_kind" not in entry
+
+
+def test_no_intermediate_write_carries_the_previous_attempts_question(mod, monkeypatch, tmp_path):
+    """The stale question must be gone from the FIRST write of the new attempt,
+    not just from its terminal one -- a crash mid-attempt would otherwise leave
+    the entry parked with a question that belongs to the previous run."""
+    from cv_tailor.portal import PortalResult
+
+    monkeypatch.setenv("APPLY_ARMED", "1")
+    _portal_queue(tmp_path, blocked_question="Years of Python",
+                  blocked_question_kind="unanswerable")
+    trail = _spy_question_trail(mod, monkeypatch)
+    monkeypatch.setattr(mod, "assemble_package", _fake_assemble(package_dir=tmp_path / "pkg"))
+    _stub_portal_prereqs(mod, monkeypatch)
+    monkeypatch.setattr(mod, "resolve_ats_url", lambda e: None)
+    monkeypatch.setattr(mod, "run_portal_application", _FakeRunPortal(
+        [PortalResult(status="needs_human", reason="unwritable-required:Notice period",
+                      evidence_dir=str(tmp_path))]))
+    monkeypatch.setattr(mod, "crm_mark_applied", lambda *a, **kw: pytest.fail("not sent"))
+    monkeypatch.setattr(mod, "send_text", lambda *a, **kw: True)
+
+    assert mod.main(["2026-07-10", "job-1"]) == 0
+
+    assert ("assembling", None) in trail
+    assert ("sending", None) in trail
+    assert trail[-1] == ("needs_human", "Notice period")
+    assert not any(q == "Years of Python" for _, q in trail), \
+        f"a write still carried the previous attempt's question: {trail}"
+
+
+def test_email_send_failure_clears_a_stale_blocking_question(mod, monkeypatch, tmp_path):
+    """The email track never sets a blocked question, so it must not preserve
+    one either: the same entry can reach it after a portal attempt parked."""
+    _write_queue(tmp_path, "2026-07-10", _entry(blocked_question="Years of Python",
+                                                blocked_question_kind="unanswerable"))
+    monkeypatch.setattr(mod, "assemble_package", _fake_assemble(package_dir=tmp_path / "pkg"))
+    monkeypatch.setattr(mod, "send_application",
+                        lambda *a, **kw: (_ for _ in ()).throw(RuntimeError("smtp down")))
+    monkeypatch.setattr(mod, "send_text", lambda *a, **kw: True)
+    monkeypatch.setattr(mod, "send_document", lambda *a, **kw: True)
+
+    assert mod.main(["2026-07-10", "job-1"]) == 1
+
+    entry = _read_entry(tmp_path, "2026-07-10", "job-1")
+    assert entry["status"] == "failed" and "smtp down" in entry["error"]
+    assert "blocked_question" not in entry and "blocked_question_kind" not in entry
