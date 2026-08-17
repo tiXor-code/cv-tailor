@@ -158,6 +158,33 @@ def test_runner_exception_is_recorded_not_raised(tmp_path):
     assert [e["id"] for _, e in report.failed] == ["job-1"]
 
 
+def test_one_crashed_runner_does_not_stop_the_rest_of_the_pass(tmp_path):
+    """Catching the exception is only half the property: the loop must go ON to
+    the next candidate. With a single candidate (see the test above) a `break`,
+    a re-raise or a `return` all still look like a pass, so the day's remaining
+    approved jobs could be silently dropped by one crashed orchestrator. This
+    is the two-candidate version, restoring what the deleted
+    test_auto_apply_pending_continues_after_runner_failure proved on the old
+    scan-side path."""
+    _write_day(tmp_path, TODAY, [_entry(1, score=9), _entry(2, score=8)])
+    ran = []
+
+    def runner(day, job_id):
+        ran.append(job_id)
+        if job_id == "job-1":
+            raise RuntimeError("boom")
+        update_entry(day, job_id, lambda e: e.update(status="sent"), queue_dir=tmp_path)
+        return 0
+
+    report = run_autopilot(NOW, queue_dir=tmp_path, runner=runner)
+
+    assert ran == ["job-1", "job-2"], "the crash ended the pass instead of skipping one job"
+    assert [e["id"] for _, e in report.failed] == ["job-1"]
+    assert [e["id"] for _, e in report.applied] == ["job-2"]
+    # and the survivor was really applied, not just bucketed
+    assert _read(tmp_path, TODAY)["job-2"]["status"] == "sent"
+
+
 def test_expiry_sweep_boundary_and_statuses(tmp_path):
     old_day = (NOW - timedelta(days=8)).date().isoformat()
     edge_day = (NOW - timedelta(days=6)).date().isoformat()
