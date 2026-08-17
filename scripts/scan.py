@@ -30,7 +30,7 @@ from cv_tailor.match import score_job
 from cv_tailor.digest import format_digest
 from cv_tailor.telegram import format_digest_for_telegram, send_text
 from cv_tailor.scout_queue import write_jobs_queue
-from cv_tailor.budget import SerpBudget
+from cv_tailor.budget import JSearchBudget, SerpBudget
 
 
 def _is_auth_error(exc: Exception) -> bool:
@@ -50,6 +50,10 @@ from cv_tailor.enrich import is_smb, smb_hint
 
 DB_PATH = ROOT / "data" / "jobs.db"
 BUDGET_PATH = ROOT / "data" / "serpapi_budget.json"
+# JSearch has its OWN counter: 6 keys x 200 req/mo = 1200/mo, a real cap
+# that nothing enforced before. A shared file would let one source spend
+# the other's allowance.
+JSEARCH_BUDGET_PATH = ROOT / "data" / "jsearch_budget.json"
 
 
 # Gate rejection buckets. GATE1_ROLE vs GATE1_GEO splits the one gate that does
@@ -241,15 +245,21 @@ def main(argv=None):
     # monthly counter -- same spirit as db=":memory:" above.
     if args.dry_run:
         import tempfile
-        budget_path = Path(tempfile.mkdtemp()) / "serpapi_budget.json"
+        tmp = Path(tempfile.mkdtemp())
+        budget_path = tmp / "serpapi_budget.json"
+        jsearch_budget_path = tmp / "jsearch_budget.json"
     else:
         budget_path = BUDGET_PATH
+        jsearch_budget_path = JSEARCH_BUDGET_PATH
     serp_budget = SerpBudget(path=budget_path)
+    jsearch_budget = JSearchBudget(path=jsearch_budget_path)
 
     print(f"fetching {len(sources)} sources...", file=sys.stderr)
-    jobs = fetch_all(sources, serp_budget=serp_budget)
+    jobs = fetch_all(sources, serp_budget=serp_budget, jsearch_budget=jsearch_budget)
     print(f"  {len(jobs)} postings", file=sys.stderr)
     print(f"  serpapi budget: {serp_budget.used()}/{serp_budget.monthly_cap} used this month",
+          file=sys.stderr)
+    print(f"  jsearch budget: {jsearch_budget.used()}/{jsearch_budget.monthly_cap} used this month",
           file=sys.stderr)
 
     gate_stats = GateStats()

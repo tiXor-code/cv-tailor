@@ -88,6 +88,28 @@ sources:
     query: "content producer remote"
     country: gb
     max_days_old: 7
+  # JSearch (OpenWebNinja). Needs JSEARCH_API_KEYS in .env -- NEVER here.
+  #
+  # UK-TARGETED ONLY, and "UK" must be in the query TEXT: measured 2026-08-17,
+  # the API's default search context is the US, `country=gb` alone returns 0
+  # rows, "python developer remote germany" returns 0, and "AI engineer remote
+  # europe" returns US employers. Six keys x 200 req/mo = 1200/mo, so every
+  # continental query would be pure waste -- fetch_jsearch refuses any market
+  # outside JSEARCH_MARKETS, and data/jsearch_budget.json caps the pool.
+  #
+  # 6 queries/day = ~186/mo, comfortably under the 600/mo counter.
+  - kind: jsearch
+    query: "AI engineer remote UK"
+  - kind: jsearch
+    query: "AI automation engineer remote UK"
+  - kind: jsearch
+    query: "machine learning engineer remote UK"
+  - kind: jsearch
+    query: "python developer remote UK"
+  - kind: jsearch
+    query: "forward deployed engineer remote UK"
+  - kind: jsearch
+    query: "content producer remote UK"
   # SerpAPI google_jobs rejects continent locations ("Europe") and city locations
   # return 0; rely on the query text + ltype=1 (remote) and let Gate 1 + the LLM
   # enforce EU-eligibility. No `location` param.

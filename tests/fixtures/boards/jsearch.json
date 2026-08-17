@@ -1,0 +1,74 @@
+{
+  "comments": "Fixture mirroring https://api.openwebninja.com/jsearch/search -- synthetic postings only. Note: job_city / job_state / job_country are null on EVERY live row (the htgaj adapter builds its location from exactly those three), the real location field is job_location, and apply_options entries are {apply_link, is_direct, publisher} -- NOT SerpAPI's {title, link}.",
+  "status": "OK",
+  "request_id": "00000000-0000-4000-8000-000000000000",
+  "parameters": {"query": "AI engineer remote UK", "page": 1, "num_pages": 1, "country": "gb", "language": "en"},
+  "data": [
+    {
+      "job_id": "Rml4dHVyZUpvYklkT25l",
+      "job_uid": "Rml4dHVyZVVpZE9uZQ==",
+      "job_title": "AI Engineer",
+      "employer_name": "Fixture JSearch Ltd",
+      "employer_website": "https://fixture-jsearch.example",
+      "job_publisher": "FixtureBoard",
+      "job_employment_type": "Full-time",
+      "job_apply_link": "https://fixture-jsearch.example/careers/ai-engineer",
+      "job_apply_is_direct": true,
+      "job_google_link": "https://www.google.com/search?q=jobs&gl=us&hl=en&udm=8#vhid=fixture",
+      "apply_options": [
+        {"publisher": "Fixture Careers", "apply_link": "https://fixture-jsearch.example/careers/ai-engineer", "is_direct": true},
+        {"publisher": "FixtureBoard", "apply_link": "https://fixtureboard.example/jobs/ai-engineer", "is_direct": false},
+        {"publisher": "Broken", "apply_link": "javascript:alert(1)", "is_direct": false}
+      ],
+      "job_description": "Build agents in Python.\n\nWork with APIs and Docker.",
+      "job_is_remote": true,
+      "job_location": "Anywhere",
+      "job_city": null,
+      "job_state": null,
+      "job_country": null,
+      "job_posted_at": "3 days ago",
+      "job_posted_at_datetime_utc": "2026-08-14T00:00:00.000Z"
+    },
+    {
+      "job_uid": "Rml4dHVyZVVpZFR3bw==",
+      "job_title": "Onsite Support Engineer",
+      "employer_name": "Fixture Onsite Ltd",
+      "job_publisher": "FixtureBoard",
+      "job_apply_link": "https://fixtureboard.example/jobs/onsite-support-engineer",
+      "job_google_link": "https://www.google.com/search?q=jobs&gl=us&hl=en&udm=8#vhid=fixture2",
+      "apply_options": [
+        {"publisher": "FixtureBoard", "apply_link": "https://fixtureboard.example/jobs/onsite-support-engineer", "is_direct": false}
+      ],
+      "job_description": "Support hardware at customer sites.",
+      "job_is_remote": false,
+      "job_location": "Manchester",
+      "job_city": null,
+      "job_state": null,
+      "job_country": null
+    },
+    {
+      "job_title": "Link Only Role",
+      "employer_name": "Fixture Linkonly Ltd",
+      "apply_options": [
+        {"publisher": "FixtureBoard", "apply_link": "https://fixtureboard.example/jobs/link-only-role", "is_direct": false}
+      ],
+      "job_description": "Fully remote role with no job_id and no job_uid.",
+      "job_is_remote": true,
+      "job_location": null,
+      "job_city": null,
+      "job_state": null,
+      "job_country": null
+    },
+    {
+      "job_title": "Ghost Role",
+      "employer_name": "Fixture Ghost Ltd",
+      "job_google_link": "https://www.google.com/search?q=jobs&gl=us&hl=en&udm=8#vhid=fixture4",
+      "job_description": "Remote role with no id, no uid and no apply link of any kind.",
+      "job_is_remote": true,
+      "job_location": "Anywhere",
+      "job_city": null,
+      "job_state": null,
+      "job_country": null
+    }
+  ]
+}

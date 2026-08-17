@@ -1,4 +1,16 @@
-"""Monthly counter for SerpAPI queries.
+"""Monthly request counters for the metered job sources.
+
+`MonthlyBudget` is the mechanism; `SerpBudget` and `JSearchBudget` are the two
+quotas, each with its OWN counter file so neither can spend the other's
+allowance. Everything below about flock, atomic writes and the month-rollover
+auto-reset belongs to the shared mechanism and applies to both.
+
+JSearch (OpenWebNinja) runs on six keys at 200 requests/month each = 1,200/mo
+total. Nothing enforced that before: the sibling htgaj pipeline burned four of
+its six keys in a single run and then mislabelled them as permanently
+exhausted. JSearchBudget caps a runaway at 600/mo -- half the pool -- which is
+still ~3x what sources.yaml actually spends (6 UK queries/day = ~186/mo), so
+the cap bounds accidents without rationing normal use.
 
 The SerpAPI free plan is 250 searches/month TOTAL, and it is SHARED with the
 norina-jobs project (a separate daily scan run for Teodor's girlfriend).
@@ -39,10 +51,20 @@ def _current_month() -> str:
     return date.today().strftime("%Y-%m")
 
 
-class SerpBudget:
-    def __init__(self, path: Path | None = None, monthly_cap: int = 90):
-        self.path = Path(path) if path is not None else ROOT / "data" / "serpapi_budget.json"
-        self.monthly_cap = monthly_cap
+class MonthlyBudget:
+    """Flock-guarded, atomically-written, month-keyed request counter.
+
+    Subclasses supply the counter file name and the cap; the mechanism (and
+    every guarantee documented in the module docstring) is shared."""
+
+    DEFAULT_FILENAME = "budget.json"
+    DEFAULT_CAP = 0
+    LABEL = "budget"
+
+    def __init__(self, path: Path | None = None, monthly_cap: int | None = None):
+        self.path = (Path(path) if path is not None
+                     else ROOT / "data" / self.DEFAULT_FILENAME)
+        self.monthly_cap = self.DEFAULT_CAP if monthly_cap is None else monthly_cap
 
     def _read(self) -> dict:
         """Current month's state. A missing file, corrupt file, or a stale
@@ -92,3 +114,19 @@ class SerpBudget:
                 fcntl.flock(lock_fd, fcntl.LOCK_UN)
         finally:
             os.close(lock_fd)
+
+
+class SerpBudget(MonthlyBudget):
+    """SerpAPI's 90/mo slice of a 250/mo plan shared with norina-jobs."""
+
+    DEFAULT_FILENAME = "serpapi_budget.json"
+    DEFAULT_CAP = 90
+    LABEL = "serpapi"
+
+
+class JSearchBudget(MonthlyBudget):
+    """JSearch's own counter: 600/mo of a 1,200/mo six-key pool."""
+
+    DEFAULT_FILENAME = "jsearch_budget.json"
+    DEFAULT_CAP = 600
+    LABEL = "jsearch"

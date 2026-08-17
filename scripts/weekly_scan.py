@@ -25,7 +25,7 @@ sys.path.insert(0, str(ROOT / "src"))
 
 import yaml
 
-from cv_tailor.budget import SerpBudget
+from cv_tailor.budget import JSearchBudget, SerpBudget
 from cv_tailor.profile import load_profile
 from cv_tailor.tailor_llm import build_azure_client
 from cv_tailor.job_sources import fetch_all
@@ -40,6 +40,10 @@ LOG_WIDTH = 90  # per-sample character cap, so one long title can't own the log
 # scanners each spend the 90/mo this repo takes out of the 250/mo SerpAPI pool
 # it shares with norina-jobs.
 BUDGET_PATH = ROOT / "data" / "serpapi_budget.json"
+# Likewise the SAME jsearch counter scripts/scan.py uses: 6 keys x 200 req/mo
+# = 1200/mo total, so a second file would let this scanner spend the daily
+# scan's allowance over again.
+JSEARCH_BUDGET_PATH = ROOT / "data" / "jsearch_budget.json"
 
 
 def _log_safe(text, width: int = LOG_WIDTH) -> str:
@@ -97,10 +101,13 @@ def main(argv=None):
     # key. Its launchd plist is `.disabled` today, but an accidental run must
     # not be the expensive path.
     serp_budget = SerpBudget(path=BUDGET_PATH)
+    jsearch_budget = JSearchBudget(path=JSEARCH_BUDGET_PATH)
     print(f"fetching {len(sources)} sources...", file=sys.stderr)
-    jobs = fetch_all(sources, serp_budget=serp_budget)
+    jobs = fetch_all(sources, serp_budget=serp_budget, jsearch_budget=jsearch_budget)
     print(f"  got {len(jobs)} total postings", file=sys.stderr)
     print(f"  serpapi budget: {serp_budget.used()}/{serp_budget.monthly_cap} used this month",
+          file=sys.stderr)
+    print(f"  jsearch budget: {jsearch_budget.used()}/{jsearch_budget.monthly_cap} used this month",
           file=sys.stderr)
 
     # 2. Dedupe against Sheet

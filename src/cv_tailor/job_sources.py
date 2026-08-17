@@ -10,6 +10,7 @@ from __future__ import annotations
 import html
 import os
 import re
+import urllib.error
 import urllib.request
 import json
 import xml.etree.ElementTree as ET
@@ -671,7 +672,181 @@ def fetch_adzuna(query: str, country: str = "gb",
     return out
 
 
-def fetch_all(sources: list[dict], serp_budget=None) -> list[JobPosting]:
+# --- jsearch (credentialed, UK-targeted, budget-aware) -----------------------
+#
+# JSearch via OpenWebNinja. UK ONLY, and that is a measurement, not a
+# preference (probed 2026-08-17): the API's default search context is the US
+# (`parameters.country` echoes "us" for a UK query), "python developer remote
+# germany" returns 0 rows, and "AI engineer remote europe" returns US
+# employers. `country=gb` IS accepted and echoed back -- but on its own it
+# returns 0 rows, so UK targeting has to be in the query TEXT and the country
+# param only sharpens it. Continental queries are pure waste at 200 req/mo per
+# key, so the market map is the gate: widening it is a deliberate edit.
+JSEARCH_MARKETS = {"gb": "United Kingdom"}
+_JSEARCH_URL = "https://api.openwebninja.com/jsearch/search"
+# Left at 1 on purpose: whether num_pages>1 bills as one request or as N is not
+# something this project can measure from outside, and an undercounting budget
+# is worse than a smaller page.
+_JSEARCH_NUM_PAGES = 1
+# HTTP codes that mean "this key is no good right now" rather than "the query
+# failed". MEASURED: an invalid or spent key answers 401 (a bogus key and a
+# missing header both did), which urllib RAISES -- so the htgaj adapter's
+# `data["status"] == "FAIL"` / error-code branch could never fire and the query
+# was simply lost.
+_JSEARCH_DEAD_KEY_CODES = (401, 403, 429)
+
+# Round-robin state, per process. Six keys exist so the load can be spread;
+# spending one down while five sit idle is exactly how the htgaj run burned
+# four of them. `dead` is deliberately process-scoped and NOT persisted: the
+# four keys that file labels `status: exhausted` (dated 2026-01-31) all work
+# today, so a durable exhausted-list is how a working key stays retired for
+# seven months.
+_JSEARCH_ROTATION: dict = {"cursor": 0, "dead": set()}
+
+
+def reset_jsearch_key_rotation() -> None:
+    """Forget the round-robin cursor and the dead-key set (tests; also the
+    honest way to retry a key after a monthly quota reset)."""
+    _JSEARCH_ROTATION["cursor"] = 0
+    _JSEARCH_ROTATION["dead"] = set()
+
+
+def _jsearch_keys(api_keys=None) -> list[str]:
+    """Keys from JSEARCH_API_KEYS (comma-separated) or an explicit list.
+
+    Env ONLY -- there is deliberately no fallback to any config file. The
+    sibling project's key file is committed to git, and reading a credential
+    out of a tracked file is a live SEC020/SEC022 finding, so the file is not
+    referenced from this module at all."""
+    raw = api_keys if api_keys is not None else os.environ.get("JSEARCH_API_KEYS", "")
+    if isinstance(raw, str):
+        raw = raw.split(",")
+    return [str(k).strip() for k in (raw or []) if str(k).strip()]
+
+
+def _jsearch_next_key(keys: list[str]) -> str | None:
+    """Next live key in round-robin order, advancing the cursor. None when
+    every key has been marked dead this process."""
+    dead = _JSEARCH_ROTATION["dead"]
+    for _ in range(len(keys)):
+        key = keys[_JSEARCH_ROTATION["cursor"] % len(keys)]
+        _JSEARCH_ROTATION["cursor"] = (_JSEARCH_ROTATION["cursor"] + 1) % len(keys)
+        if key not in dead:
+            return key
+    return None
+
+
+def _jsearch_apply_options(raw) -> list[dict]:
+    """jsearch's apply_options are {apply_link, is_direct, publisher}; this
+    repo's normalizer reads {link, title} (SerpAPI's shape). Without the remap
+    _apply_option_links drops every option silently and /scout shows a human no
+    apply link at all."""
+    return _apply_option_links([
+        {"link": (o or {}).get("apply_link"), "title": (o or {}).get("publisher")}
+        for o in (raw or []) if isinstance(o, dict)])
+
+
+def fetch_jsearch(query: str, country: str = "gb", api_keys=None,
+                  budget=None) -> list[JobPosting]:
+    """JSearch (OpenWebNinja) for one UK-targeted query, one page (~10 rows).
+
+    Keys are checked FIRST -- before the market map, before the budget and
+    before any network call -- so an unset JSEARCH_API_KEYS returns [] without
+    consuming a budget slot (the fetch_serpapi contract; see its docstring).
+
+    `budget`, when given, is a budget.JSearchBudget consulted BEFORE each HTTP
+    attempt, retries included: a rejected key still cost a real request against
+    the shared 1,200/mo pool, so the counter must not undercount it.
+
+    Rejected keys (401/403/429) are retried on the NEXT key, up to one attempt
+    per key, and marked dead for the rest of the process. Two facts shape that:
+    the rejection arrives as an HTTP status urllib raises (not as a `status:
+    FAIL` body, which is what the sibling adapter watched for and why a lost
+    query looked like an empty one); and the dead-set is never persisted,
+    because the four keys the sibling project recorded as `exhausted` on
+    2026-01-31 all answer HTTP 200 today.
+
+    Mapping notes, all measured over a full live page:
+
+    * `job_city`, `job_state` AND `job_country` are null on every row. The
+      sibling adapter builds its location from exactly those three and would
+      emit "" for every posting, leaving Gate 1 no geo signal. `job_location`
+      is the real field, and the market's English name is appended so
+      gates._EU_RE has something to match ("Manchester" alone does not).
+    * `job_google_link` is a google.com SERP URL. It is never used as the
+      posting url -- a portal adapter cannot act on it -- so a row with no real
+      apply link is dropped instead.
+    """
+    keys = _jsearch_keys(api_keys)
+    if not keys:
+        print("warning: JSEARCH_API_KEYS not set; skipping jsearch source")
+        return []
+    market = JSEARCH_MARKETS.get(country) if isinstance(country, str) else None
+    if not market:
+        print(f"warning: unsupported jsearch country {country!r}; skipping "
+              f"(supported: {', '.join(sorted(JSEARCH_MARKETS))})")
+        return []
+
+    url = (f"{_JSEARCH_URL}?query={quote_plus(query or '')}"
+           f"&num_pages={_JSEARCH_NUM_PAGES}&page=1&country={quote_plus(country)}")
+    data = None
+    for _ in range(len(keys)):
+        key = _jsearch_next_key(keys)
+        if key is None:                # every key died, this call or an earlier one
+            break
+        if budget is not None and not budget.take():
+            print(f"jsearch budget exhausted (cap {budget.monthly_cap}/mo, "
+                  f"{budget.used()} used this month); skipping remaining queries "
+                  f"-- dropped {query!r}")
+            return []
+        req = urllib.request.Request(url, headers={
+            "x-api-key": key, "Accept": "application/json", "User-Agent": _BOARD_UA})
+        try:
+            with urllib.request.urlopen(req, timeout=20) as resp:
+                data = json.load(resp)
+            break
+        except urllib.error.HTTPError as e:
+            if e.code in _JSEARCH_DEAD_KEY_CODES:
+                _JSEARCH_ROTATION["dead"].add(key)
+                print(f"warning: a jsearch key was rejected (HTTP {e.code}); "
+                      f"retiring it for this run and trying the next")
+                continue
+            print(f"warning: jsearch fetch failed for {query!r}: "
+                  f"HTTP {e.code} {_redact(e.reason, *keys)}")
+            return []
+        except Exception as e:
+            print(f"warning: jsearch fetch failed for {query!r}: {_redact(e, *keys)}")
+            return []
+    if data is None:
+        print(f"warning: no usable jsearch key left (all {len(keys)} rejected); "
+              f"dropped {query!r}")
+        return []
+
+    out: list[JobPosting] = []
+    seen: set[str] = set()
+    for j in (data.get("data") or []) if isinstance(data, dict) else []:
+        if not isinstance(j, dict):
+            continue
+        options = _jsearch_apply_options(j.get("apply_options"))
+        link = _first_id(j.get("job_apply_link"),
+                         options[0]["url"] if options else "")
+        raw_id = _first_id(j.get("job_id"), j.get("job_uid"), link)
+        if not raw_id or raw_id in seen or not link:
+            continue
+        seen.add(raw_id)
+        where = re.sub(r"\s+", " ", str(j.get("job_location") or "")).strip()
+        where = (f"{where[:_LOCATION_WIDTH]}, {market}" if where else market)
+        out.append(JobPosting(
+            source="jsearch", org=str(j.get("employer_name") or ""),
+            title=str(j.get("job_title") or ""),
+            location=f"Remote - {where}" if _flag(j.get("job_is_remote")) else where,
+            url=link, description=_strip_html(j.get("job_description") or ""),
+            raw_id=raw_id, apply_options=options,
+        ))
+    return out
+
+
+def fetch_all(sources: list[dict], serp_budget=None, jsearch_budget=None) -> list[JobPosting]:
     """sources = [{'kind': 'ashby'|'greenhouse'|'lever', 'slug': '...', 'name': '...'}, ...]
 
     `serp_budget`, when given (a budget.SerpBudget), is the ONE shared
@@ -679,7 +854,12 @@ def fetch_all(sources: list[dict], serp_budget=None) -> list[JobPosting]:
     reflects queries actually taken across the whole scan rather than each
     source re-reading a stale file. `serp_budget=None` (the default) means
     unbudgeted -- every serpapi source fires -- matching pre-budget behavior
-    for callers (including existing tests) that do not pass one."""
+    for callers (including existing tests) that do not pass one.
+
+    `jsearch_budget` (a budget.JSearchBudget) is the same arrangement for the
+    jsearch sources: one shared instance for the whole scan, because a
+    per-source instance re-reads a stale count and the 1,200/mo pool cap never
+    actually binds."""
     dispatch = {
         "ashby": fetch_ashby_org,
         "greenhouse": fetch_greenhouse_org,
@@ -692,13 +872,16 @@ def fetch_all(sources: list[dict], serp_budget=None) -> list[JobPosting]:
         "wwr": lambda s: fetch_wwr(s["category"]),
         "arbeitnow": lambda s: fetch_arbeitnow(s.get("pages", 1)),
         "himalayas": lambda s: fetch_himalayas(s.get("count", _HIMALAYAS_PAGE_SIZE)),
-        # No app_id/app_key read from `s`: a source entry lives in the
-        # COMMITTED sources.yaml, so accepting credentials there at all would
-        # invite someone to put them there (SEC020). Env only.
+        # No credentials read from `s` for either of the two below: a source
+        # entry lives in the COMMITTED sources.yaml, so accepting app_id /
+        # app_key / api_keys there at all would invite someone to put live
+        # values in a tracked file (SEC020). Env only.
         "adzuna": lambda s: fetch_adzuna(
             s["query"], country=s.get("country", "gb"),
             results_per_page=s.get("results_per_page", _ADZUNA_PAGE_SIZE),
             pages=s.get("pages", 1), max_days_old=s.get("max_days_old")),
+        "jsearch": lambda s: fetch_jsearch(
+            s["query"], country=s.get("country", "gb"), budget=jsearch_budget),
     }
     out: list[JobPosting] = []
     for s in sources:

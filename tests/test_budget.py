@@ -106,3 +106,41 @@ def test_take_concurrent_writers_no_lost_updates_no_overshoot(tmp_path):
     total_successes = queue.get(timeout=5) + queue.get(timeout=5)
     assert total_successes == cap, "overshoot or lost update in take()'s successful-call count"
     assert json.loads(path.read_text())["used"] == cap, "stored used count diverged from successes"
+
+
+# --- the monthly-counter mechanism is shared, the quotas are not -------------
+
+def test_serp_budget_keeps_its_serpapi_defaults():
+    """Every existing caller constructs SerpBudget the same way; extracting the
+    mechanism must not move its file or its cap."""
+    b = SerpBudget()
+    assert b.monthly_cap == 90
+    assert b.path.name == "serpapi_budget.json"
+
+
+def test_jsearch_budget_has_its_own_file_and_cap():
+    from cv_tailor.budget import JSearchBudget
+    b = JSearchBudget()
+    assert b.path.name == "jsearch_budget.json"
+    # 6 keys x 200 req/mo = 1200; the cap bounds a runaway at half the pool
+    assert b.monthly_cap == 600
+
+
+def test_the_two_budgets_are_independent_counters(tmp_path):
+    """A shared file would let JSearch spend SerpAPI's 90/mo, which is drawn
+    from a 250/mo plan also used by norina-jobs."""
+    from cv_tailor.budget import JSearchBudget
+    serp = SerpBudget(path=tmp_path / "serpapi_budget.json", monthly_cap=2)
+    js = JSearchBudget(path=tmp_path / "jsearch_budget.json", monthly_cap=2)
+    assert serp.take() is True
+    assert serp.used() == 1 and js.used() == 0
+
+
+def test_both_budgets_share_the_flock_guarded_atomic_mechanism(tmp_path):
+    from cv_tailor.budget import JSearchBudget, MonthlyBudget
+    assert issubclass(SerpBudget, MonthlyBudget)
+    assert issubclass(JSearchBudget, MonthlyBudget)
+    b = JSearchBudget(path=tmp_path / "jsearch_budget.json", monthly_cap=2)
+    assert b.take() is True and b.take() is True and b.take() is False
+    assert b.used() == 2
+    assert list(tmp_path.glob("*.tmp-*")) == []

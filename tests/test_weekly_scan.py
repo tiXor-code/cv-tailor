@@ -119,3 +119,24 @@ def test_budget_file_is_the_one_the_daily_scan_counts_against(mod):
     """A separate counter file would let the two scanners spend 90 each. Static
     assertion -- no run, no file touched."""
     assert mod.BUDGET_PATH == ROOT / "data" / "serpapi_budget.json"
+
+
+def test_both_scanners_share_the_same_two_budget_files():
+    """A second counter file per scanner would let each of them spend the full
+    monthly allowance -- the exact bug dc2bd31 fixed for serpapi. Pin BOTH
+    paths so jsearch cannot regress the same way."""
+    import importlib.util
+    from pathlib import Path
+    root = Path(__file__).resolve().parent.parent
+
+    def _load(name, rel):
+        spec = importlib.util.spec_from_file_location(name, root / rel)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        return mod
+
+    daily = _load("scan_mod", "scripts/scan.py")
+    weekly = _load("weekly_mod", "scripts/weekly_scan.py")
+    assert daily.BUDGET_PATH == weekly.BUDGET_PATH
+    assert daily.JSEARCH_BUDGET_PATH == weekly.JSEARCH_BUDGET_PATH
+    assert daily.JSEARCH_BUDGET_PATH != daily.BUDGET_PATH

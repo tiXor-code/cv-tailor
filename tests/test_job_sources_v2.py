@@ -680,3 +680,388 @@ def test_env_example_documents_the_adzuna_variable_names():
     for line in text.splitlines():
         if line.startswith(("ADZUNA_APP_ID=", "ADZUNA_APP_KEY=")):
             assert line.split("=", 1)[1] == ""
+
+
+# --- jsearch (credentialed, UK-targeted, budget-aware) -----------------------
+
+def _kv_router(routes, calls=None):
+    """Like _url_router but also records each request's headers, so key
+    rotation and the x-api-key wiring can be asserted with no network access.
+    A routed value that is an Exception is raised (used for HTTPError 401/429)."""
+    def _open(req, *a, **kw):
+        url = getattr(req, "full_url", None) or str(req)
+        if calls is not None:
+            calls.append((url, dict(getattr(req, "headers", {}) or {})))
+        for fragment, payload in routes.items():
+            if fragment in url:
+                if isinstance(payload, Exception):
+                    raise payload
+                if isinstance(payload, list):          # one payload per attempt
+                    nxt = payload.pop(0)
+                    if isinstance(nxt, Exception):
+                        raise nxt
+                    return _fake_urlopen(nxt)
+                return _fake_urlopen(payload)
+        raise AssertionError(f"unexpected url {url}")
+    return _open
+
+
+def _http_error(code):
+    import urllib.error
+    return urllib.error.HTTPError(
+        "https://api.openwebninja.com/jsearch/search", code, "boom", {}, None)
+
+
+def _api_key_of(headers):
+    """urllib.request.Request.add_header capitalizes header NAMES, so the sent
+    header is 'X-api-key'. Verified live: the API accepts it (HTTP 200 through
+    urllib), so the config file's 'must be lowercase x-api-key' note does not
+    apply to this transport."""
+    return next(v for k, v in headers.items() if k.lower() == "x-api-key")
+
+
+def test_fetch_jsearch_no_ops_without_keys(monkeypatch, capsys):
+    """The state this ships in: JSEARCH_API_KEYS is not in .env yet."""
+    monkeypatch.delenv("JSEARCH_API_KEYS", raising=False)
+    job_sources.reset_jsearch_key_rotation()
+    with mock.patch("urllib.request.urlopen",
+                    side_effect=AssertionError("must not be called")) as urlopen:
+        out = job_sources.fetch_jsearch("AI engineer remote UK")
+    urlopen.assert_not_called()
+    assert out == []
+    assert "JSEARCH_API_KEYS" in capsys.readouterr().out
+
+
+def test_fetch_jsearch_checks_keys_before_touching_the_budget(monkeypatch, tmp_path):
+    """The fetch_serpapi ordering: an unset credential must not burn a budget
+    slot on a request that was never going to reach the network."""
+    from cv_tailor.budget import JSearchBudget
+    monkeypatch.delenv("JSEARCH_API_KEYS", raising=False)
+    job_sources.reset_jsearch_key_rotation()
+    budget = JSearchBudget(path=tmp_path / "jsearch_budget.json", monthly_cap=5)
+    with mock.patch("urllib.request.urlopen",
+                    side_effect=AssertionError("must not be called")):
+        assert job_sources.fetch_jsearch("q", budget=budget) == []
+    assert budget.used() == 0
+
+
+def test_fetch_jsearch_maps_fields():
+    payload = _load_fixture_json("jsearch.json")
+    calls = []
+    job_sources.reset_jsearch_key_rotation()
+    with mock.patch("urllib.request.urlopen",
+                    side_effect=_kv_router({"openwebninja.com": payload}, calls)):
+        jobs = job_sources.fetch_jsearch("AI engineer remote UK", api_keys=["k1"])
+    assert len(calls) == 1
+    url, headers = calls[0]
+    assert "api.openwebninja.com/jsearch/search" in url
+    assert "query=AI+engineer+remote+UK" in url and "num_pages=1" in url and "page=1" in url
+    assert "country=gb" in url
+    assert _api_key_of(headers) == "k1"
+    # the id-less, uid-less, link-less 4th posting is dropped; the other three map
+    assert len(jobs) == 3
+    j = jobs[0]
+    assert j.source == "jsearch" and j.org == "Fixture JSearch Ltd"
+    assert j.title == "AI Engineer"
+    assert j.raw_id == "Rml4dHVyZUpvYklkT25l"
+    assert j.url == "https://fixture-jsearch.example/careers/ai-engineer"
+    assert "Build agents in Python" in j.description
+
+
+def test_fetch_jsearch_does_not_build_location_from_the_null_city_fields():
+    """MEASURED over a full live page: job_city, job_state AND job_country are
+    null on every row. The htgaj adapter builds its location from exactly those
+    three, so it would emit "" for every posting -- and Gate 1 would then have
+    no geo signal at all to judge. job_location is the real field, and the
+    market's English name is appended so gates._EU_RE has something to match
+    ("Anywhere" alone passes only via the global rule; "Manchester" would not
+    pass at all)."""
+    from cv_tailor.gates import is_eu_eligible
+    payload = _load_fixture_json("jsearch.json")
+    job_sources.reset_jsearch_key_rotation()
+    with mock.patch("urllib.request.urlopen",
+                    side_effect=_kv_router({"openwebninja.com": payload})):
+        jobs = job_sources.fetch_jsearch("AI engineer remote UK", api_keys=["k1"])
+    by_title = {j.title: j for j in jobs}
+    assert "United Kingdom" in by_title["AI Engineer"].location
+    onsite = by_title["Onsite Support Engineer"]
+    assert "Manchester" in onsite.location and "United Kingdom" in onsite.location
+    assert is_eu_eligible(onsite.location, onsite.description) is True
+    assert is_eu_eligible("Manchester", "") is False   # the raw field alone fails
+    # a null job_location still yields the market, never an empty string
+    assert by_title["Link Only Role"].location == "Remote - United Kingdom"
+
+
+def test_fetch_jsearch_reports_the_remote_flag_it_is_given():
+    from cv_tailor.gates import is_remote
+    payload = _load_fixture_json("jsearch.json")
+    job_sources.reset_jsearch_key_rotation()
+    with mock.patch("urllib.request.urlopen",
+                    side_effect=_kv_router({"openwebninja.com": payload})):
+        jobs = job_sources.fetch_jsearch("AI engineer remote UK", api_keys=["k1"])
+    by_title = {j.title: j for j in jobs}
+    remote = by_title["AI Engineer"]
+    assert remote.location.startswith("Remote - ")
+    assert is_remote(remote.location, "") is True
+    onsite = by_title["Onsite Support Engineer"]
+    assert not onsite.location.startswith("Remote")
+    assert is_remote(onsite.location, onsite.description) is False
+
+
+def test_fetch_jsearch_normalizes_apply_options_into_this_repos_shape():
+    """jsearch entries are {apply_link, is_direct, publisher}; SerpAPI's are
+    {link, title}. _apply_option_links reads link/title, so without the remap
+    every option would be silently dropped -- and /scout would show a human no
+    apply link at all."""
+    payload = _load_fixture_json("jsearch.json")
+    job_sources.reset_jsearch_key_rotation()
+    with mock.patch("urllib.request.urlopen",
+                    side_effect=_kv_router({"openwebninja.com": payload})):
+        jobs = job_sources.fetch_jsearch("AI engineer remote UK", api_keys=["k1"])
+    opts = jobs[0].apply_options
+    assert [o["url"] for o in opts] == [
+        "https://fixture-jsearch.example/careers/ai-engineer",
+        "https://fixtureboard.example/jobs/ai-engineer"]          # javascript: dropped
+    assert opts[0]["label"] == "Fixture Careers"
+
+
+def test_fetch_jsearch_never_navigates_to_a_google_serp():
+    """The htgaj adapter falls back to job_google_link. That is a google.com
+    search URL -- useless to a portal adapter, and adapter_for would have to
+    reject it anyway. A posting with no real apply link is dropped instead."""
+    payload = _load_fixture_json("jsearch.json")
+    job_sources.reset_jsearch_key_rotation()
+    with mock.patch("urllib.request.urlopen",
+                    side_effect=_kv_router({"openwebninja.com": payload})):
+        jobs = job_sources.fetch_jsearch("AI engineer remote UK", api_keys=["k1"])
+    assert all("google.com" not in j.url for j in jobs)
+    assert "Fixture Ghost Ltd" not in {j.org for j in jobs}
+
+
+def test_fetch_jsearch_never_emits_an_empty_raw_id():
+    payload = _load_fixture_json("jsearch.json")
+    job_sources.reset_jsearch_key_rotation()
+    with mock.patch("urllib.request.urlopen",
+                    side_effect=_kv_router({"openwebninja.com": payload})):
+        jobs = job_sources.fetch_jsearch("AI engineer remote UK", api_keys=["k1"])
+    assert all(j.raw_id for j in jobs)
+    # no job_id -> job_uid
+    assert next(j for j in jobs if j.org == "Fixture Onsite Ltd").raw_id == "Rml4dHVyZVVpZFR3bw=="
+    # neither -> the apply link
+    assert (next(j for j in jobs if j.org == "Fixture Linkonly Ltd").raw_id
+            == "https://fixtureboard.example/jobs/link-only-role")
+
+
+def test_fetch_jsearch_rotates_across_keys_on_successive_queries():
+    """Six keys at 200 req/mo each. Spending one key down while five sit idle
+    is how the htgaj run burned four of them; round-robin spreads the load."""
+    payload = {"status": "OK", "data": []}
+    calls = []
+    job_sources.reset_jsearch_key_rotation()
+    with mock.patch("urllib.request.urlopen",
+                    side_effect=_kv_router({"openwebninja.com": payload}, calls)):
+        for _ in range(4):
+            job_sources.fetch_jsearch("q", api_keys=["k1", "k2", "k3"])
+    assert [_api_key_of(h) for _, h in calls] == ["k1", "k2", "k3", "k1"]
+
+
+def test_fetch_jsearch_retries_the_next_key_when_one_is_rejected():
+    """MEASURED: an invalid or spent key answers HTTP 401 -- urllib raises, so
+    the htgaj adapter's `data["status"] == "FAIL"` branch could never fire and
+    the query would just be lost."""
+    payload = _load_fixture_json("jsearch.json")
+    calls = []
+    job_sources.reset_jsearch_key_rotation()
+    with mock.patch("urllib.request.urlopen",
+                    side_effect=_kv_router({"openwebninja.com": [_http_error(401), payload]},
+                                           calls)):
+        jobs = job_sources.fetch_jsearch("q", api_keys=["k1", "k2"])
+    assert [_api_key_of(h) for _, h in calls] == ["k1", "k2"]
+    assert len(jobs) == 3
+
+
+def test_fetch_jsearch_does_not_retry_a_key_already_known_dead():
+    payload = {"status": "OK", "data": []}
+    calls = []
+    job_sources.reset_jsearch_key_rotation()
+    with mock.patch("urllib.request.urlopen",
+                    side_effect=_kv_router({"openwebninja.com": [_http_error(429), payload,
+                                                                 payload]}, calls)):
+        job_sources.fetch_jsearch("q1", api_keys=["k1", "k2"])   # k1 dies, k2 answers
+        job_sources.fetch_jsearch("q2", api_keys=["k1", "k2"])   # k1 must be skipped
+    assert [_api_key_of(h) for _, h in calls] == ["k1", "k2", "k2"]
+
+
+def test_fetch_jsearch_gives_up_when_every_key_is_rejected(capsys):
+    calls = []
+    job_sources.reset_jsearch_key_rotation()
+    with mock.patch("urllib.request.urlopen",
+                    side_effect=_kv_router({"openwebninja.com": [_http_error(401),
+                                                                 _http_error(401)]}, calls)):
+        out = job_sources.fetch_jsearch("q", api_keys=["k1", "k2"])
+    assert out == [] and len(calls) == 2
+    assert "no usable jsearch key" in capsys.readouterr().out
+
+
+def test_fetch_jsearch_error_warning_never_echoes_a_key(capsys):
+    job_sources.reset_jsearch_key_rotation()
+    with mock.patch("urllib.request.urlopen",
+                    side_effect=RuntimeError("failed with x-api-key: SECRETKEY")):
+        job_sources.fetch_jsearch("q", api_keys=["SECRETKEY"])
+    printed = capsys.readouterr().out
+    assert "SECRETKEY" not in printed
+    assert "jsearch fetch failed" in printed
+
+
+def test_fetch_jsearch_reads_keys_from_the_env_var(monkeypatch):
+    monkeypatch.setenv("JSEARCH_API_KEYS", " ka , kb ,, ")
+    calls = []
+    job_sources.reset_jsearch_key_rotation()
+    with mock.patch("urllib.request.urlopen",
+                    side_effect=_kv_router({"openwebninja.com": {"status": "OK", "data": []}},
+                                           calls)):
+        job_sources.fetch_jsearch("q")
+        job_sources.fetch_jsearch("q")
+    assert [_api_key_of(h) for _, h in calls] == ["ka", "kb"]
+
+
+def test_fetch_jsearch_never_reads_the_committed_key_file(monkeypatch):
+    """~/clawd/config/jsearch_api_keys.json is tracked in git. Reading it from
+    code is a live SEC020/SEC022 finding, so there is no file fallback at all."""
+    import inspect
+    src = inspect.getsource(job_sources)
+    assert "jsearch_api_keys" not in src and "clawd/config" not in src
+    monkeypatch.delenv("JSEARCH_API_KEYS", raising=False)
+    job_sources.reset_jsearch_key_rotation()
+    with mock.patch("pathlib.Path.read_text",
+                    side_effect=AssertionError("must not read any file")):
+        with mock.patch("urllib.request.urlopen",
+                        side_effect=AssertionError("must not be called")):
+            assert job_sources.fetch_jsearch("q") == []
+
+
+def test_fetch_jsearch_consults_budget_and_skips_network_when_exhausted(tmp_path, capsys):
+    from cv_tailor.budget import JSearchBudget
+    budget = JSearchBudget(path=tmp_path / "jsearch_budget.json", monthly_cap=0)
+    job_sources.reset_jsearch_key_rotation()
+    with mock.patch("urllib.request.urlopen") as urlopen:
+        out = job_sources.fetch_jsearch("AI engineer remote UK", api_keys=["k1"],
+                                        budget=budget)
+    urlopen.assert_not_called()
+    assert out == []
+    printed = capsys.readouterr().out
+    assert "jsearch budget exhausted" in printed and "AI engineer remote UK" in printed
+
+
+def test_fetch_jsearch_takes_one_budget_unit_per_request_including_retries(tmp_path):
+    """A rejected key still cost a real HTTP request against the shared
+    1200/mo pool, so the counter must not undercount retries."""
+    from cv_tailor.budget import JSearchBudget
+    budget = JSearchBudget(path=tmp_path / "jsearch_budget.json", monthly_cap=5)
+    job_sources.reset_jsearch_key_rotation()
+    with mock.patch("urllib.request.urlopen",
+                    side_effect=_kv_router({"openwebninja.com": [_http_error(401),
+                                                                 {"status": "OK", "data": []}]})):
+        job_sources.fetch_jsearch("q", api_keys=["k1", "k2"], budget=budget)
+    assert budget.used() == 2
+
+
+def test_fetch_jsearch_stops_retrying_when_the_budget_runs_out_mid_query(tmp_path, capsys):
+    from cv_tailor.budget import JSearchBudget
+    budget = JSearchBudget(path=tmp_path / "jsearch_budget.json", monthly_cap=1)
+    calls = []
+    job_sources.reset_jsearch_key_rotation()
+    with mock.patch("urllib.request.urlopen",
+                    side_effect=_kv_router({"openwebninja.com": [_http_error(401)]}, calls)):
+        out = job_sources.fetch_jsearch("q", api_keys=["k1", "k2"], budget=budget)
+    assert out == [] and len(calls) == 1
+    assert budget.used() == 1
+
+
+def test_fetch_jsearch_refuses_a_non_uk_market(capsys):
+    """MEASURED: `country=gb` is echoed back but returns 0 rows on its own,
+    'python developer remote germany' returns 0, and 'AI engineer remote
+    europe' returns US employers. Continental queries are pure budget waste at
+    200 req/mo per key, so anything outside the market map is refused."""
+    for bad in ("de", "us", "", "gb&country=us"):
+        job_sources.reset_jsearch_key_rotation()
+        with mock.patch("urllib.request.urlopen",
+                        side_effect=AssertionError("must not be called")):
+            assert job_sources.fetch_jsearch("q", country=bad, api_keys=["k1"]) == []
+    assert "unsupported jsearch country" in capsys.readouterr().out
+
+
+def test_fetch_jsearch_swallows_errors():
+    job_sources.reset_jsearch_key_rotation()
+    with mock.patch("urllib.request.urlopen", side_effect=RuntimeError("boom")):
+        assert job_sources.fetch_jsearch("q", api_keys=["k1"]) == []
+
+
+def test_fetch_all_dispatches_jsearch_with_its_own_budget(monkeypatch, tmp_path):
+    from cv_tailor.budget import JSearchBudget
+    monkeypatch.setenv("JSEARCH_API_KEYS", "k1")
+    budget = JSearchBudget(path=tmp_path / "jsearch_budget.json", monthly_cap=5)
+    payload = _load_fixture_json("jsearch.json")
+    job_sources.reset_jsearch_key_rotation()
+    with mock.patch("urllib.request.urlopen",
+                    side_effect=_kv_router({"openwebninja.com": payload})):
+        out = job_sources.fetch_all([{"kind": "jsearch", "query": "AI engineer remote UK"}],
+                                    jsearch_budget=budget)
+    assert {j.source for j in out} == {"jsearch"}
+    assert all(j.raw_id for j in out)
+    assert budget.used() == 1
+
+
+def test_fetch_all_threads_one_shared_jsearch_budget_across_queries(monkeypatch, tmp_path):
+    """One instance for the whole scan, like serp_budget -- otherwise each
+    source re-reads a stale count and the cap never binds."""
+    from cv_tailor.budget import JSearchBudget
+    monkeypatch.setenv("JSEARCH_API_KEYS", "k1,k2")
+    budget = JSearchBudget(path=tmp_path / "jsearch_budget.json", monthly_cap=2)
+    calls = []
+    job_sources.reset_jsearch_key_rotation()
+    with mock.patch("urllib.request.urlopen",
+                    side_effect=_kv_router({"openwebninja.com": {"status": "OK", "data": []}},
+                                           calls)):
+        job_sources.fetch_all([{"kind": "jsearch", "query": "q1"},
+                               {"kind": "jsearch", "query": "q2"},
+                               {"kind": "jsearch", "query": "q3"}],
+                              jsearch_budget=budget)
+    assert len(calls) == 2 and budget.used() == 2
+
+
+def test_fetch_all_never_takes_jsearch_keys_from_a_source_entry(monkeypatch, capsys):
+    monkeypatch.delenv("JSEARCH_API_KEYS", raising=False)
+    job_sources.reset_jsearch_key_rotation()
+    with mock.patch("urllib.request.urlopen",
+                    side_effect=AssertionError("must not be called")):
+        out = job_sources.fetch_all([{"kind": "jsearch", "query": "q",
+                                      "api_keys": ["leaked"]}])
+    assert out == []
+    assert "JSEARCH_API_KEYS" in capsys.readouterr().out
+
+
+def test_sources_yaml_registers_jsearch(monkeypatch, capsys):
+    monkeypatch.setenv("JSEARCH_API_KEYS", "k1")
+    import yaml
+    cfg = yaml.safe_load((pathlib.Path(__file__).resolve().parent.parent / "sources.yaml").read_text())
+    entries = [s for s in cfg["sources"] if s.get("kind") == "jsearch"]
+    assert entries, "no jsearch entries in sources.yaml"
+    for s in entries:
+        assert s.get("country", "gb") in job_sources.JSEARCH_MARKETS
+        # UK targeting has to be in the query TEXT: country=gb alone returns 0
+        assert "UK" in s["query"]
+    job_sources.reset_jsearch_key_rotation()
+    with mock.patch("urllib.request.urlopen",
+                    side_effect=_kv_router({"openwebninja.com": {"status": "OK", "data": []}})):
+        out = job_sources.fetch_all(entries)
+    printed = capsys.readouterr().out
+    assert out == [] and "unknown source kind" not in printed
+
+
+def test_env_example_documents_the_jsearch_variable_name():
+    text = (pathlib.Path(__file__).resolve().parent.parent / ".env.example").read_text()
+    assert "JSEARCH_API_KEYS=" in text
+    for line in text.splitlines():
+        if line.startswith("JSEARCH_API_KEYS="):
+            assert line.split("=", 1)[1] == ""
