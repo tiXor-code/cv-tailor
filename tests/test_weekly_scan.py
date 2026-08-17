@@ -80,3 +80,42 @@ def test_score_failure_line_cannot_be_forged_by_a_posting(mod, monkeypatch, tmp_
     injected = [ln for ln in err.splitlines()
                 if ln.strip().startswith(("got 999", "scoring 0", "digest written: /dev/null"))]
     assert injected == [], f"a posting forged its own log line: {injected}"
+
+
+def test_fetch_all_is_called_with_a_real_serp_budget(mod, monkeypatch, tmp_path):
+    """weekly_scan pulls the same sources.yaml as the daily scan, including its
+    5 serpapi queries. Called without serp_budget=, every one of those fires
+    UNBUDGETED against a key capped at 90/mo out of a 250/mo pool shared with
+    another project -- budget.SerpBudget exists precisely to stop that."""
+    from cv_tailor.budget import SerpBudget
+
+    budget_path = tmp_path / "data" / "serpapi_budget.json"
+    monkeypatch.setattr(mod, "BUDGET_PATH", budget_path)
+    seen = {}
+
+    def spy_fetch_all(sources, **kwargs):
+        seen.update(kwargs)
+        return []
+
+    monkeypatch.setattr(mod, "ROOT", tmp_path)
+    (tmp_path / "sources.yaml").write_text(
+        "sources:\n  - kind: serpapi\n    query: \"ai engineer remote europe\"\n")
+    monkeypatch.setattr(mod, "load_profile", lambda *a, **kw: {"target_keywords": ["ai"]})
+    monkeypatch.setattr(mod, "build_azure_client", lambda *a, **kw: object())
+    monkeypatch.setattr(mod, "fetch_all", spy_fetch_all)
+    monkeypatch.setattr(mod, "format_digest", lambda *a, **kw: "# digest\n")
+    monkeypatch.setattr(mod, "format_digest_for_telegram", lambda *a, **kw: "digest")
+    monkeypatch.setattr(mod, "send_text", lambda *a, **kw: False)
+
+    mod.main(["--no-dedupe"])
+
+    budget = seen.get("serp_budget")
+    assert isinstance(budget, SerpBudget), f"fetch_all got {seen!r}"
+    assert budget.path == budget_path
+    assert budget.monthly_cap == 90
+
+
+def test_budget_file_is_the_one_the_daily_scan_counts_against(mod):
+    """A separate counter file would let the two scanners spend 90 each. Static
+    assertion -- no run, no file touched."""
+    assert mod.BUDGET_PATH == ROOT / "data" / "serpapi_budget.json"

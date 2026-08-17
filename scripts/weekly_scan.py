@@ -25,6 +25,7 @@ sys.path.insert(0, str(ROOT / "src"))
 
 import yaml
 
+from cv_tailor.budget import SerpBudget
 from cv_tailor.profile import load_profile
 from cv_tailor.tailor_llm import build_azure_client
 from cv_tailor.job_sources import fetch_all
@@ -35,6 +36,10 @@ from cv_tailor.telegram import format_digest_for_telegram, send_text
 
 
 LOG_WIDTH = 90  # per-sample character cap, so one long title can't own the log
+# The SAME counter file scripts/scan.py uses. A second file would let the two
+# scanners each spend the 90/mo this repo takes out of the 250/mo SerpAPI pool
+# it shares with norina-jobs.
+BUDGET_PATH = ROOT / "data" / "serpapi_budget.json"
 
 
 def _log_safe(text, width: int = LOG_WIDTH) -> str:
@@ -87,9 +92,17 @@ def main(argv=None):
     sources = sources_cfg["sources"]
 
     # 1. Fetch
+    # ONE shared budget instance threaded through every serpapi source, exactly
+    # as scripts/scan.py does it: this script reads the same sources.yaml, so
+    # without it every serpapi query there fires unbudgeted against the capped
+    # key. Its launchd plist is `.disabled` today, but an accidental run must
+    # not be the expensive path.
+    serp_budget = SerpBudget(path=BUDGET_PATH)
     print(f"fetching {len(sources)} sources...", file=sys.stderr)
-    jobs = fetch_all(sources)
+    jobs = fetch_all(sources, serp_budget=serp_budget)
     print(f"  got {len(jobs)} total postings", file=sys.stderr)
+    print(f"  serpapi budget: {serp_budget.used()}/{serp_budget.monthly_cap} used this month",
+          file=sys.stderr)
 
     # 2. Dedupe against Sheet
     if not args.no_dedupe:
