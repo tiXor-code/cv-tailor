@@ -148,6 +148,128 @@ def test_score_from_unparseable_score_still_raises():
         scan._score_from({"score": "high"})
 
 
+# --- Task 5: the gates leave a trace ------------------------------------
+
+def _seen(conn, job, score=4):
+    from cv_tailor.cache import mark_seen
+    mark_seen(conn, job, score=score)
+
+
+def test_gate_stats_counts_every_rejection_by_gate(tmp_path):
+    """~1,200 postings become ~11 survivors and the other ~1,189 used to leave
+    no trace at all (a gate-rejected job gets no seen_jobs row), so "are the
+    gates too tight?" was unanswerable. Each gate now reports its own count."""
+    conn = connect(tmp_path / "jobs.db")
+    tracks = {"ai": {"keywords": ["ai engineer", "python"]}}
+
+    already = _job("greenhouse", "seen-1", "AI Engineer", "Remote - EU", "Python")
+    _seen(conn, already)
+
+    dupe_a = _job("greenhouse", "d1", "AI Engineer", "Remote - EU", "Python")
+    dupe_b = _job("lever", "d2", "AI Engineer", "Remote - EU", "Python")
+    dupe_a.org = dupe_b.org = "Dupe Co"   # one norm_key, two postings, one batch
+
+    jobs = [
+        _job("greenhouse", "1", "AI Engineer", "Remote - EU", "Python"),       # passes
+        _job("greenhouse", "2", "Account Executive", "Remote - EU", "sales"),  # gate 1: role
+        _job("greenhouse", "3", "AI Engineer", "Remote - US only", "Python"),  # gate 1: geo
+        _job("workday", "4", "AI Engineer", "Remote - EU", "Python"),          # gate 2: SMB
+        already,                                                               # gate 3a: seen
+        dupe_a, dupe_b,                                                        # gate 3b: batch
+    ]
+
+    stats = scan.GateStats()
+    survivors = scan.run_gates(jobs, tracks, conn, stats=stats)
+
+    assert [j.raw_id for j in survivors] == ["1", "d1"]
+    assert stats.fetched == 7
+    assert stats.passed == 2
+    assert stats.rejected == {
+        scan.GATE1_ROLE: 1,
+        scan.GATE1_GEO: 1,
+        scan.GATE2_SMB: 1,
+        scan.GATE3_SEEN: 1,
+        scan.GATE3_BATCH: 1,
+    }
+
+
+def test_gate1_geo_bucket_is_where_real_matches_die(tmp_path):
+    """The question worth answering is not "how many did gate 1 drop" but "how
+    many jobs that DID match the role keywords died on geography". A job whose
+    keywords never matched was never a candidate, so it is counted as role even
+    when its location would also have failed."""
+    conn = connect(tmp_path / "jobs.db")
+    tracks = {"ai": {"keywords": ["ai engineer"]}}
+    stats = scan.GateStats()
+    scan.run_gates([
+        _job("greenhouse", "geo", "AI Engineer", "Remote - US only", "us only"),
+        _job("greenhouse", "role", "Account Executive", "Remote - EU", "sales"),
+        _job("greenhouse", "both", "Account Executive", "Remote - US only", "sales"),
+    ], tracks, conn, stats=stats)
+
+    assert stats.rejected[scan.GATE1_GEO] == 1     # the real match that geo killed
+    assert stats.rejected[scan.GATE1_ROLE] == 2    # never candidates, counted once each
+
+
+def test_gate_stats_sample_is_bounded_and_truncated(tmp_path):
+    """Counts always, sample capped: gate 1 drops ~1,000 postings a day and the
+    log has to stay readable."""
+    conn = connect(tmp_path / "jobs.db")
+    tracks = {"ai": {"keywords": ["ai engineer"]}}
+    jobs = [_job("greenhouse", str(i), "Account Executive", "Remote - EU", "sales")
+            for i in range(20)]
+    jobs[0].title = "Account Executive " + "x" * 500
+    stats = scan.GateStats()
+
+    scan.run_gates(jobs, tracks, conn, stats=stats)
+
+    assert scan.GATE_SAMPLE_CAP < 20
+    assert stats.rejected[scan.GATE1_ROLE] == 20                      # count is complete
+    assert len(stats.samples[scan.GATE1_ROLE]) == scan.GATE_SAMPLE_CAP  # sample is not
+    assert max(len(s) for s in stats.samples[scan.GATE1_ROLE]) <= scan.GATE_SAMPLE_WIDTH
+    for line in stats.summary_lines():
+        assert len(line) < 400, f"unreadable log line: {line[:80]}..."
+
+
+def test_gate_stats_summary_reports_the_whole_funnel(tmp_path):
+    conn = connect(tmp_path / "jobs.db")
+    tracks = {"ai": {"keywords": ["ai engineer"]}}
+    stats = scan.GateStats()
+    scan.run_gates([
+        _job("greenhouse", "1", "AI Engineer", "Remote - EU", "Python"),
+        _job("greenhouse", "2", "Account Executive", "Remote - EU", "sales"),
+    ], tracks, conn, stats=stats)
+
+    blob = "\n".join(stats.summary_lines())
+    assert "2 fetched" in blob and "1 passed" in blob
+    # every gate reports, including the ones that rejected nothing -- a missing
+    # line is indistinguishable from a gate that never ran
+    for gate in scan.GATES:
+        assert gate in blob
+    assert "Account Executive" in blob  # the sample rides along
+    assert "—" not in blob and "–" not in blob
+
+
+def test_gate_stats_is_optional_and_gates_are_unchanged_without_it(tmp_path):
+    """run_gates keeps working (and returns the same survivors) with no stats
+    collector -- the counters are observation, never a dependency."""
+    conn = connect(tmp_path / "jobs.db")
+    tracks = {"ai": {"keywords": ["ai engineer"]}}
+    jobs = [_job("greenhouse", "1", "AI Engineer", "Remote - EU", "Python"),
+            _job("greenhouse", "2", "Account Executive", "Remote - EU", "sales")]
+    assert [j.raw_id for j in scan.run_gates(jobs, tracks, conn)] == ["1"]
+
+
+def test_scan_logs_the_gate_funnel():
+    """main() needs Azure + live sources to run, so the wiring is asserted at
+    the source level: without it the counters exist and nobody ever sees them,
+    which is the entire point of the task."""
+    src = pathlib.Path(scan.__file__).read_text()
+    assert "GateStats()" in src, "main() must build a stats collector"
+    assert "stats=" in src, "main() must hand it to run_gates"
+    assert "summary_lines()" in src, "main() must print the funnel breakdown"
+
+
 def test_funnel_dedupes_same_norm_key_within_one_batch(tmp_path):
     """2026-07-10 regression: 4 regional variants of one Remote.com role share a
     norm_key (region is stripped) and all passed Gate 3 in a single scan, so all

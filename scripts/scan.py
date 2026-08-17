@@ -45,14 +45,66 @@ def _is_auth_error(exc: Exception) -> bool:
                              or "access denied" in blob
                              or "incorrect api key" in blob)
 from cv_tailor.cache import connect, is_new, mark_seen
-from cv_tailor.gates import passes_gate1_tracks
+from cv_tailor.gates import matched_tracks, passes_gate1_tracks
 from cv_tailor.enrich import is_smb, smb_hint
 
 DB_PATH = ROOT / "data" / "jobs.db"
 BUDGET_PATH = ROOT / "data" / "serpapi_budget.json"
 
 
-def run_gates(jobs, tracks, conn):
+# Gate rejection buckets. GATE1_ROLE vs GATE1_GEO splits the one gate that does
+# almost all of the cutting: a job whose keywords never matched was never a
+# candidate (role), while a keyword-matching job dropped for remote/EU/hybrid
+# reasons (geo) is a REAL match dying at the gate -- the only one of the two
+# worth arguing about. A job failing both is counted once, as role.
+GATE1_ROLE = "gate1_role"
+GATE1_GEO = "gate1_geo"
+GATE2_SMB = "gate2_smb"
+GATE3_SEEN = "gate3_seen"
+GATE3_BATCH = "gate3_batch"
+GATES = (GATE1_ROLE, GATE1_GEO, GATE2_SMB, GATE3_SEEN, GATE3_BATCH)
+GATE_SAMPLE_CAP = 5     # titles kept per gate; gate 1 drops ~1,000/day
+GATE_SAMPLE_WIDTH = 90  # per-sample character cap, so one long title can't own the log
+
+
+class GateStats:
+    """Per-gate rejection counters + a bounded sample, collected by run_gates.
+
+    The gates cut ~1,200 postings to ~11 a day and a gate-rejected job gets no
+    seen_jobs row, so the rejected population left no trace anywhere: "are the
+    gates too tight, and are real matches dying in them?" could not be
+    answered. Counts are exhaustive; the sample is capped because the scan log
+    (scans/logs/<date>.log, appended by run_scan.sh) is read by a human.
+
+    Passed to run_gates as an out-parameter (unittest's `run(result)` shape) so
+    the funnel keeps returning a plain survivor list to every existing caller.
+    """
+
+    def __init__(self):
+        self.fetched = 0
+        self.passed = 0
+        self.rejected = {g: 0 for g in GATES}
+        self.samples = {g: [] for g in GATES}
+
+    def reject(self, gate: str, job) -> None:
+        self.rejected[gate] += 1
+        if len(self.samples[gate]) < GATE_SAMPLE_CAP:
+            self.samples[gate].append(
+                f"{job.org} / {job.title}"[:GATE_SAMPLE_WIDTH])
+
+    def summary_lines(self) -> list[str]:
+        """One header + one line per gate, always -- including gates that
+        rejected nothing, because a missing line is indistinguishable from a
+        gate that never ran."""
+        lines = [f"  gate funnel: {self.fetched} fetched -> {self.passed} passed"]
+        for gate in GATES:
+            sample = " | ".join(self.samples[gate])
+            lines.append(f"    rejected {gate}: {self.rejected[gate]}"
+                         + (f"  e.g. {sample}" if sample else ""))
+        return lines
+
+
+def run_gates(jobs, tracks, conn, stats=None):
     """Gate 1 (track-aware rules) -> Gate 2 (SMB) -> Gate 3 (dedup). Each
     survivor gains a `.track` attribute set to its winning track id (see
     gates.passes_gate1_tracks). Returns survivors.
@@ -61,24 +113,38 @@ def run_gates(jobs, tracks, conn):
     only runs later in the scoring loop, so N same-norm_key postings fetched in
     one scan (e.g. 4 regional variants of one Remote.com role on 2026-07-10)
     all used to pass and queue 4 packages -- then the first armed attempt's
-    ledger row blocked the other 3 as "duplicate"."""
+    ledger row blocked the other 3 as "duplicate".
+
+    `stats` is an optional GateStats collector, filled as a side effect. It
+    observes only: no gate order, gate logic or gate signature changes with it,
+    and run_gates returns the same survivors whether it is passed or not."""
     from cv_tailor.cache import norm_pair
+    stats = stats if stats is not None else GateStats()
+    stats.fetched += len(jobs)
     survivors = []
     batch_seen = set()
     for j in jobs:
         track = passes_gate1_tracks(j, tracks)
         if track is None:
+            # matched_tracks is the same keyword scan Gate 1 already ran; it is
+            # re-run here only for jobs the gate rejected, purely to attribute
+            # the rejection. It cannot change the outcome above.
+            stats.reject(GATE1_ROLE if not matched_tracks(j, tracks) else GATE1_GEO, j)
             continue
         j.track = track
         if not is_smb(j, conn):
+            stats.reject(GATE2_SMB, j)
             continue
         if not is_new(conn, j):
+            stats.reject(GATE3_SEEN, j)
             continue
         key = norm_pair(j.org, j.title)
         if key in batch_seen:
+            stats.reject(GATE3_BATCH, j)
             continue
         batch_seen.add(key)
         survivors.append(j)
+    stats.passed += len(survivors)
     return survivors
 
 
@@ -176,8 +242,13 @@ def main(argv=None):
     print(f"  serpapi budget: {serp_budget.used()}/{serp_budget.monthly_cap} used this month",
           file=sys.stderr)
 
-    survivors = run_gates(jobs, tracks, conn)
+    gate_stats = GateStats()
+    survivors = run_gates(jobs, tracks, conn, stats=gate_stats)
     print(f"  {len(survivors)} passed gates (remote/EU/SMB/new)", file=sys.stderr)
+    # The rejected ~99% used to vanish here. run_scan.sh appends this to
+    # scans/logs/<date>.log, so the breakdown is greppable per day.
+    for line in gate_stats.summary_lines():
+        print(line, file=sys.stderr)
 
     tracked = crm_tracked_keys()
     if tracked:
