@@ -176,3 +176,65 @@ def test_sweep_runs_before_new_candidates_are_approved(tmp_path):
     # job-1 was requeued to `approved` by the sweep; the pass only auto-approves
     # `pending`, so the freshly requeued job is not double-run in the same pass.
     assert "job-2" in order
+
+
+# --- the real (non-injected) ledger probe ------------------------------------
+#
+# Every test above injects ledger_has, so the production default was never
+# exercised: it called cache.connect(None), which does Path(None) and raises
+# TypeError inside a bare `except Exception` -- so _ledger_has ALWAYS returned
+# False and a stranded `sending` entry could never be reconciled to `sent`,
+# no matter what the ledger said. The documented recovery path had never once
+# worked. These tests pin the resolved path in both env states, plus the
+# fail-closed behaviour for a ledger that is missing or unreadable.
+
+def _seed_ledger(db_path: Path, job_id: str) -> None:
+    from cv_tailor.cache import connect, record_application
+    conn = connect(db_path)
+    record_application(conn, job_id=job_id, company="Co1", role="Role 1",
+                        url="https://example.invalid/1", channel="portal")
+    conn.close()
+
+
+def test_ledger_has_finds_a_job_that_is_in_the_ledger(tmp_path, monkeypatch):
+    from cv_tailor import autopilot
+    db = tmp_path / "jobs.db"
+    _seed_ledger(db, "job-1")
+    monkeypatch.setenv("SCOUT_DB_PATH", str(db))
+    assert autopilot._ledger_has("job-1") is True
+    assert autopilot._ledger_has("job-never-sent") is False
+
+
+def test_ledger_path_falls_back_to_the_repo_db_when_env_is_unset(monkeypatch):
+    """Same resolution as scripts/apply_approved.py:_db_path() -- SCOUT_DB_PATH
+    when set, else <repo>/data/jobs.db. Path only; the DB is never opened."""
+    from cv_tailor import autopilot
+    monkeypatch.delenv("SCOUT_DB_PATH", raising=False)
+    root = Path(autopilot.__file__).resolve().parents[2]
+    assert autopilot.ledger_db_path() == root / "data" / "jobs.db"
+    monkeypatch.setenv("SCOUT_DB_PATH", "/tmp/somewhere-else/jobs.db")
+    assert autopilot.ledger_db_path() == Path("/tmp/somewhere-else/jobs.db")
+
+
+def test_ledger_has_is_fail_closed_when_the_db_is_missing(tmp_path, monkeypatch):
+    """A missing ledger reads as "not sent" (the caller then parks the entry
+    for a human) and must NOT create an empty DB as a side effect -- a phantom
+    jobs.db would make the next duplicate check pass on a false clean slate."""
+    from cv_tailor import autopilot
+    missing = tmp_path / "nope" / "jobs.db"
+    monkeypatch.setenv("SCOUT_DB_PATH", str(missing))
+    assert autopilot._ledger_has("job-1") is False
+    assert not missing.exists()
+
+
+def test_stranded_sending_reconciles_through_the_real_ledger(tmp_path, monkeypatch):
+    """End to end with NO ledger_has injection: the entry is in the ledger, so
+    the sweep must reconcile it to `sent` rather than park it needs_human."""
+    db = tmp_path / "jobs.db"
+    _seed_ledger(db, "job-1")
+    monkeypatch.setenv("SCOUT_DB_PATH", str(db))
+    queue = tmp_path / "queue"
+    _write_day(queue, TODAY, [_entry(1, "sending", _stale_ts())])
+    report = run_autopilot(NOW, queue_dir=queue, runner=lambda *a: 0)
+    assert [(x["status"], x["error"]) for _, x in report.stranded] == \
+           [("sent", "reconciled-after-strand")]

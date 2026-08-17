@@ -48,7 +48,9 @@ STRANDED_AFTER = timedelta(seconds=ORCHESTRATOR_TIMEOUT * 3)
 _APPLIED = ("sent", "preview_sent")
 _PARKED = ("needs_review", "needs_human", "ready")
 _DAY_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
-_ORCHESTRATOR = Path(__file__).resolve().parents[2] / "scripts" / "apply_approved.py"
+_ROOT = Path(__file__).resolve().parents[2]
+_ORCHESTRATOR = _ROOT / "scripts" / "apply_approved.py"
+DEFAULT_DB_PATH = _ROOT / "data" / "jobs.db"
 SCOUT_URL = "https://admin.teodorlutoiu.com/scout"
 
 
@@ -179,16 +181,36 @@ def _sweep_expired(now: datetime, *, queue_dir=None) -> list[tuple[str, dict]]:
     return expired
 
 
+def ledger_db_path() -> Path:
+    """The applications ledger scripts/apply_approved.py writes: SCOUT_DB_PATH
+    when set, else <repo>/data/jobs.db -- the same resolution as that script's
+    _db_path(). Read per call, never cached at import, so a config change (or
+    a test) takes effect without a restart."""
+    env = os.environ.get("SCOUT_DB_PATH")
+    return Path(env) if env else DEFAULT_DB_PATH
+
+
 def _ledger_has(job_id: str) -> bool:
     """True iff the applications ledger already owns a row for this job_id.
 
     Opened lazily and per-call so the sweep never holds a connection, and so
     a missing/locked DB degrades to "unknown" rather than killing the pass.
     Unknown is treated as NOT sent by the caller, which parks the entry for a
-    human instead of retrying it -- the fail-closed direction."""
+    human instead of retrying it -- the fail-closed direction.
+
+    The path is resolved, not omitted: this used to call cache.connect(None),
+    whose Path(None) raised TypeError straight into the except below, so the
+    function ALWAYS returned False and a stranded `sending` entry could never
+    be reconciled to `sent` however clearly the ledger proved the send landed.
+    A missing file returns early rather than being opened, because
+    cache.connect() CREATES the database it is pointed at -- probing an absent
+    ledger must not leave a phantom empty one behind."""
+    path = ledger_db_path()
+    if not path.exists():
+        return False
     try:
         from cv_tailor import cache
-        conn = cache.connect(None)
+        conn = cache.connect(path)
     except Exception:  # noqa: BLE001 - ledger unavailable, caller parks instead
         return False
     try:
