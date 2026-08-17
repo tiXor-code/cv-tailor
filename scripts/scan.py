@@ -298,7 +298,12 @@ def main(argv=None):
                     f"in {ROOT / '.env'} -- the key was rotated on 2026-07-09."
                 )
             failures += 1
-            print(f"  score failed {_log_safe(f'{j.org} / {j.title}')}: {e}", file=sys.stderr)
+            # The exception text is untrusted too: score_job is fed j.description,
+            # and an HTTP/JSON error can echo response text verbatim. int()'s
+            # ValueError happens to repr()-escape newlines; nothing guarantees
+            # every exception reachable here does.
+            print(f"  score failed {_log_safe(f'{j.org} / {j.title}')}: "
+                  f"{_log_safe(str(e), width=300)}", file=sys.stderr)
 
     # An empty output is not evidence of an empty input. If nothing produced a
     # usable score, this is an outage, not a quiet day.
