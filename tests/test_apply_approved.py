@@ -1003,3 +1003,123 @@ def test_portal_adapter_target_skips_resolver(mod, monkeypatch, tmp_path):
     )
     monkeypatch.setattr(mod, "send_text", lambda *a, **kw: True)
     assert mod.main(["2026-07-10", "job-1"]) == 0
+
+
+# --- Task 6: the question that blocked the job, as a field ------------------
+
+def test_parse_blocked_question_reads_both_required_question_reasons(mod):
+    """The label is already in the reason string; it just was not reachable
+    without substring-matching an error message."""
+    assert mod.parse_blocked_question(
+        "unanswerable-required:Current company") == ("Current company", "unanswerable")
+    assert mod.parse_blocked_question(
+        "unwritable-required:LinkedIn Profile") == ("LinkedIn Profile", "unwritable")
+
+
+def test_parse_blocked_question_keeps_a_label_containing_a_colon(mod):
+    """Only the first colon separates the prefix; real ATS labels contain
+    colons and the whole question has to survive."""
+    assert mod.parse_blocked_question(
+        "unanswerable-required:Notice period: how long?"
+    ) == ("Notice period: how long?", "unanswerable")
+
+
+def test_parse_blocked_question_is_none_for_every_other_reason(mod):
+    for reason in ("captcha", "login-required", "no-adapter", "no-confirmation",
+                   "timeout", "handoff-timeout: captcha not solved",
+                   "unanswerable-required", "", None,
+                   "TimeoutError: unanswerable-required:not a prefix"):
+        assert mod.parse_blocked_question(reason) is None, reason
+
+
+def test_record_blocked_question_clears_a_previous_attempts_question(mod):
+    """A second attempt that dies on a captcha must not still be tagged with
+    the question the FIRST attempt could not answer."""
+    e = {"blocked_question": "Current company", "blocked_question_kind": "unanswerable"}
+    mod._record_blocked_question(e, "captcha")
+    assert "blocked_question" not in e and "blocked_question_kind" not in e
+
+
+def test_portal_unarmed_needs_human_records_the_blocking_question(mod, monkeypatch, tmp_path):
+    from cv_tailor.portal import PortalResult
+
+    _portal_queue(tmp_path)
+    _spy_update_entry(mod, monkeypatch)
+    monkeypatch.setattr(mod, "assemble_package", _fake_assemble(package_dir=tmp_path / "pkg"))
+    _stub_portal_prereqs(mod, monkeypatch)
+    # offline + deterministic: the aggregator resolver would otherwise try
+    # to fetch the fake apply_target on every run of these tests
+    monkeypatch.setattr(mod, "resolve_ats_url", lambda e: None)
+    monkeypatch.setattr(
+        mod, "run_portal_application",
+        _FakeRunPortal([PortalResult(status="needs_human",
+                                     reason="unanswerable-required:Years of Python",
+                                     evidence_dir=str(tmp_path))]),
+    )
+    monkeypatch.setattr(mod, "send_text", lambda *a, **kw: True)
+    monkeypatch.setattr(mod, "send_document", lambda *a, **kw: True)
+
+    assert mod.main(["2026-07-10", "job-1"]) == 0
+
+    entry = _read_entry(tmp_path, "2026-07-10", "job-1")
+    assert entry["error"] == "unanswerable-required:Years of Python"  # unchanged
+    assert entry["blocked_question"] == "Years of Python"
+    assert entry["blocked_question_kind"] == "unanswerable"
+
+
+def test_portal_armed_needs_human_records_the_blocking_question(mod, monkeypatch, tmp_path):
+    """The armed path is where this data actually accrues (APPLY_ARMED=1 in
+    prod), and it is the one the brief names."""
+    from cv_tailor.portal import PortalResult
+
+    monkeypatch.setenv("APPLY_ARMED", "1")
+    _portal_queue(tmp_path)
+    _spy_update_entry(mod, monkeypatch)
+    monkeypatch.setattr(mod, "assemble_package", _fake_assemble(package_dir=tmp_path / "pkg"))
+    _stub_portal_prereqs(mod, monkeypatch)
+    # offline + deterministic: the aggregator resolver would otherwise try
+    # to fetch the fake apply_target on every run of these tests
+    monkeypatch.setattr(mod, "resolve_ats_url", lambda e: None)
+    monkeypatch.setattr(
+        mod, "run_portal_application",
+        _FakeRunPortal([PortalResult(status="needs_human",
+                                     reason="unwritable-required:Work Authorization",
+                                     evidence_dir=str(tmp_path))]),
+    )
+    monkeypatch.setattr(mod, "crm_mark_applied", lambda *a, **kw: pytest.fail("not confirmed sent"))
+    monkeypatch.setattr(mod, "send_text", lambda *a, **kw: True)
+    monkeypatch.setattr(mod, "send_document", lambda *a, **kw: True)
+
+    assert mod.main(["2026-07-10", "job-1"]) == 0
+
+    entry = _read_entry(tmp_path, "2026-07-10", "job-1")
+    assert entry["status"] == "needs_human"
+    assert entry["blocked_question"] == "Work Authorization"
+    # kept distinct from unanswerable: an answer EXISTED and the form refused
+    # it, so adding one more answer to answers.yaml would not fix this job
+    assert entry["blocked_question_kind"] == "unwritable"
+
+
+def test_portal_needs_human_on_a_wall_records_no_question(mod, monkeypatch, tmp_path):
+    from cv_tailor.portal import PortalResult
+
+    _portal_queue(tmp_path)
+    _spy_update_entry(mod, monkeypatch)
+    monkeypatch.setattr(mod, "assemble_package", _fake_assemble(package_dir=tmp_path / "pkg"))
+    _stub_portal_prereqs(mod, monkeypatch)
+    # offline + deterministic: the aggregator resolver would otherwise try
+    # to fetch the fake apply_target on every run of these tests
+    monkeypatch.setattr(mod, "resolve_ats_url", lambda e: None)
+    monkeypatch.setattr(
+        mod, "run_portal_application",
+        _FakeRunPortal([PortalResult(status="needs_human", reason="captcha",
+                                     evidence_dir=str(tmp_path))]),
+    )
+    monkeypatch.setattr(mod, "send_text", lambda *a, **kw: True)
+    monkeypatch.setattr(mod, "send_document", lambda *a, **kw: True)
+
+    assert mod.main(["2026-07-10", "job-1"]) == 0
+
+    entry = _read_entry(tmp_path, "2026-07-10", "job-1")
+    assert entry["error"] == "captcha"
+    assert "blocked_question" not in entry

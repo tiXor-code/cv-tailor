@@ -106,6 +106,63 @@ def _load_entry(scan_date: str, job_id: str, *, queue_dir=None) -> dict:
     sys.exit(f"job id {job_id!r} not in queue. Available: {ids}")
 
 
+# Reason prefixes that name the required application question the run died on,
+# mapped to the kind of block. Deliberately two kinds and one field: both mean
+# "a required question stopped this job", but they need DIFFERENT fixes, so
+# collapsing them would poison the count. unanswerable = no grounded answer
+# exists, i.e. answers.yaml/profile.yaml is missing something and adding it
+# unblocks the job. unwritable = an answer existed and would not land in the
+# DOM (readonly field, stale selector, unmatched option), i.e. an adapter bug;
+# adding another answer fixes nothing.
+_BLOCKED_QUESTION_KINDS = {
+    "unanswerable-required": "unanswerable",
+    "unwritable-required": "unwritable",
+}
+
+
+def parse_blocked_question(reason) -> tuple[str, str] | None:
+    """(label, kind) for a reason that names a blocking required question,
+    else None.
+
+    Every adapter already builds "unanswerable-required:<label>" /
+    "unwritable-required:<label>" and it lands verbatim in the queue entry's
+    `error`. The label is the one fact worth aggregating -- which questions
+    actually cost us applications -- and it was only reachable by
+    substring-matching an error string.
+
+    Splits on the FIRST colon only: real ATS labels contain colons. The prefix
+    must be the whole thing before it, so an exception text that merely
+    mentions the phrase is not mistaken for a blocked question."""
+    prefix, sep, label = (reason or "").partition(":")
+    kind = _BLOCKED_QUESTION_KINDS.get(prefix.strip())
+    if not sep or kind is None:
+        return None
+    # The label is stored exactly as the adapter emitted it, empty string
+    # included: the PRESENCE of the field is what says a question blocked us,
+    # so an unlabelled field stays countable instead of being invented or
+    # dropped.
+    return label.strip(), kind
+
+
+def _record_blocked_question(e: dict, reason) -> None:
+    """Promote the blocking question out of `reason` into first-class fields on
+    the queue entry. `error` keeps the full reason string -- this adds, it does
+    not replace.
+
+    Called wherever a portal reason is persisted, so there is one rule and no
+    per-adapter call sites to keep in sync (micro1 has a second reason site
+    that bypasses screening.py entirely). When the reason names no question the
+    fields are REMOVED, never left stale: an entry that failed on a captcha the
+    second time around must not still carry the question the first attempt
+    could not answer."""
+    parsed = parse_blocked_question(reason)
+    if parsed is None:
+        e.pop("blocked_question", None)
+        e.pop("blocked_question_kind", None)
+        return
+    e["blocked_question"], e["blocked_question_kind"] = parsed
+
+
 def _finish_portal_dry_run(args, result) -> int:
     """Unarmed portal result -> queue status. `filled` means the screening
     honesty guard cleared every required question and the form actually
@@ -128,6 +185,7 @@ def _finish_portal_dry_run(args, result) -> int:
         e["status"] = result.status
         e["error"] = result.reason
         e["evidence_dir"] = result.evidence_dir
+        _record_blocked_question(e, result.reason)
 
     entry = update_entry(args.scan_date, args.job_id, _needs_human_or_failed)
     send_text(f"{entry.get('company')} / {entry.get('title')}: portal {result.status} ({result.reason})")
@@ -284,6 +342,7 @@ def _handle_portal(args, entry: dict, meta: dict) -> int:
             e["status"] = "needs_human"
             e["error"] = result.reason
             e["evidence_dir"] = result.evidence_dir
+            _record_blocked_question(e, result.reason)
 
         entry = update_entry(args.scan_date, args.job_id, _needs_human)
         send_text(
@@ -300,10 +359,17 @@ def _handle_portal(args, entry: dict, meta: dict) -> int:
     # submission -- deleting it here would risk a later genuine duplicate.
     if not own_row_skip:
         delete_application(conn, job_id=job_id)
-    entry = update_entry(
-        args.scan_date, args.job_id,
-        lambda e: e.update(status="failed", error=result.reason, evidence_dir=result.evidence_dir),
-    )
+
+    def _failed(e: dict) -> None:
+        e["status"] = "failed"
+        e["error"] = result.reason
+        e["evidence_dir"] = result.evidence_dir
+        # Adapters only ever pair a required-question reason with needs_human,
+        # so this is defensive: the rule is "wherever a portal reason is
+        # persisted, the question is promoted", with no exceptions to remember.
+        _record_blocked_question(e, result.reason)
+
+    entry = update_entry(args.scan_date, args.job_id, _failed)
     print(f"portal submit failed: {result.reason}", file=sys.stderr)
     try:
         send_text(f"{entry.get('company')} / {entry.get('title')}: portal submit failed ({result.reason})")
