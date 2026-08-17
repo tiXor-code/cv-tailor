@@ -101,6 +101,53 @@ def test_queue_threshold_is_six_at_both_sites():
             f"run_scan.sh overrides the threshold with a stale value: {line.strip()}")
 
 
+# --- a missing score is not a zero ---------------------------------------
+
+def test_score_from_reads_a_real_score():
+    assert scan._score_from({"score": 7}) == 7
+    assert scan._score_from({"score": "7"}) == 7   # the model sometimes stringifies
+
+
+def test_score_from_zero_is_a_real_zero():
+    """The model rating a job 0 is a verdict and must stay a 0."""
+    assert scan._score_from({"score": 0}) == 0
+
+
+def test_score_from_missing_or_null_score_is_none():
+    """r.get("score", 0) turned "the response had no score key" into a genuine
+    0 -- 565 of the live DB's 1,241 rows read 0 and nothing can tell the two
+    apart. An absent (or null) score is now None, stored as NULL + status
+    'unscored', so it can be re-scored later."""
+    assert scan._score_from({"reason": "no score key at all"}) is None
+    assert scan._score_from({"score": None}) is None
+    assert scan._score_from({}) is None
+
+
+def test_scoring_outage_counts_unscored_as_a_failure():
+    """"An empty output is not evidence of an empty input": the scan aborts
+    rather than write a queue that looks like a quiet day when NO survivor
+    produced a usable score. A response with no score key is such a
+    non-result, so it belongs in that count -- otherwise a model returning
+    valid JSON with no score for every job would have looked like "no good
+    jobs today" (before this change those jobs silently became 0s, which the
+    old failures-only count also missed)."""
+    assert scan._scoring_outage(3, failures=3, unscored=0) is True
+    assert scan._scoring_outage(3, failures=0, unscored=3) is True
+    assert scan._scoring_outage(3, failures=1, unscored=2) is True
+    # one survivor produced a real score -> a normal day, however bad the score
+    assert scan._scoring_outage(3, failures=1, unscored=1) is False
+    # nothing reached the scorer at all -> not an outage, just an empty funnel
+    assert scan._scoring_outage(0, failures=0, unscored=0) is False
+
+
+def test_score_from_unparseable_score_still_raises():
+    """A score of "high" is a malformed response, not an unscored job: it keeps
+    raising so the scoring loop counts it as a failure exactly as before."""
+    import pytest
+    with pytest.raises(ValueError):
+        scan._score_from({"score": "high"})
+
+
 def test_funnel_dedupes_same_norm_key_within_one_batch(tmp_path):
     """2026-07-10 regression: 4 regional variants of one Remote.com role share a
     norm_key (region is stripped) and all passed Gate 3 in a single scan, so all

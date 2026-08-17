@@ -1,4 +1,5 @@
 # tests/test_cache.py
+import sqlite3
 import sys, pathlib
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent / "src"))
 from cv_tailor.cache import (
@@ -12,6 +13,113 @@ from cv_tailor.job_sources import JobPosting
 def _job(source="greenhouse", raw_id="1", org="Acme", title="AI Engineer"):
     return JobPosting(source=source, org=org, title=title, location="Remote (EU)",
                       url="https://x", description="desc", raw_id=raw_id)
+
+
+# The seen_jobs table exactly as it shipped, i.e. the shape of the real
+# data/jobs.db (1,241 rows on 2026-08-17) that any migration must survive.
+_ORIGINAL_SEEN_JOBS = """
+CREATE TABLE seen_jobs (
+    source TEXT, raw_id TEXT, company TEXT, role TEXT, location TEXT,
+    norm_key TEXT, first_seen TEXT, score INTEGER, status TEXT,
+    PRIMARY KEY (source, raw_id)
+);
+"""
+
+
+def _legacy_db(path) -> None:
+    """A pre-migration jobs.db with one row, built from the original DDL."""
+    conn = sqlite3.connect(str(path))
+    conn.executescript(_ORIGINAL_SEEN_JOBS)
+    conn.execute(
+        "INSERT INTO seen_jobs "
+        "(source, raw_id, company, role, location, norm_key, first_seen, score, status) "
+        "VALUES ('greenhouse','old-1','Acme','AI Engineer','Remote (EU)',"
+        "'acme|aiengineer','2026-07-01T00:00:00Z',6,'scored')"
+    )
+    conn.commit()
+    conn.close()
+
+
+def _columns(conn, table="seen_jobs") -> list[str]:
+    return [r[1] for r in conn.execute(f"PRAGMA table_info({table})")]
+
+
+# --- Task 4: url + description persisted so a score can be revisited --------
+
+def test_mark_seen_persists_url_and_description(tmp_path):
+    """The 18 score-6 rows sitting in the live DB cannot be re-scored because
+    seen_jobs kept neither the posting URL nor its text. Both are in scope at
+    the single mark_seen call site, so both get stored."""
+    conn = connect(tmp_path / "jobs.db")
+    j = _job()
+    j.url = "https://boards.example.invalid/jobs/42"
+    j.description = "We need someone who writes Python and ships agents."
+    mark_seen(conn, j, score=6)
+
+    row = conn.execute(
+        "SELECT url, description FROM seen_jobs WHERE source=? AND raw_id=?",
+        (j.source, j.raw_id),
+    ).fetchone()
+    assert row == ("https://boards.example.invalid/jobs/42",
+                   "We need someone who writes Python and ships agents.")
+
+
+def test_connect_migrates_a_legacy_db_in_place(tmp_path):
+    """Additive ALTER TABLE, never a recreate: the existing rows survive."""
+    db = tmp_path / "jobs.db"
+    _legacy_db(db)
+
+    conn = connect(db)
+
+    cols = _columns(conn)
+    assert "url" in cols and "description" in cols
+    # every original column is still there, in its original order
+    assert cols[:9] == ["source", "raw_id", "company", "role", "location",
+                        "norm_key", "first_seen", "score", "status"]
+    # and the pre-existing row is untouched, with NULLs for the new columns
+    assert conn.execute(
+        "SELECT company, score, url, description FROM seen_jobs WHERE raw_id='old-1'"
+    ).fetchone() == ("Acme", 6, None, None)
+
+
+def test_connect_migration_is_idempotent(tmp_path):
+    """connect() runs on every scan, so the migration must be a no-op the
+    second (and third) time -- a bare ALTER TABLE would raise 'duplicate
+    column name'."""
+    db = tmp_path / "jobs.db"
+    _legacy_db(db)
+
+    for _ in range(3):
+        conn = connect(db)
+        cols = _columns(conn)
+        assert cols.count("url") == 1 and cols.count("description") == 1
+        conn.close()
+
+    # a fresh DB is also stable across repeated connects
+    fresh = tmp_path / "fresh.db"
+    for _ in range(3):
+        connect(fresh).close()
+    assert _columns(connect(fresh)).count("url") == 1
+
+
+def test_mark_seen_zero_score_is_a_genuine_zero(tmp_path):
+    conn = connect(tmp_path / "jobs.db")
+    mark_seen(conn, _job(raw_id="z"), score=0)
+    assert conn.execute(
+        "SELECT score, status FROM seen_jobs WHERE raw_id='z'").fetchone() == (0, "scored")
+
+
+def test_mark_seen_missing_score_is_null_and_unscored(tmp_path):
+    """565 of the live 1,241 rows read score=0 because r.get("score", 0)
+    silently turned a response with no score key into a genuine zero. A
+    missing score is now NULL + status 'unscored', i.e. re-scorable, and
+    never mistaken for the model rating the job a 0."""
+    conn = connect(tmp_path / "jobs.db")
+    mark_seen(conn, _job(raw_id="n"), score=None)
+    assert conn.execute(
+        "SELECT score, status FROM seen_jobs WHERE raw_id='n'").fetchone() == (None, "unscored")
+    # still deduped like any other seen job
+    assert is_new(conn, _job(raw_id="n")) is False
 
 
 def test_new_then_seen(tmp_path):

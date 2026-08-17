@@ -10,6 +10,7 @@ _SCHEMA = """
 CREATE TABLE IF NOT EXISTS seen_jobs (
     source TEXT, raw_id TEXT, company TEXT, role TEXT, location TEXT,
     norm_key TEXT, first_seen TEXT, score INTEGER, status TEXT,
+    url TEXT, description TEXT,
     PRIMARY KEY (source, raw_id)
 );
 CREATE INDEX IF NOT EXISTS idx_seen_norm ON seen_jobs(norm_key);
@@ -36,10 +37,50 @@ def _key(company: str, role: str) -> str:
     return norm_pair(company, role)
 
 
+# Columns added to seen_jobs after the original schema shipped. A DB created
+# from _SCHEMA above already has them; a DB created before they existed (the
+# live data/jobs.db, 1,241 rows on 2026-08-17) gains them in place. Recreating
+# the table would throw that scan history away, and the history is the point.
+_SEEN_JOBS_ADDED_COLUMNS = (
+    ("url", "TEXT"),
+    ("description", "TEXT"),
+)
+_IDENTIFIER_RE = re.compile(r"^[a-z_][a-z0-9_]*$")
+
+# score is NULL for a job whose scoring response carried no score at all. Kept
+# distinct from a genuine 0 (the model's verdict) so the two are never
+# conflated -- see mark_seen.
+UNSCORED = "unscored"
+# Stored description length. match.score_job only ever reads the first 6,000
+# characters, so this keeps a re-score byte-identical while refusing to let one
+# pathological posting bloat the DB. Only gate survivors are stored (~11/day),
+# not the ~1,200 fetched.
+DESCRIPTION_CAP = 20_000
+
+
+def _migrate_seen_jobs(conn: sqlite3.Connection) -> None:
+    """Add any missing _SEEN_JOBS_ADDED_COLUMNS. Idempotent: the PRAGMA guard
+    means a second run adds nothing (a bare ALTER TABLE would raise "duplicate
+    column name" and take the whole scan down). Additive only -- no data is
+    rewritten, moved or dropped.
+
+    The column name is interpolated because SQLite cannot parameterize DDL
+    identifiers; it is a module-level literal, never caller input, and the
+    identifier check below fails loudly if that ever stops being true."""
+    have = {row[1] for row in conn.execute("PRAGMA table_info(seen_jobs)")}
+    for name, decl in _SEEN_JOBS_ADDED_COLUMNS:
+        if not (_IDENTIFIER_RE.match(name) and _IDENTIFIER_RE.match(decl.lower())):
+            raise ValueError(f"refusing to ALTER with unsafe column spec: {name} {decl}")
+        if name not in have:
+            conn.execute(f"ALTER TABLE seen_jobs ADD COLUMN {name} {decl}")
+    conn.commit()
+
+
 def connect(path) -> sqlite3.Connection:
     Path(path).parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(str(path))
     conn.executescript(_SCHEMA)
+    _migrate_seen_jobs(conn)
     return conn
 
 
@@ -56,14 +97,36 @@ def is_new(conn: sqlite3.Connection, job) -> bool:
     return True
 
 
-def mark_seen(conn: sqlite3.Connection, job, score: int, status: str = "scored") -> None:
+def mark_seen(conn: sqlite3.Connection, job, score: int | None,
+              status: str | None = None) -> None:
+    """Record a scored job so it is deduped out of later scans -- and so the
+    score can be revisited.
+
+    url + description are stored because they are what a re-score needs. Every
+    threshold decision so far has been made by squinting at titles: the 18
+    score-6 rows in the live DB could not be re-scored at a different floor
+    because the posting text they were scored from was never kept. The full
+    JobPosting is in scope at the one call site (scripts/scan.py), so this
+    costs nothing but the bytes.
+
+    score=None means the scoring response carried no score at all. It is
+    stored as NULL with status UNSCORED, never as a 0: a 0 is the model's
+    verdict and an absent score is a broken response, and the old
+    r.get("score", 0) made those indistinguishable (565 of the live 1,241 rows
+    read 0). Rows written before this change stay ambiguous -- nothing can
+    recover which of those 565 were real zeros."""
+    if status is None:
+        status = "scored" if score is not None else UNSCORED
     conn.execute(
         "INSERT OR IGNORE INTO seen_jobs "
-        "(source, raw_id, company, role, location, norm_key, first_seen, score, status) "
-        "VALUES (?,?,?,?,?,?,?,?,?)",
+        "(source, raw_id, company, role, location, norm_key, first_seen, score, status, "
+        "url, description) "
+        "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
         (job.source, job.raw_id, job.org, job.title, job.location,
          _key(job.org, job.title),
-         datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"), score, status),
+         datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"), score, status,
+         getattr(job, "url", "") or "",
+         (getattr(job, "description", "") or "")[:DESCRIPTION_CAP]),
     )
     conn.commit()
 

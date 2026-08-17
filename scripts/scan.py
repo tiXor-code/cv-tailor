@@ -82,6 +82,31 @@ def run_gates(jobs, tracks, conn):
     return survivors
 
 
+def _score_from(r: dict) -> int | None:
+    """The score in a scoring response, or None when it carried none.
+
+    `int(r.get("score", 0))` silently turned a response with no score key into
+    a genuine 0, and 565 of the live DB's 1,241 rows read 0 with no way to tell
+    which were the model's verdict and which were a malformed reply. None is
+    stored as NULL + status 'unscored' (see cache.mark_seen), so those rows can
+    be found and re-scored. A present-but-unparseable score ("high") still
+    raises, keeping the scoring loop's existing failure accounting."""
+    raw = r.get("score")
+    return None if raw is None else int(raw)
+
+
+def _scoring_outage(survivor_count: int, *, failures: int, unscored: int) -> bool:
+    """True when not one survivor produced a usable score, i.e. this is an
+    outage and not a quiet day. An empty output is not evidence of an empty
+    input, so the scan refuses to write a queue in that case.
+
+    Both non-results count: an exception (failures) and a response that carried
+    no score at all (unscored). The latter used to be invisible -- it became a
+    silent 0 -- so a model answering every job with score-less JSON looked
+    exactly like "nothing good today"."""
+    return survivor_count > 0 and (failures + unscored) >= survivor_count
+
+
 def should_send(scored):
     return len(scored) > 0
 
@@ -163,14 +188,20 @@ def main(argv=None):
     client = build_azure_client()
     scored = []
     failures = 0
+    unscored = 0
     for j in survivors:
         try:
             hint = smb_hint(j, conn)
             track = getattr(j, "track", "ai")
             r = score_job(profile, j.title, f"{j.location} [{hint}]", j.description,
                           client=client, track=track)
-            s = int(r.get("score", 0))
+            s = _score_from(r)
             mark_seen(conn, j, score=s)
+            if s is None:
+                unscored += 1
+                print(f"  no score in response for {j.org}/{j.title} "
+                      f"(stored as unscored, not 0)", file=sys.stderr)
+                continue
             if s >= args.min_score:
                 scored.append({"job": j, "score": s, "reason": r.get("reason", ""),
                                "keywords": r.get("key_keywords_matched", []),
@@ -188,15 +219,17 @@ def main(argv=None):
             failures += 1
             print(f"  score failed {j.org}/{j.title}: {e}", file=sys.stderr)
 
-    # An empty output is not evidence of an empty input. If we scored nothing AND
-    # everything we tried threw, this is an outage, not a quiet day.
-    if survivors and not scored and failures == len(survivors):
+    # An empty output is not evidence of an empty input. If nothing produced a
+    # usable score, this is an outage, not a quiet day.
+    if _scoring_outage(len(survivors), failures=failures, unscored=unscored):
         sys.exit(
-            f"FATAL: all {failures} job(s) failed to score. Refusing to write an empty queue "
-            f"that would look like a normal no-results day. See the errors above."
+            f"FATAL: no score came back for any of the {len(survivors)} job(s) "
+            f"({failures} threw, {unscored} returned no score). Refusing to write an empty "
+            f"queue that would look like a normal no-results day. See the errors above."
         )
-    if failures:
-        print(f"  WARNING: {failures} job(s) failed to score (kept {len(scored)})", file=sys.stderr)
+    if failures or unscored:
+        print(f"  WARNING: {failures} job(s) failed to score, {unscored} returned no score "
+              f"(kept {len(scored)})", file=sys.stderr)
 
     scored.sort(key=lambda s: s["score"], reverse=True)
     scored = scored[: args.max_results]
