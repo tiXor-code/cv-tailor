@@ -67,6 +67,17 @@ GATE_SAMPLE_CAP = 5     # titles kept per gate; gate 1 drops ~1,000/day
 GATE_SAMPLE_WIDTH = 90  # per-sample character cap, so one long title can't own the log
 
 
+def _log_safe(text, width: int = GATE_SAMPLE_WIDTH) -> str:
+    """Collapse whitespace and truncate a job-board string for the scan log.
+
+    Company names and titles come from strangers (anyone can post a job), and
+    the scan log is a counter surface meant to be read and grepped: a newline
+    inside a title would otherwise let a posting write its own
+    "rejected gate1_geo: 999" line into scans/logs/<date>.log. Used by every
+    log line here that quotes a posting."""
+    return re.sub(r"\s+", " ", text or "").strip()[:width]
+
+
 class GateStats:
     """Per-gate rejection counters + a bounded sample, collected by run_gates.
 
@@ -89,8 +100,7 @@ class GateStats:
     def reject(self, gate: str, job) -> None:
         self.rejected[gate] += 1
         if len(self.samples[gate]) < GATE_SAMPLE_CAP:
-            self.samples[gate].append(
-                f"{job.org} / {job.title}"[:GATE_SAMPLE_WIDTH])
+            self.samples[gate].append(_log_safe(f"{job.org} / {job.title}"))
 
     def summary_lines(self) -> list[str]:
         """One header + one line per gate, always -- including gates that
@@ -270,7 +280,7 @@ def main(argv=None):
             mark_seen(conn, j, score=s)
             if s is None:
                 unscored += 1
-                print(f"  no score in response for {j.org}/{j.title} "
+                print(f"  no score in response for {_log_safe(f'{j.org} / {j.title}')} "
                       f"(stored as unscored, not 0)", file=sys.stderr)
                 continue
             if s >= args.min_score:
@@ -288,7 +298,7 @@ def main(argv=None):
                     f"in {ROOT / '.env'} -- the key was rotated on 2026-07-09."
                 )
             failures += 1
-            print(f"  score failed {j.org}/{j.title}: {e}", file=sys.stderr)
+            print(f"  score failed {_log_safe(f'{j.org} / {j.title}')}: {e}", file=sys.stderr)
 
     # An empty output is not evidence of an empty input. If nothing produced a
     # usable score, this is an outage, not a quiet day.

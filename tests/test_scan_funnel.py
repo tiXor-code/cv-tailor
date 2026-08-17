@@ -231,6 +231,36 @@ def test_gate_stats_sample_is_bounded_and_truncated(tmp_path):
         assert len(line) < 400, f"unreadable log line: {line[:80]}..."
 
 
+def test_log_safe_flattens_and_bounds_untrusted_text():
+    """One helper for every scan-log line that quotes a posting: the scoring
+    loop names the job too, so it has the same exposure as the gate sample."""
+    assert scan._log_safe("Acme\n    rejected gate1_geo: 999") \
+        == "Acme rejected gate1_geo: 999"
+    assert scan._log_safe("a\r\nb\tc") == "a b c"
+    assert len(scan._log_safe("x" * 500)) <= scan.GATE_SAMPLE_WIDTH
+    assert scan._log_safe(None) == ""
+
+
+def test_gate_stats_sample_cannot_forge_a_log_line(tmp_path):
+    """Titles and company names come from job boards, i.e. from strangers. The
+    funnel breakdown is there to be read (and grepped) by a human, so a posting
+    must not be able to write its own line into it: one rejection is one line,
+    whatever whitespace the posting carries."""
+    conn = connect(tmp_path / "jobs.db")
+    tracks = {"ai": {"keywords": ["ai engineer"]}}
+    hostile = _job("greenhouse", "h", "Account Executive", "Remote - EU", "sales")
+    hostile.title = "Account Executive\n    rejected gate1_geo: 999\nand more"
+    stats = scan.GateStats()
+
+    scan.run_gates([hostile], tracks, conn, stats=stats)
+
+    sample = stats.samples[scan.GATE1_ROLE][0]
+    assert "\n" not in sample and "\r" not in sample
+    lines = stats.summary_lines()
+    assert len(lines) == 1 + len(scan.GATES)
+    assert not any("\n" in line for line in lines)
+
+
 def test_gate_stats_summary_reports_the_whole_funnel(tmp_path):
     conn = connect(tmp_path / "jobs.db")
     tracks = {"ai": {"keywords": ["ai engineer"]}}
