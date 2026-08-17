@@ -1,0 +1,54 @@
+{
+  "data": [
+    {
+      "slug": "ai-engineer-berlin-101",
+      "company_name": "Fixture Remote GmbH",
+      "title": "AI Engineer",
+      "description": "<h2>Aufgaben</h2><p>Build <strong>agents</strong> in Python.</p>",
+      "remote": true,
+      "url": "https://www.arbeitnow.com/jobs/companies/fixture-remote/ai-engineer-berlin-101",
+      "tags": ["Software Development"],
+      "job_types": ["full_time"],
+      "location": "Berlin",
+      "created_at": 1786966242
+    },
+    {
+      "slug": "service-technician-stuttgart-202",
+      "company_name": "Fixture Onsite AG",
+      "title": "Service Technician",
+      "description": "<p>Arbeit in unserer Werkstatt.</p>",
+      "remote": false,
+      "url": "https://www.arbeitnow.com/jobs/companies/fixture-onsite/service-technician-stuttgart-202",
+      "tags": [],
+      "job_types": ["full_time"],
+      "location": "Stuttgart",
+      "created_at": 1786966243
+    },
+    {
+      "slug": "",
+      "company_name": "Fixture Slugless Ltd",
+      "title": "Data Analyst",
+      "description": "<p>Remote work.</p>",
+      "remote": true,
+      "url": "https://www.arbeitnow.com/jobs/companies/fixture-slugless/data-analyst-303",
+      "tags": [],
+      "job_types": [],
+      "location": "",
+      "created_at": 1786966244
+    },
+    {
+      "slug": "",
+      "company_name": "Fixture Idless Ltd",
+      "title": "Unidentifiable Role",
+      "description": "<p>No slug and no url.</p>",
+      "remote": true,
+      "url": "",
+      "tags": [],
+      "job_types": [],
+      "location": "Remote",
+      "created_at": 1786966245
+    }
+  ],
+  "links": {"first": "https://www.arbeitnow.com/api/job-board-api?page=1", "next": null, "prev": null},
+  "meta": {"current_page": 1, "from": 1, "per_page": 4, "to": 4}
+}

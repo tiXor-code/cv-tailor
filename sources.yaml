@@ -45,6 +45,15 @@ sources:
     category: programming
   - kind: wwr
     category: sales-and-marketing
+  # Two more keyless aggregators. arbeitnow is a European (German-heavy) board
+  # where only ~6% of postings are remote and it ignores its own ?remote=true
+  # filter, so pages are what buy remote EU hits -- 3 pages is ~400 postings,
+  # and Gate 1 drops the onsite majority for free. himalayas caps every
+  # request at 20 postings server-side, so `count` is paged 20 at a time.
+  - kind: arbeitnow
+    pages: 3
+  - kind: himalayas
+    count: 60
   # SerpAPI google_jobs rejects continent locations ("Europe") and city locations
   # return 0; rely on the query text + ltype=1 (remote) and let Gate 1 + the LLM
   # enforce EU-eligibility. No `location` param.

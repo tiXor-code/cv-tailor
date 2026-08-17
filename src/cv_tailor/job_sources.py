@@ -1,5 +1,6 @@
 """Fetch open jobs from external job sources (Ashby, Greenhouse, Lever, SerpAPI,
-plus the free remote-job boards: Remotive, RemoteOK, Jobicy, WWR)."""
+plus the free remote-job boards: Remotive, RemoteOK, Jobicy, WWR, Arbeitnow,
+Himalayas)."""
 from __future__ import annotations
 import html
 import os
@@ -361,6 +362,153 @@ def fetch_wwr(category: str) -> list[JobPosting]:
     return _parse_wwr_rss(root)
 
 
+# --- arbeitnow + himalayas (keyless too, ported from the htgaj pipeline) ------
+#
+# Neither API takes a filter param the scan can use (measured 2026-08-17:
+# arbeitnow silently IGNORES ?remote=true and himalayas silently IGNORES ?q=,
+# both returning the unfiltered feed), so their only knob is how much to pull.
+_ARBEITNOW_MAX_PAGES = 10          # bounds a sources.yaml typo (pages: 500)
+_HIMALAYAS_PAGE_SIZE = 20          # the API's hard ceiling: limit=50 still returns 20
+_HIMALAYAS_MAX_COUNT = 200         # bounds a sources.yaml typo (count: 100000)
+_LOCATION_WIDTH = 200              # one posting cannot own the queue entry / digest
+
+
+def _first_id(*candidates) -> str:
+    """First non-empty candidate as a stripped string, else "" -- the same
+    `id or url` fallback chain fetch_remotive/fetch_wwr use, hoisted because
+    for these two boards an empty raw_id is likely rather than theoretical
+    (himalayas ships no id and no slug field at all).
+
+    An empty raw_id is not cosmetic: seen_jobs is `PRIMARY KEY (source,
+    raw_id)` written with INSERT OR IGNORE, so the first blank one is stored
+    and every later blank one from the same source then reads as already-seen
+    in cache.is_new. Callers DROP a posting this returns "" for -- a posting
+    with no stable id can never be deduped correctly anyway."""
+    for c in candidates:
+        s = str(c or "").strip()
+        if s:
+            return s
+    return ""
+
+
+def _flag(value) -> bool:
+    """Truthiness for a JSON flag that decides real behavior. arbeitnow's
+    `remote` is a real bool today; a future response spelling it "false" as a
+    STRING would make bool() report every onsite job remote, which is the one
+    direction that matters here (it would send applications to onsite roles)."""
+    if isinstance(value, str):
+        return value.strip().lower() in ("1", "true", "yes", "y")
+    return bool(value)
+
+
+def fetch_arbeitnow(pages: int = 1) -> list[JobPosting]:
+    """Arbeitnow's free public board API, `pages` pages of ~100-175 postings.
+
+    Two measured facts drive the mapping (probed 2026-08-17):
+
+    * `remote` is a per-posting boolean and only ~6% are true. This is a
+      European board, NOT a remote-only one, and `?remote=true` is ignored by
+      the API, so there is no server-side filter to lean on. Remoteness is
+      therefore REPORTED, never fabricated: only a remote posting gets the
+      "Remote - " prefix gates.is_remote looks for, so the onsite majority is
+      dropped by Gate 1 instead of being smuggled past it.
+    * every posting is European (locations are EU/UK cities). That board-level
+      fact is worth encoding into `location`, because Gate 1's EU check
+      otherwise has nothing to match in a German-language posting that never
+      says "Europe".
+
+    A page that fails keeps the pages already fetched (partial beats nothing)
+    and a total failure warns and returns [] -- one dead board never kills the
+    scan."""
+    pages = max(1, min(int(pages or 1), _ARBEITNOW_MAX_PAGES))
+    out: list[JobPosting] = []
+    seen: set[str] = set()
+    for page in range(1, pages + 1):
+        try:
+            data = _http_json(f"https://www.arbeitnow.com/api/job-board-api?page={page}")
+        except Exception as e:
+            print(f"warning: arbeitnow fetch failed for page={page}: {e}")
+            break
+        rows = (data.get("data") or []) if isinstance(data, dict) else []
+        if not rows:
+            break
+        for j in rows:
+            if not isinstance(j, dict):
+                continue
+            raw_id = _first_id(j.get("slug"), j.get("url"))
+            if not raw_id or raw_id in seen:
+                continue
+            seen.add(raw_id)
+            city = re.sub(r"\s+", " ", str(j.get("location") or "")).strip()[:_LOCATION_WIDTH]
+            where = f"Europe ({city})" if city else "Europe"
+            out.append(JobPosting(
+                source="arbeitnow", org=str(j.get("company_name") or ""),
+                title=str(j.get("title") or ""),
+                location=f"Remote - {where}" if _flag(j.get("remote")) else where,
+                url=str(j.get("url") or ""),
+                description=_strip_html(j.get("description") or ""),
+                raw_id=raw_id,
+            ))
+    return out
+
+
+def fetch_himalayas(count: int = _HIMALAYAS_PAGE_SIZE) -> list[JobPosting]:
+    """Himalayas' free public API, up to `count` postings paged by offset.
+
+    Three measured facts (probed 2026-08-17), each one a trap the htgaj
+    adapter this is ported from walks into:
+
+    * there is NO `id` and NO `slug` field. That adapter keyed on
+      `id or slug`, which today blanks the raw_id of every posting. The
+      stable identifier is `guid` (the posting URL), with applicationLink as
+      the fallback -- see _first_id for why a blank raw_id is worse than a
+      dropped posting.
+    * `limit` is capped at 20 server-side (limit=50 returns 20), so `count`
+      is paged 20 at a time via the `offset` the response echoes back.
+    * `q=` is IGNORED -- that adapter's five role queries all fetched the same
+      first 20 postings, so this uses offsets instead of query terms.
+
+    `locationRestrictions` is the geo signal Gate 1 reads (["Germany"] passes,
+    ["United States"] does not, [] means anywhere)."""
+    count = max(1, min(int(count or _HIMALAYAS_PAGE_SIZE), _HIMALAYAS_MAX_COUNT))
+    out: list[JobPosting] = []
+    seen: set[str] = set()
+    for offset in range(0, count, _HIMALAYAS_PAGE_SIZE):
+        try:
+            data = _http_json("https://himalayas.app/jobs/api"
+                              f"?limit={_HIMALAYAS_PAGE_SIZE}&offset={offset}")
+        except Exception as e:
+            print(f"warning: himalayas fetch failed for offset={offset}: {e}")
+            break
+        rows = (data.get("jobs") or []) if isinstance(data, dict) else []
+        for j in rows:
+            if not isinstance(j, dict):
+                continue
+            # guid and applicationLink are the same posting URL today; there is
+            # no separate direct-apply link to promote into apply_options.
+            raw_id = _first_id(j.get("guid"), j.get("applicationLink"))
+            if not raw_id or raw_id in seen:
+                continue
+            seen.add(raw_id)
+            restrictions = j.get("locationRestrictions")
+            if isinstance(restrictions, str):
+                restrictions = [restrictions]
+            where = ", ".join(str(r).strip() for r in (restrictions or []) if str(r).strip())
+            out.append(JobPosting(
+                source="himalayas", org=str(j.get("companyName") or ""),
+                title=str(j.get("title") or ""),
+                location=f"Remote - {where[:_LOCATION_WIDTH] or 'Anywhere'}",
+                url=_first_id(j.get("applicationLink"), j.get("guid")),
+                description=_strip_html(j.get("description") or ""),
+                raw_id=raw_id,
+            ))
+        # A short page means the board is exhausted -- asking for the next
+        # offset would just re-request an empty tail.
+        if len(rows) < _HIMALAYAS_PAGE_SIZE:
+            break
+    return out
+
+
 def fetch_all(sources: list[dict], serp_budget=None) -> list[JobPosting]:
     """sources = [{'kind': 'ashby'|'greenhouse'|'lever', 'slug': '...', 'name': '...'}, ...]
 
@@ -380,6 +528,8 @@ def fetch_all(sources: list[dict], serp_budget=None) -> list[JobPosting]:
         "remoteok": lambda s: fetch_remoteok(s["tag"]),
         "jobicy": lambda s: fetch_jobicy(s.get("count", 50), s["tag"]),
         "wwr": lambda s: fetch_wwr(s["category"]),
+        "arbeitnow": lambda s: fetch_arbeitnow(s.get("pages", 1)),
+        "himalayas": lambda s: fetch_himalayas(s.get("count", _HIMALAYAS_PAGE_SIZE)),
     }
     out: list[JobPosting] = []
     for s in sources:

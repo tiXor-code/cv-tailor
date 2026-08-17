@@ -1,0 +1,44 @@
+{
+  "comments": "Fixture mirroring https://himalayas.app/jobs/api -- note there is no id and no slug field, only guid.",
+  "updatedAt": 1786938400,
+  "offset": 0,
+  "limit": 20,
+  "totalCount": 3,
+  "jobs": [
+    {
+      "title": "Machine Learning Engineer",
+      "excerpt": "Ship models to production.",
+      "companyName": "Fixture Himalaya BV",
+      "companySlug": "fixture-himalaya",
+      "employmentType": "Full Time",
+      "seniority": ["Mid-level"],
+      "locationRestrictions": ["Germany", "Netherlands"],
+      "timezoneRestrictions": [1, 2],
+      "description": "<h3>Role</h3><p>Ship <strong>models</strong> to production.</p>",
+      "applicationLink": "https://himalayas.app/companies/fixture-himalaya/jobs/machine-learning-engineer",
+      "guid": "https://himalayas.app/companies/fixture-himalaya/jobs/machine-learning-engineer",
+      "pubDate": 1786938365
+    },
+    {
+      "title": "Technical Writer",
+      "excerpt": "Write docs.",
+      "companyName": "Fixture Guidless Inc",
+      "companySlug": "fixture-guidless",
+      "employmentType": "Full Time",
+      "locationRestrictions": [],
+      "description": "<p>Write <strong>docs</strong> for our API.</p>",
+      "applicationLink": "https://himalayas.app/companies/fixture-guidless/jobs/technical-writer",
+      "pubDate": 1786938366
+    },
+    {
+      "title": "Ghost Role",
+      "excerpt": "No guid and no application link.",
+      "companyName": "Fixture Idless Inc",
+      "companySlug": "fixture-idless",
+      "employmentType": "Full Time",
+      "locationRestrictions": ["United States"],
+      "description": "<p>No stable identifier at all.</p>",
+      "pubDate": 1786938367
+    }
+  ]
+}

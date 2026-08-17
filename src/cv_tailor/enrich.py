@@ -19,6 +19,10 @@ JOB_BOARD_DOMAINS = {
     "indeed.com", "glassdoor.com", "google.com", "ziprecruiter.com",
     "remotive.com", "remoteok.com", "weworkremotely.com", "himalayas.app",
     "wellfound.com", "builtin.com", "smartrecruiters.com",
+    # Every arbeitnow posting is hosted on arbeitnow.com. Without it here,
+    # company_domain would hand Hunter "arbeitnow.com" and one cached SMB
+    # verdict for the BOARD would then stand in for every job on it.
+    "arbeitnow.com",
 }
 SMB_EMPLOYEE_CEILING = 500  # startups & scaleups up to ~500
 
