@@ -6,15 +6,16 @@ Pipeline: fetch -> Gate 1 (rules) -> Gate 2 (SMB provenance) -> Gate 3 (dedup vs
 SQLite + CRM) -> LLM score survivors -> write digest -> quiet Telegram (only when
 new qualifying roles exist). Scoring/tailoring/CRM unchanged.
 
+Discovery only: this script never approves or applies. scripts/autopilot.py,
+which run_scan.sh runs immediately after, is the sole owner of that.
+
 Usage: python scripts/scan.py [--min-score 7] [--max-results 10] [--dry-run]
 """
 import argparse
 import json
-import os
 import re
-import subprocess
 import sys
-from datetime import date, datetime, timezone
+from datetime import date
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -28,7 +29,7 @@ from cv_tailor.job_sources import fetch_all
 from cv_tailor.match import score_job
 from cv_tailor.digest import format_digest
 from cv_tailor.telegram import format_digest_for_telegram, send_text
-from cv_tailor.scout_queue import queue_root, update_entry, write_jobs_queue
+from cv_tailor.scout_queue import write_jobs_queue
 from cv_tailor.budget import SerpBudget
 
 
@@ -111,88 +112,6 @@ def crm_tracked_keys():
             continue
         keys.add((_norm(row[0]), _norm(row[1])))
     return keys
-
-
-def _auto_apply_enabled(*, dry_run: bool) -> bool:
-    """Auto-apply is armed only on a real run (never --dry-run) with
-    AUTO_APPLY=1 in the environment. Default is off ("0")."""
-    return not dry_run and os.environ.get("AUTO_APPLY", "0") == "1"
-
-
-def _default_apply_runner(scan_date_iso: str, entry_id: str, log_path: Path) -> int:
-    """Spawn scripts/apply_approved.py for one job and wait for it (<=300s).
-    stdout/stderr are appended to log_path. The orchestrator itself owns the
-    armed/cap/dedupe gates -- this only runs it and reports the exit code."""
-    log_path.parent.mkdir(parents=True, exist_ok=True)
-    with open(log_path, "a") as log_f:
-        proc = subprocess.run(
-            [sys.executable, str(ROOT / "scripts" / "apply_approved.py"), scan_date_iso, entry_id],
-            timeout=300, cwd=ROOT, stdout=log_f, stderr=subprocess.STDOUT,
-        )
-    return proc.returncode
-
-
-def auto_apply_pending(scan_date_iso: str, *, queue_dir=None, runner=None) -> list[tuple[str, int]]:
-    """Auto-approve and sequentially run the orchestrator for every 'pending'
-    job in the day's queue, in queue order (already best-first -- scored jobs
-    are score-sorted before write_jobs_queue writes them).
-
-    For each pending entry: mark it "approved" with decided_at (UTC iso) and
-    decided_by "auto" via scout_queue.update_entry, then run `runner(
-    scan_date_iso, entry_id, log_path) -> returncode` (default:
-    _default_apply_runner, a synchronous, waited-on subprocess.run of
-    scripts/apply_approved.py). A failing or timing-out runner does NOT stop
-    the loop -- any exception from the runner call is caught and recorded as
-    rc=-1, and the next pending job still gets a shot.
-
-    Non-pending entries are left untouched. Returns the (job_id, returncode)
-    list in the order jobs were run."""
-    run = runner or _default_apply_runner
-    day_dir = queue_root(queue_dir) / scan_date_iso
-    entries = json.loads((day_dir / "jobs.json").read_text())
-
-    results: list[tuple[str, int]] = []
-    outcomes: list[str] = []
-    for entry in entries:
-        if entry.get("status") != "pending":
-            continue
-        job_id = entry["id"]
-        now = datetime.now(timezone.utc).isoformat()
-
-        def _approve(e: dict, _now=now) -> None:
-            e["status"] = "approved"
-            e["decided_at"] = _now
-            e["decided_by"] = "auto"
-
-        update_entry(scan_date_iso, job_id, _approve, queue_dir=queue_dir)
-
-        log_path = day_dir / "logs" / f"{job_id}.log"
-        try:
-            rc = run(scan_date_iso, job_id, log_path)
-        except Exception as exc:
-            rc = -1
-            print(f"auto-apply: {job_id} runner error: {exc}", file=sys.stderr)
-
-        print(f"auto-apply: {job_id} {entry.get('company', '?')} -> rc={rc}", file=sys.stderr)
-        results.append((job_id, rc))
-        # rc is the ORCHESTRATOR's exit code, which is 0 for every clean
-        # needs_human park too -- so it can never answer "did we apply?".
-        # Re-read the entry the orchestrator just rewrote and report that.
-        try:
-            after = json.loads((day_dir / "jobs.json").read_text())
-            status = next((e.get("status", "?") for e in after if e.get("id") == job_id), "?")
-        except Exception:  # noqa: BLE001 -- a summary must never kill the scan
-            status = "?"
-        outcomes.append(status)
-
-    counts: dict[str, int] = {}
-    for status in outcomes:
-        counts[status] = counts.get(status, 0) + 1
-    rc_failures = sum(1 for _, rc in results if rc != 0)
-    summary = " ".join(f"{k}={v}" for k, v in sorted(counts.items())) or "none"
-    print(f"auto-apply outcomes ({len(results)} run): {summary} "
-          f"[sent={counts.get('sent', 0)} rc!=0: {rc_failures}]", file=sys.stderr)
-    return results
 
 
 def parse_args(argv):
@@ -295,9 +214,10 @@ def main(argv=None):
 
     queue_path = write_jobs_queue(scored, today)
     print(f"scout queue: {queue_path}", file=sys.stderr)
-
-    if _auto_apply_enabled(dry_run=args.dry_run):
-        auto_apply_pending(today.isoformat())
+    # The queue is where this script's job ends. Approving and applying belong
+    # to scripts/autopilot.py, which run_scan.sh runs next: it has the score
+    # floor, compare-and-swap approval, a 7-day retry window, the stranded-run
+    # and expiry sweeps, and the digest.
 
     print(f"\n{len(scored)} candidates >= {args.min_score}", file=sys.stderr)
     if args.dry_run:

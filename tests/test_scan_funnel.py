@@ -1,5 +1,4 @@
 # tests/test_scan_funnel.py
-import json
 import sys, pathlib
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent / "src"))
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent / "scripts"))
@@ -66,118 +65,23 @@ def test_drop_crm_tracked():
     assert len(scan.drop_crm_tracked(jobs, set())) == 2
 
 
-# --- auto_apply_pending -------------------------------------------------
+# --- autopilot is the sole apply owner ----------------------------------
 
-def _write_day_queue(queue_dir, scan_date, entries):
-    day_dir = queue_dir / scan_date
-    day_dir.mkdir(parents=True, exist_ok=True)
-    (day_dir / "jobs.json").write_text(json.dumps(entries))
-    return day_dir
+def test_scan_owns_no_apply_path():
+    """scan.py discovers, scores and writes the queue -- then stops.
 
-
-def _read_day_queue(queue_dir, scan_date):
-    return json.loads((queue_dir / scan_date / "jobs.json").read_text())
-
-
-def test_auto_apply_pending_approves_and_runs_in_order(tmp_path):
-    scan_date = "2026-07-10"
-    entries = [
-        {"id": "a", "company": "Acme", "status": "pending"},
-        {"id": "b", "company": "Beta", "status": "pending"},
-    ]
-    _write_day_queue(tmp_path, scan_date, entries)
-
-    calls = []
-
-    def fake_runner(scan_date_iso, entry_id, log_path):
-        calls.append((scan_date_iso, entry_id))
-        return 0
-
-    results = scan.auto_apply_pending(scan_date, queue_dir=tmp_path, runner=fake_runner)
-
-    assert calls == [(scan_date, "a"), (scan_date, "b")]
-    assert results == [("a", 0), ("b", 0)]
-
-    updated = _read_day_queue(tmp_path, scan_date)
-    for e in updated:
-        assert e["status"] == "approved"
-        assert e["decided_by"] == "auto"
-        assert e["decided_at"] is not None
-
-
-def test_auto_apply_pending_skips_non_pending(tmp_path):
-    scan_date = "2026-07-10"
-    entries = [
-        {"id": "a", "company": "Acme", "status": "approved"},
-        {"id": "b", "company": "Beta", "status": "pending"},
-        {"id": "c", "company": "Gamma", "status": "rejected"},
-    ]
-    _write_day_queue(tmp_path, scan_date, entries)
-
-    calls = []
-
-    def fake_runner(scan_date_iso, entry_id, log_path):
-        calls.append(entry_id)
-        return 0
-
-    results = scan.auto_apply_pending(scan_date, queue_dir=tmp_path, runner=fake_runner)
-
-    assert calls == ["b"]
-    assert results == [("b", 0)]
-
-    updated = {e["id"]: e for e in _read_day_queue(tmp_path, scan_date)}
-    assert updated["a"]["status"] == "approved"  # untouched, was already
-    assert "decided_by" not in updated["a"]
-    assert updated["c"]["status"] == "rejected"  # untouched
-
-
-def test_auto_apply_pending_continues_after_runner_failure(tmp_path):
-    scan_date = "2026-07-10"
-    entries = [
-        {"id": "a", "company": "Acme", "status": "pending"},
-        {"id": "b", "company": "Beta", "status": "pending"},
-    ]
-    _write_day_queue(tmp_path, scan_date, entries)
-
-    calls = []
-
-    def flaky_runner(scan_date_iso, entry_id, log_path):
-        calls.append(entry_id)
-        if entry_id == "a":
-            raise TimeoutError("boom")
-        return 0
-
-    results = scan.auto_apply_pending(scan_date, queue_dir=tmp_path, runner=flaky_runner)
-
-    # both jobs ran despite the first raising -- the failure did not stop the loop
-    assert calls == ["a", "b"]
-    assert results == [("a", -1), ("b", 0)]
-
-
-def test_auto_apply_pending_no_pending_returns_empty(tmp_path):
-    scan_date = "2026-07-10"
-    entries = [{"id": "a", "company": "Acme", "status": "approved"}]
-    _write_day_queue(tmp_path, scan_date, entries)
-
-    calls = []
-    results = scan.auto_apply_pending(
-        scan_date, queue_dir=tmp_path, runner=lambda *a: calls.append(a) or 0
-    )
-    assert results == []
-    assert calls == []
-
-
-def test_auto_apply_enabled_gate(monkeypatch):
-    monkeypatch.delenv("AUTO_APPLY", raising=False)
-    assert scan._auto_apply_enabled(dry_run=False) is False
-    assert scan._auto_apply_enabled(dry_run=True) is False
-
-    monkeypatch.setenv("AUTO_APPLY", "1")
-    assert scan._auto_apply_enabled(dry_run=False) is True
-    assert scan._auto_apply_enabled(dry_run=True) is False  # dry-run always wins
-
-    monkeypatch.setenv("AUTO_APPLY", "0")
-    assert scan._auto_apply_enabled(dry_run=False) is False
+    It used to also approve and apply (auto_apply_pending): today's queue only,
+    EVERY pending entry regardless of score, no compare-and-swap. Because it ran
+    inside the scan it drained the queue before scripts/autopilot.py ever looked,
+    so autopilot's score floor was dead config and nothing enforced a policy
+    threshold on real sends. Applying now belongs to autopilot alone. Any of
+    these names or spawns coming back re-creates that race."""
+    for name in ("auto_apply_pending", "_auto_apply_enabled", "_default_apply_runner"):
+        assert not hasattr(scan, name), (
+            f"scan.{name} is back -- applying belongs to scripts/autopilot.py alone")
+    src = pathlib.Path(scan.__file__).read_text()
+    assert "apply_approved" not in src, "scan.py must not spawn the apply orchestrator"
+    assert "AUTO_APPLY" not in src, "the AUTO_APPLY gate is retired, not re-read"
 
 
 def test_funnel_dedupes_same_norm_key_within_one_batch(tmp_path):
