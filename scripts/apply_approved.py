@@ -1,0 +1,465 @@
+#!/usr/bin/env python3
+"""Scout Phase A orchestrator -- the ONLY writer of post-approval queue statuses.
+
+Spawned detached by mac-sidecar's POST /admin/scout/decide right after Teodor
+approves a job in the /scout UI: `apply_approved.py <scan-date> <job-id>`.
+Single-writer discipline: the sidecar writes only the pending->approved /
+pending->rejected transition; every status after that belongs to this script.
+
+Flow (exact status vocabulary, atomic update_entry writes throughout):
+  approved -> assembling -> (failed | needs_review | ready | sending)
+    email:  sending -> (sent | preview_sent | failed)
+    portal: unarmed -> a dry-run fill/screenshot only, no ledger touched:
+              ready (filled) | needs_human(reason) | failed(reason)
+            armed -> ledger gates (duplicate/cap) -> record-then-submit,
+              exactly like email's SMTP send:
+              sending -> sent (submitted) | needs_human(reason) | failed(reason)
+              A needs_human outcome KEEPS the ledger row (the submission may
+              have gone through -- see run_portal_application's
+              no-confirmation semantics); only a definite failed rolls it back.
+--force allows starting from needs_review (the UI's "send anyway") and skips
+the cover-letter-warnings stop.
+
+Exit codes: 0 on any terminal success state (sent/preview_sent/ready/
+needs_review/needs_human), 1 on failed, 2 on the wrong start status (entry
+untouched).
+
+Usage:
+  python scripts/apply_approved.py <scan-date> <job-id> [--force]
+
+Env:
+  SCOUT_QUEUE_DIR   override the queue root (used by tests; never touches prod state)
+  SCOUT_DB_PATH     override the applications-ledger sqlite path (default data/jobs.db)
+  CV_TAILOR_PROFILE / CV_TAILOR_TEMPLATES   override profile.yaml / templates dir
+  APPLY_ARMED       "1" submits for real (email SMTP send / portal browser submit);
+                     anything else previews/dry-runs only, same flag for both channels
+  APPLY_DAILY_CAP   max applications/day across BOTH channels while armed (default 10)
+Run under the cv-tailor venv; system python3 lacks deps.
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import sys
+from datetime import datetime, timezone
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT / "src"))
+
+from cv_tailor.answers import load_answers
+from cv_tailor.ats_resolve import resolve_ats_url
+from cv_tailor.assemble import AssembleError, assemble_package
+from cv_tailor.cache import (
+    application_exists,
+    applications_sent_today,
+    connect,
+    delete_application,
+    own_application_recorded,
+    record_application,
+)
+from cv_tailor.portal import run_portal_application
+from cv_tailor.profile import load_profile
+from cv_tailor.scout_queue import StatusConflict, queue_root, update_entry
+from cv_tailor.sender import send_application
+from cv_tailor.sheets import crm_mark_applied
+from cv_tailor.tailor_llm import build_azure_client
+from cv_tailor.telegram import send_document, send_text
+
+DEFAULT_DB_PATH = ROOT / "data" / "jobs.db"
+
+
+def _load_dotenv(path: Path = ROOT / ".env") -> None:
+    """Best-effort .env bootstrap for the detached-spawn path.
+
+    The mac-sidecar spawns this script with launchd's environment, which has
+    none of the Azure/SMTP/Telegram keys (scan.py gets them from run_scan.sh
+    sourcing .env; there is no wrapper here). Explicit environment always wins
+    (setdefault), so tests and shell runs that export their own values are
+    untouched."""
+    try:
+        for line in path.read_text().splitlines():
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, _, value = line.partition("=")
+            os.environ.setdefault(key.strip(), value.strip().strip('"').strip("'"))
+    except OSError:
+        pass
+
+
+def _db_path() -> Path:
+    env = os.environ.get("SCOUT_DB_PATH")
+    return Path(env) if env else DEFAULT_DB_PATH
+
+
+def _load_entry(scan_date: str, job_id: str, *, queue_dir=None) -> dict:
+    path = queue_root(queue_dir) / scan_date / "jobs.json"
+    if not path.exists():
+        sys.exit(f"queue not found: {path}")
+    entries = json.loads(path.read_text())
+    for e in entries:
+        if e.get("id") == job_id:
+            return e
+    ids = ", ".join(e.get("id", "?") for e in entries) or "(empty)"
+    sys.exit(f"job id {job_id!r} not in queue. Available: {ids}")
+
+
+def _finish_portal_dry_run(args, result) -> int:
+    """Unarmed portal result -> queue status. `filled` means the screening
+    honesty guard cleared every required question and the form actually
+    took every write -- `ready` keeps its Phase A meaning (a human can apply
+    via the link), now backed by a filled-form screenshot. needs_human/failed
+    both land on that exact status with the reason + evidence attached."""
+    if result.status == "filled":
+        def _ready(e: dict) -> None:
+            e["status"] = "ready"
+            e["evidence_dir"] = result.evidence_dir
+
+        entry = update_entry(args.scan_date, args.job_id, _ready)
+        send_text(
+            f"{entry.get('company')} / {entry.get('title')}: filled preview staged. "
+            f"Apply: {entry.get('apply_target') or entry.get('url')}"
+        )
+        return 0
+
+    def _needs_human_or_failed(e: dict) -> None:
+        e["status"] = result.status
+        e["error"] = result.reason
+        e["evidence_dir"] = result.evidence_dir
+
+    entry = update_entry(args.scan_date, args.job_id, _needs_human_or_failed)
+    send_text(f"{entry.get('company')} / {entry.get('title')}: portal {result.status} ({result.reason})")
+    if result.status == "failed":
+        print(f"portal dry-run failed: {result.reason}", file=sys.stderr)
+        return 1
+    return 0
+
+
+# Reasons that PROVE no submission could have happened -- see the long-form
+# rationale at the use site. Anything NOT listed here keeps its pre-inserted
+# ledger row, because the attempt may have touched or even submitted the form.
+#
+# "handoff-manual: no adapter" is deliberately absent: a human was driving a
+# real browser at the posting, so a genuine application is entirely possible
+# and deleting the row would let a duplicate go out later.
+_NO_SUBMIT_REASONS = {
+    "no-adapter", "missing-apply-target", "captcha", "login-required",
+    "handoff-timeout: captcha not solved",
+}
+
+
+def _handle_portal(args, entry: dict, meta: dict) -> int:
+    """Portal apply path (replaces the Phase A stub that parked every portal
+    job at `ready` unattempted): unarmed runs a fill-only dry-run for a
+    Teodor-reviewable preview; armed (or --handoff, see below) gates on the
+    applications ledger (channel "portal", the same daily-cap/duplicate
+    policy as email) and then actually drives the browser submit.
+
+    A needs_human outcome always KEEPS whatever ledger row was recorded --
+    run_portal_application's own no-confirmation semantics mean the
+    submission may have gone through server-side even with no client-side
+    confirmation signal, so deleting the row here could let the same job get
+    re-submitted later. Only a definite `failed` (never got close to a real
+    submit) rolls back a row THIS run inserted, mirroring sender.py's
+    SMTP-exception rollback.
+
+    --handoff (args.handoff) is a headed, human-assisted completion of a
+    portal application: it runs the ledger-gated submit path REGARDLESS of
+    APPLY_ARMED (a human is watching the browser and doing the CAPTCHA +
+    submit click themselves, so the armed gate that exists to stop
+    *autonomous* submission doesn't apply). Handoff's allowed start statuses
+    (see main()) include needs_human/ready, i.e. it is normally COMPLETING a
+    prior attempt -- own_application_recorded(job_id) is true when that
+    prior attempt already recorded this exact job's ledger row (e.g. an
+    earlier armed run that hit needs_human and kept it). In that case this
+    run proceeds straight to the browser without another INSERT
+    (own_row_skip below): we already own this application, so there is
+    nothing to race and nothing to duplicate-block. A pre-existing row for a
+    DIFFERENT job_id sharing the same company|role norm_key is still a
+    genuine duplicate and blocks exactly as it always has (own_row_skip is
+    only true for THIS job_id).
+    """
+    profile_path = Path(os.environ.get("CV_TAILOR_PROFILE", ROOT / "profile.yaml"))
+    profile = load_profile(profile_path, strict=True)
+    answers = load_answers()
+    client = build_azure_client()
+
+    armed = os.environ.get("APPLY_ARMED", "0") == "1"
+    handoff = bool(getattr(args, "handoff", False))
+
+    # Aggregator links (remoteOK/WWR listing pages) have no adapter and would
+    # die needs_human("no-adapter") before a browser launches. Resolve them to
+    # the company's real ATS posting first; on failure the entry is untouched
+    # and the run proceeds to the same needs_human it would have hit anyway.
+    from cv_tailor.portal.base import adapter_for  # lazy: playwright import
+    current_target = (entry.get("apply_target") or entry.get("url") or "").strip()
+    if current_target and adapter_for(current_target) is None:
+        resolved = resolve_ats_url(entry)
+        if resolved:
+            entry = update_entry(args.scan_date, args.job_id, lambda e: e.update(
+                apply_target=resolved, apply_target_original=current_target))
+            print(f"apply_target resolved to ATS: {resolved}", file=sys.stderr)
+
+    if not armed and not handoff:
+        result = run_portal_application(entry, meta, profile, answers, dry_run=True, client=client)
+        return _finish_portal_dry_run(args, result)
+
+    conn = connect(_db_path())
+    job_id = entry.get("id", "")
+    company = entry.get("company", "")
+    role = entry.get("title", "")
+
+    own_row_skip = handoff and own_application_recorded(conn, job_id)
+
+    if own_row_skip:
+        entry = update_entry(args.scan_date, args.job_id, lambda e: e.update(status="sending"))
+    else:
+        if application_exists(conn, job_id=job_id, company=company, role=role):
+            update_entry(args.scan_date, args.job_id, lambda e: e.update(status="failed", error="duplicate"))
+            print("portal blocked: duplicate", file=sys.stderr)
+            return 1
+
+        cap = int(os.environ.get("APPLY_DAILY_CAP", "10"))
+        if applications_sent_today(conn) >= cap:
+            update_entry(args.scan_date, args.job_id, lambda e: e.update(status="failed", error="daily-cap"))
+            print("portal blocked: daily-cap", file=sys.stderr)
+            return 1
+
+        entry = update_entry(args.scan_date, args.job_id, lambda e: e.update(status="sending"))
+
+        # Record BEFORE the browser submit attempt -- the same
+        # record-then-submit ordering as sender.py's SMTP path. The INSERT
+        # (not the pre-check above) is what arbitrates two concurrent
+        # portal submits racing this job_id.
+        recorded = record_application(
+            conn, job_id=job_id, company=company, role=role,
+            url=entry.get("url", ""), channel="portal",
+        )
+        if not recorded:
+            update_entry(args.scan_date, args.job_id, lambda e: e.update(status="failed", error="duplicate"))
+            print("portal blocked: duplicate (race)", file=sys.stderr)
+            return 1
+
+    result = run_portal_application(
+        entry, meta, profile, answers, dry_run=False, client=client,
+        handoff=handoff, notify=send_text if handoff else None,
+    )
+
+    if result.status == "submitted":
+        now = datetime.now(timezone.utc).isoformat()
+
+        def _sent(e: dict) -> None:
+            e["status"] = "sent"
+            e["applied_at"] = now
+            e["evidence_dir"] = result.evidence_dir
+
+        entry = update_entry(args.scan_date, args.job_id, _sent)
+        crm_mark_applied(entry.get("company", ""), entry.get("title", ""), entry.get("url", ""))
+        send_text(f"Sent: {entry.get('company')} / {entry.get('title')}")
+        return 0
+
+    if result.status == "needs_human":
+        # Reasons that PROVE no submission could have happened: no-adapter and
+        # missing-apply-target return before a browser is even launched -- they
+        # are run_portal_application's early guards (the apply_target scheme
+        # check and the unattended adapter_for gate), both of which return
+        # before it ever enters sync_playwright; captcha / login-required come only from
+        # resolve_blocker, whose call sites in every adapter run strictly BEFORE
+        # any field is filled; "captcha not solved" means the human never
+        # cleared the wall, so the flow never reached the form. Keeping the
+        # pre-recorded ledger row for these (a) marks the job as applied
+        # forever, (b) blocks every same-company|role sibling as "duplicate",
+        # and (c) burns daily-cap slots on non-submissions -- 6 of 10 slots on
+        # 2026-07-10 went to walls, not applications. Ambiguous reasons
+        # ("timeout", "no-confirmation", "handoff-timeout: not submitted, form
+        # left as-is") stay OUT of this set: those may have touched or even
+        # submitted the form, so their row keeps the documented semantics.
+        # The set itself lives at module scope so the invariant is testable.
+        if not own_row_skip and result.reason in _NO_SUBMIT_REASONS:
+            delete_application(conn, job_id=job_id)
+
+        def _needs_human(e: dict) -> None:
+            e["status"] = "needs_human"
+            e["error"] = result.reason
+            e["evidence_dir"] = result.evidence_dir
+
+        entry = update_entry(args.scan_date, args.job_id, _needs_human)
+        send_text(
+            f"{entry.get('company')} / {entry.get('title')}: needs human ({result.reason}). "
+            f"Apply manually: {entry.get('apply_target') or entry.get('url')}"
+        )
+        return 0
+
+    # failed: the attempt never got close enough to a real submission for the
+    # ledger row to mean anything -- roll it back so the job can be retried.
+    # Only roll back a row THIS run inserted: an own_row_skip completion run
+    # never inserted anything, and the pre-existing row from the earlier
+    # attempt it was completing may still represent a real (ambiguous)
+    # submission -- deleting it here would risk a later genuine duplicate.
+    if not own_row_skip:
+        delete_application(conn, job_id=job_id)
+    entry = update_entry(
+        args.scan_date, args.job_id,
+        lambda e: e.update(status="failed", error=result.reason, evidence_dir=result.evidence_dir),
+    )
+    print(f"portal submit failed: {result.reason}", file=sys.stderr)
+    try:
+        send_text(f"{entry.get('company')} / {entry.get('title')}: portal submit failed ({result.reason})")
+    except Exception:  # noqa: BLE001 -- Telegram delivery is best-effort here
+        pass
+    return 1
+
+
+def main(argv=None) -> int:
+    _load_dotenv()
+    ap = argparse.ArgumentParser(description="Assemble + route one approved job")
+    ap.add_argument("scan_date", help="e.g. 2026-07-10")
+    ap.add_argument("job_id", help="the queue entry id")
+    ap.add_argument("--force", action="store_true",
+                     help="start from needs_review and send anyway, skipping the warnings stop")
+    ap.add_argument("--handoff", action="store_true",
+                     help="headed browser fill; human solves any captcha and clicks submit; "
+                          "runs regardless of APPLY_ARMED (portal jobs only)")
+    args = ap.parse_args(argv)
+
+    entry = _load_entry(args.scan_date, args.job_id)
+
+    # --handoff can COMPLETE a prior attempt (needs_human/ready), not just
+    # start a fresh one (approved) -- see _handle_portal's own_row_skip for
+    # how a pre-existing ledger row from that prior attempt is handled.
+    if args.handoff:
+        allowed_start = {"needs_human", "ready", "approved"}
+    elif args.force:
+        allowed_start = {"needs_review"}
+    else:
+        allowed_start = {"approved"}
+
+    start_status = entry.get("status")
+    if start_status not in allowed_start:
+        flags = " ".join(f for f, on in (("--force", args.force), ("--handoff", args.handoff)) if on)
+        print(
+            f"job {args.job_id} has status {start_status!r}, expected one of "
+            f"{sorted(allowed_start)!r}{f' ({flags})' if flags else ''}. Not touched.",
+            file=sys.stderr,
+        )
+        return 2
+
+    # Compare-and-swap the FIRST transition: the pre-check above reads the
+    # entry OUTSIDE the flock, so two concurrent spawns for the same job can
+    # both pass it before either has written anything. expect_status
+    # re-checks the status INSIDE the flock right before the write, so only
+    # one spawn wins; the loser gets StatusConflict with the entry untouched.
+    # It's simply whatever start_status we just validated above (a single
+    # value even though --handoff's allowed_start is a 3-way set).
+    expect_status = start_status
+    try:
+        update_entry(
+            args.scan_date, args.job_id, lambda e: e.update(status="assembling"),
+            expect_status=expect_status,
+        )
+    except StatusConflict as exc:
+        print(f"status conflict, another spawn already claimed this job: {exc}", file=sys.stderr)
+        return 2
+
+    try:
+        meta = assemble_package(entry, args.scan_date)
+    except Exception as exc:  # noqa: BLE001 -- AssembleError or any other assembly
+        # failure must land in the queue as `failed`, never crash the orchestrator silently.
+        error = str(exc) if isinstance(exc, AssembleError) else f"{type(exc).__name__}: {exc}"
+        update_entry(args.scan_date, args.job_id, lambda e: e.update(status="failed", error=error))
+        print(f"assemble failed: {error}", file=sys.stderr)
+        return 1
+
+    def _write_paths(e: dict) -> None:
+        e["package_dir"] = meta["package_dir"]
+        e["cv_path"] = meta["cv_path"]
+        e["cover_letter_path"] = meta["cover_letter_path"]
+
+    entry = update_entry(args.scan_date, args.job_id, _write_paths)
+
+    warnings = meta.get("cover_letter_warnings") or []
+    if warnings and not args.force:
+        def _needs_review(e: dict) -> None:
+            e["status"] = "needs_review"
+            e["warnings"] = warnings
+
+        entry = update_entry(args.scan_date, args.job_id, _needs_review)
+        send_text(
+            f"{entry.get('company')} / {entry.get('title')}: cover letter needs review "
+            f"({len(warnings)} warning(s)). Open /scout to send anyway."
+        )
+        return 0
+
+    apply_method = entry.get("apply_method")
+
+    if apply_method == "portal":
+        try:
+            return _handle_portal(args, entry, meta)
+        except Exception as exc:  # noqa: BLE001 -- portal setup (load_profile
+            # strict=True, load_answers, build_azure_client) or any other
+            # unexpected exception in the dispatch must land in the queue as
+            # `failed`, mirroring the assemble/send guards above. Without this
+            # the job wedges at `assembling` forever: no error recorded, no
+            # Telegram note, and the detached process just dies silently.
+            error = f"{type(exc).__name__}: {exc}"
+            update_entry(args.scan_date, args.job_id, lambda e: e.update(status="failed", error=error))
+            print(f"portal handling failed: {error}", file=sys.stderr)
+            try:
+                send_text(f"{entry.get('company')} / {entry.get('title')}: portal handling failed ({error})")
+            except Exception:  # noqa: BLE001 -- Telegram delivery is best-effort here
+                pass
+            return 1
+
+    # email
+    entry = update_entry(args.scan_date, args.job_id, lambda e: e.update(status="sending"))
+
+    profile_path = Path(os.environ.get("CV_TAILOR_PROFILE", ROOT / "profile.yaml"))
+    profile = load_profile(profile_path, strict=True)
+    conn = connect(_db_path())
+    pkg_dir = Path(meta["package_dir"])
+    try:
+        result = send_application(entry, pkg_dir, profile, conn=conn)
+    except Exception as exc:  # noqa: BLE001 -- an SMTP/network failure must land
+        # in the queue as `failed`, mirroring the assemble failure path above.
+        # Without this the job wedges at `sending` forever: no error recorded,
+        # no Telegram note, and the detached process just dies silently.
+        error = f"{type(exc).__name__}: {exc}"
+        update_entry(args.scan_date, args.job_id, lambda e: e.update(status="failed", error=error))
+        print(f"send failed: {error}", file=sys.stderr)
+        try:
+            send_text(
+                f"{entry.get('company')} / {entry.get('title')}: send failed ({error})"
+            )
+        except Exception:  # noqa: BLE001 -- Telegram delivery is best-effort here
+            pass
+        return 1
+
+    if result.status == "sent":
+        now = datetime.now(timezone.utc).isoformat()
+
+        def _sent(e: dict) -> None:
+            e["status"] = "sent"
+            e["applied_at"] = now
+
+        entry = update_entry(args.scan_date, args.job_id, _sent)
+        crm_mark_applied(entry.get("company", ""), entry.get("title", ""), entry.get("url", ""))
+        send_text(f"Sent: {entry.get('company')} / {entry.get('title')}")
+        send_document(meta["cv_path"], caption=f"{entry.get('company')} / {entry.get('title')}")
+        return 0
+
+    if result.status == "preview_sent":
+        entry = update_entry(args.scan_date, args.job_id, lambda e: e.update(status="preview_sent"))
+        send_text(f"[PREVIEW] sent to your inbox: {entry.get('company')} / {entry.get('title')}")
+        return 0
+
+    # blocked
+    entry = update_entry(args.scan_date, args.job_id,
+                          lambda e: e.update(status="failed", error=result.reason))
+    print(f"send blocked: {result.reason}", file=sys.stderr)
+    return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -1,9 +1,15 @@
 # Secrets
 .env
+.env.bak*
 .secrets/
+answers.yaml
 
 # Job artifacts (per-application output)
 jobs/
+
+# Runtime data + scan outputs (SQLite dedup cache, dated digests, logs)
+data/
+scans/
 
 # Python
 __pycache__/

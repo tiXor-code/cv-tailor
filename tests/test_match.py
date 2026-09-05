@@ -1,7 +1,7 @@
 import json
 from unittest.mock import MagicMock
 
-from cv_tailor.match import score_job, SCORER_SYSTEM_PROMPT
+from cv_tailor.match import score_job, SCORER_SYSTEM_PROMPT, CONTENT_TRACK_ADDENDUM
 
 
 def test_scorer_system_prompt_mentions_candidate_and_constraints():
@@ -66,3 +66,63 @@ def test_score_job_truncates_long_descriptions():
     msgs = client.chat.completions.create.call_args.kwargs["messages"]
     # User content shouldn't carry all 20k chars of x's
     assert msgs[1]["content"].count("x") <= 6500
+
+
+def _fake_client_capturing():
+    fake_response = MagicMock()
+    fake_response.choices = [MagicMock()]
+    fake_response.choices[0].message.content = json.dumps(
+        {"score": 5, "reason": "ok", "key_keywords_matched": []}
+    )
+    client = MagicMock()
+    client.chat.completions.create.return_value = fake_response
+    return client
+
+
+def test_score_job_ai_track_prompt_is_byte_stable():
+    """track='ai' (the default) must send SCORER_SYSTEM_PROMPT unchanged -- no
+    content-track addendum leaks into the AI track's scoring calls."""
+    client = _fake_client_capturing()
+    score_job({"contact": {}}, "T", "L", "desc", client=client, deployment="m")
+    msgs = client.chat.completions.create.call_args.kwargs["messages"]
+    assert msgs[0]["content"] == SCORER_SYSTEM_PROMPT
+
+    client2 = _fake_client_capturing()
+    score_job({"contact": {}}, "T", "L", "desc", client=client2, deployment="m", track="ai")
+    msgs2 = client2.chat.completions.create.call_args.kwargs["messages"]
+    assert msgs2[0]["content"] == SCORER_SYSTEM_PROMPT
+
+
+def test_scorer_system_prompt_has_us_anchor_reality_check():
+    """Real incident: a SerpAPI-cross-listed 'Remote' card's true JD anchored
+    the role to a hybrid US-onsite cadence in Raleigh/San Jose (Cisco). The
+    scorer must not trust a bare 'Remote' label -- it needs its own reality
+    check, mirroring norina-jobs' scorer hardening."""
+    p = SCORER_SYSTEM_PROMPT
+    low = p.lower()
+    assert "reality-check" in low or "reality check" in low
+    assert "hybrid" in low
+    assert "onsite" in low or "on-site" in low
+    assert "days per week" in low
+    assert "work-authorization" in low or "work authorization" in low
+    assert "remote from anywhere" in low or "anywhere" in low
+    assert "emea" in low
+    # The hard cap: score 3 or lower regardless of the "Remote" label.
+    assert "3 or lower" in low
+
+
+def test_score_job_content_track_prompt_has_availability_constraint():
+    client = _fake_client_capturing()
+    score_job({"contact": {}}, "T", "L", "desc", client=client, deployment="m", track="content")
+    msgs = client.chat.completions.create.call_args.kwargs["messages"]
+    system = msgs[0]["content"]
+
+    # Base prompt still present -- the content track adds to it, doesn't replace it.
+    assert system.startswith(SCORER_SYSTEM_PROMPT)
+    assert system == SCORER_SYSTEM_PROMPT + CONTENT_TRACK_ADDENDUM
+
+    assert "Monday" in system
+    assert "Friday" in system
+    assert "weekends" in system
+    assert "content-producer" in system
+    assert "4" in system  # full-time content roles capped at <= 4

@@ -1,0 +1,14 @@
+<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>Blocked Application Form</title></head>
+<body>
+  <!-- A recaptcha-shaped iframe with no real network call: the src is a
+       same-scheme about:blank page with a "recaptcha" marker in the query
+       string, so detect_blockers' substring selector matches it without the
+       test ever leaving localhost. -->
+  <iframe src="about:blank?recaptcha=1" title="reCAPTCHA challenge"></iframe>
+  <form id="application-form">
+    <input type="text" name="full_name" id="full_name" placeholder="Full name">
+  </form>
+</body>
+</html>

@@ -14,3 +14,52 @@ sources:
   - kind: ashby
     slug: patrianna
     name: Patrianna
+  # Curated EU-startup ATS list (replaces the greenhouse:anthropic + lever:lever
+  # placeholders -- those were smoke-test entries, not real targets).
+  - kind: greenhouse
+    slug: gitlab
+    name: GitLab
+  - kind: greenhouse
+    slug: remotecom
+    name: Remote.com
+  - kind: greenhouse
+    slug: canonical
+    name: Canonical
+  # Free remote-job boards (no API key), one entry per track so both the ai
+  # and content tracks (see profile.yaml tracks:) get board coverage.
+  - kind: remotive
+    category: software-dev
+  - kind: remotive
+    category: marketing
+  - kind: remoteok
+    tag: ai
+  - kind: remoteok
+    tag: marketing
+  - kind: jobicy
+    count: 30
+    tag: software
+  - kind: jobicy
+    count: 30
+    tag: copywriting
+  - kind: wwr
+    category: programming
+  - kind: wwr
+    category: sales-and-marketing
+  # SerpAPI google_jobs rejects continent locations ("Europe") and city locations
+  # return 0; rely on the query text + ltype=1 (remote) and let Gate 1 + the LLM
+  # enforce EU-eligibility. No `location` param.
+  #
+  # 5 serpapi queries/day = ~150/mo, which EXCEEDS budget.SerpBudget's 90/mo cap
+  # by design -- the counter is what stops serpapi fetches once the month's 90
+  # are spent, rather than sources.yaml self-limiting to a number nobody would
+  # ever revisit as content-track coverage grows.
+  - kind: serpapi
+    query: "AI engineer remote europe"
+  - kind: serpapi
+    query: "AI automation engineer remote europe"
+  - kind: serpapi
+    query: "forward deployed engineer remote europe"
+  - kind: serpapi
+    query: "content producer remote part-time"
+  - kind: serpapi
+    query: "freelance video editor remote europe"

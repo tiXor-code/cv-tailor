@@ -60,13 +60,19 @@
 
 <section>
   <h2>Skills</h2>
-  {% for group, items in profile.skills.items() %}
+  {# fields.skills_groups (optional) selects AND orders the groups shown, so a
+     role-specific CV can lead with what matters (e.g. content before devops).
+     Absent -> every profile group renders, as before. #}
+  {% set group_names = fields.skills_groups if fields.get('skills_groups') else profile.skills.keys() %}
+  {% for group in group_names %}
+    {% if group in profile.skills %}
     <p class="skill-row">
       <span class="skill-group">{{ group | title }}:</span>
-      {% for item in items %}
+      {% for item in profile.skills[group] %}
         {% if item in fields.skills_emphasis %}<strong>{{ item }}</strong>{% else %}{{ item }}{% endif %}{% if not loop.last %}, {% endif %}
       {% endfor %}
     </p>
+    {% endif %}
   {% endfor %}
 </section>
 

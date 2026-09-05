@@ -1,0 +1,328 @@
+<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>Software Engineer - AI Systems @ Ashby Fixture Co</title></head>
+<body>
+<!--
+  Ashby application-form fixture. Field names/ids and the tab/panel
+  structure are copied from a real live posting's rendered DOM
+  (jobs.ashbyhq.com/xbowcareers/<job-id>/application, fetched 2026-07-10
+  with headless chromium) so the adapter under test exercises the real
+  selectors (_systemfield_name, _systemfield_email, _systemfield_resume,
+  role=tablist/tab/tabpanel with ids job-overview/job-application-form).
+
+  Simplifications from the real Ashby DOM (documented, same spirit as
+  blocked_form.html's recaptcha-iframe simplification):
+  - Ashby's client router serves Overview/Application as separate routes;
+    here both panels live in one static page and a JS click handler on the
+    "Application" tab toggles which is visible.
+  - The Resume field is a custom drag-drop widget on the real form: a
+    dashed dropzone with a styled "Upload File" button and "or drag and
+    drop here" text, backed by a visually-hidden input[type=file] (clipped
+    off-screen via inline style, exactly like the live DOM). This fixture
+    mirrors that shape (hidden input inside `.resume-dropzone`, JS-driven
+    filename display + "Replace" button text on change) instead of the
+    plain visible file input earlier fixture revisions used, so tests
+    exercise the real hidden-input path (task C345-followup, live-verified
+    against jobs.ashbyhq.com/xbowcareers/09439fdb-a556-4d34-9043-eb9928bece8d
+    2026-07-10: the input node itself gets swapped by a React re-render
+    ~150-300ms after the Application tab opens -- confirmed by tagging the
+    pre-click node with a probe attribute and polling for it to survive).
+  - Ashby's Yes/No questions render as a custom button pair backed by a
+    hidden checkbox, and there is no native <select> anywhere in the real
+    form. This fixture's screening "select question" uses a native
+    <select> as the equivalent single-choice control, for testability.
+  - The real location field is an autocomplete combobox (role="combobox",
+    no name attribute); simplified here to a plain named text input.
+  - Submission is fixture-only: the submit handler swaps the form panel
+    for a local #confirmation panel instead of a real network POST.
+  - Real Ashby forms do not carry a phone field by default; this fixture
+    adds one as a custom systemfield-style input (some org configs do add
+    a custom "Phone Number" question) so the adapter's contact-fill path
+    has real coverage.
+
+  Query-string variants (kept in this one file, per the task's exclusive
+  file list, instead of extra fixture files):
+  - ?variant=unanswerable  -- swaps the required screening question's
+    label to an ungrounded one, for the required-unanswerable test path.
+  - ?variant=captcha       -- injects a reCAPTCHA iframe into the DOM only
+    once the Application tab is opened (not present at initial page
+    load), so the scenario exercises the ADAPTER's own post-navigation
+    blocker recheck, not just the C1 harness's pre-dispatch check.
+  - ?variant=nosubmit      -- the submit button does a real (same-origin)
+    form GET instead of the JS-handled fixture "submit", so no
+    confirmation text ever appears -- exercises the no-confirmation path.
+  - ?variant=locked        -- the required screening text field silently
+    reverts any typed value (an input listener clears it), so a fill "runs"
+    but nothing lands -- exercises the write-verified unwritable-required path.
+  - ?variant=noresume      -- removes the resume file input entirely (and
+    every other input[type=file] on the page), so the resume upload has no
+    target at all -- exercises the genuinely-missing-input diagnostic path.
+  - ?variant=resumeswap    -- on the resume input's change event, the widget
+    swaps the underlying <input> node for a fresh, unfilled clone (same id)
+    right after the upload lands, while still showing the filename in the
+    dropzone -- exercises the files.length-is-unreliable fallback (success
+    via the filename-visible signal, not verify_file_attached).
+  - ?variant=altconfirm    -- on submit the form panel is removed and a
+    success panel with text that does NOT contain "submitted"/"thank you"
+    appears (no error banner) -- exercises the broadened confirmation
+    detection (form-disappeared-without-error signal).
+  - ?variant=formidmismatch -- the form element's id is renamed away from
+    "application-form" (the adapter's id, copied from one real posting and
+    never verified against every board config) right after the script
+    captures its own reference to it, so the adapter's own #application-form
+    locator already matches 0 elements BEFORE any click. Submit does nothing
+    else (no confirmation text, no removal, no navigation) -- exercises the
+    pre-click-presence gate on the form-vanish confirmation signal (Phase C
+    fix): a genuine id mismatch must degrade to needs_human, not a false
+    "submitted".
+  - ?variant=handoffsubmit -- retries clicking #submit-btn on its own (every
+    100ms, harmless no-ops via native required-field validation until the
+    adapter actually finishes filling the form) simulating a HUMAN clicking
+    submit sometime after the fill completes (handoff mode itself never
+    clicks). The click fires the normal (non-variant) submit handler, which
+    shows the standard #confirmation text -- exercises the handoff
+    submit-poll path noticing a confirmation it never clicked for itself.
+-->
+<nav role="tablist">
+  <a id="job-overview" role="tab" aria-selected="true" href="#overview">Overview</a>
+  <a id="job-application-form" role="tab" aria-selected="false" href="#form">Application</a>
+</nav>
+
+<div id="overview" role="tabpanel">
+  <h1>Software Engineer - AI Systems</h1>
+  <p>Fixture Co is hiring a software engineer for its AI systems team.</p>
+</div>
+
+<div id="form" role="tabpanel" style="display:none">
+  <form id="application-form">
+    <h2>Personal details</h2>
+
+    <div class="ashby-application-form-field-entry" data-field-path="_systemfield_name">
+      <label for="_systemfield_name">Name</label>
+      <input type="text" name="_systemfield_name" id="_systemfield_name" placeholder="Type here..." required>
+    </div>
+
+    <div class="ashby-application-form-field-entry" data-field-path="_systemfield_email">
+      <label for="_systemfield_email">Email</label>
+      <input type="email" name="_systemfield_email" id="_systemfield_email" placeholder="hello@example.com..." required>
+    </div>
+
+    <div class="ashby-application-form-field-entry" data-field-path="_systemfield_phone">
+      <label for="_systemfield_phone">Phone Number</label>
+      <input type="tel" name="_systemfield_phone" id="_systemfield_phone" placeholder="Type here...">
+    </div>
+
+    <div class="ashby-application-form-field-entry" data-field-path="_systemfield_location">
+      <label for="_systemfield_location">Location</label>
+      <input type="text" name="_systemfield_location" id="_systemfield_location" placeholder="Start typing..." role="combobox">
+    </div>
+
+    <div class="ashby-application-form-field-entry" data-field-path="_systemfield_resume">
+      <label for="_systemfield_resume">Resume</label>
+      <div class="resume-dropzone" role="presentation" style="border:1px dashed #999; padding:16px; display:flex; align-items:center; gap:12px;">
+        <input type="file" id="_systemfield_resume" required
+               accept="application/pdf,.pdf,application/msword,.doc"
+               style="border:0; clip:rect(0,0,0,0); clip-path:inset(50%); height:1px; margin:0 -1px -1px 0; overflow:hidden; padding:0; position:absolute; width:1px; white-space:nowrap;">
+        <button type="button" class="resume-upload-btn">Upload File</button>
+        <span class="resume-drag-text">or drag and drop here</span>
+      </div>
+    </div>
+
+    <div class="ashby-application-form-field-entry" data-field-path="_systemfield_cover_letter">
+      <label for="_systemfield_cover_letter">Cover Letter (optional)</label>
+      <textarea name="_systemfield_cover_letter" id="_systemfield_cover_letter" placeholder="Type here..."></textarea>
+    </div>
+
+    <h2>Screening questions</h2>
+
+    <div class="ashby-application-form-field-entry" data-field-path="q_source">
+      <label for="q_source">How did you hear about us?</label>
+      <select name="q_source" id="q_source">
+        <option value="">Select...</option>
+        <option value="LinkedIn">LinkedIn</option>
+        <option value="Referral">Referral</option>
+        <option value="Job Board">Job Board</option>
+        <option value="Other">Other</option>
+      </select>
+    </div>
+
+    <div class="ashby-application-form-field-entry" data-field-path="q_required_text">
+      <label for="q_required_text" id="q_required_text_label">What is your notice period?</label>
+      <input type="text" name="q_required_text" id="q_required_text" placeholder="Type here..." required>
+    </div>
+
+    <button type="submit" id="submit-btn">Submit Application</button>
+  </form>
+
+  <div id="confirmation" style="display:none">
+    <p>Your application has been submitted!</p>
+  </div>
+</div>
+
+<script>
+(function () {
+  var params = new URLSearchParams(window.location.search);
+  var variant = params.get("variant");
+  var appForm = document.getElementById("application-form");
+
+  if (variant === "formidmismatch") {
+    // Simulate a real posting whose form doesn't actually carry the id the
+    // adapter assumes: rename AFTER capturing this script's own reference
+    // (so the fixture's own submit wiring below still works), so the
+    // adapter's own #application-form locator matches 0 elements from the
+    // very first read, before any click ever happens.
+    appForm.id = "app-container-real";
+  }
+
+  if (variant === "unanswerable") {
+    document.getElementById("q_required_text_label").textContent =
+      "Briefly describe a recent project or challenge you're proud of.";
+  }
+
+  if (variant === "locked") {
+    // Required screening field that silently rejects every write: the value
+    // is cleared on every input event, so .fill() "succeeds" but the DOM
+    // ends up blank -- the write-verify read-back must catch this.
+    var locked = document.getElementById("q_required_text");
+    locked.addEventListener("input", function () { locked.value = ""; });
+  }
+
+  if (variant === "lockedemail") {
+    // The (universally required) email contact field silently rejects writes,
+    // to exercise the contact-fill-failed read-back path.
+    var lockedEmail = document.getElementById("_systemfield_email");
+    lockedEmail.addEventListener("input", function () { lockedEmail.value = ""; });
+  }
+
+  if (variant === "handoffsubmit") {
+    // Simulate the human: nothing in this adapter's own code ever calls
+    // .click() on #submit-btn in handoff mode, so if the confirmation text
+    // shows up at all, it can only be because THIS fixture-only interval
+    // fired the click itself -- standing in for a real person clicking
+    // Submit sometime after the form is filled and waiting. Retrying
+    // (rather than a single delayed click) makes this deterministic
+    // regardless of exactly how long the adapter's own fill flow takes:
+    // native HTML5 constraint validation silently blocks a submit-button
+    // click while any required field is still empty, so a click that
+    // lands too early is simply a no-op, not an error.
+    var handoffAttempts = 0;
+    var handoffInterval = window.setInterval(function () {
+      handoffAttempts += 1;
+      var btn = document.getElementById("submit-btn");
+      if (btn) { btn.click(); }
+      var confirmed = document.getElementById("confirmation");
+      var done = confirmed && confirmed.style.display !== "none";
+      if (done || handoffAttempts > 40) {
+        window.clearInterval(handoffInterval);
+      }
+    }, 100);
+  }
+
+  if (variant === "noresume") {
+    var resumeEntry = document.querySelector("[data-field-path='_systemfield_resume']");
+    if (resumeEntry) { resumeEntry.parentNode.removeChild(resumeEntry); }
+  }
+
+  var resumeInput = document.getElementById("_systemfield_resume");
+  if (resumeInput) {
+    var resumeBtn = document.querySelector(".resume-upload-btn");
+    if (resumeBtn) {
+      resumeBtn.addEventListener("click", function () { resumeInput.click(); });
+    }
+
+    resumeInput.addEventListener("change", function () {
+      if (!(resumeInput.files && resumeInput.files.length > 0)) { return; }
+      var filename = resumeInput.files[0].name;
+      var dropzone = resumeInput.closest(".resume-dropzone");
+
+      if (variant === "resumeswap") {
+        // Live-verified widget behavior: the underlying <input> node gets
+        // swapped for a fresh, unfilled node (same id) right after the
+        // upload lands, while the dropzone's own filename UI state (set
+        // below) is kept independently -- so files.length re-read after
+        // this point is 0 even though the upload genuinely landed. Built
+        // via createElement (not cloneNode -- Chromium's cloneNode(true)
+        // carries the live FileList over to the clone, which would defeat
+        // the point of this variant) so the fresh node genuinely starts
+        // with an empty file list.
+        var freshInput = document.createElement("input");
+        freshInput.type = "file";
+        freshInput.id = resumeInput.id;
+        freshInput.setAttribute("accept", resumeInput.getAttribute("accept") || "");
+        freshInput.setAttribute("style", resumeInput.getAttribute("style") || "");
+        freshInput.required = resumeInput.required;
+        dropzone.replaceChild(freshInput, resumeInput);
+      }
+
+      var nameSpan = dropzone.querySelector(".resume-filename");
+      if (!nameSpan) {
+        nameSpan = document.createElement("span");
+        nameSpan.className = "resume-filename";
+        dropzone.appendChild(nameSpan);
+      }
+      nameSpan.textContent = filename;
+      if (resumeBtn) { resumeBtn.textContent = "Replace"; }
+    });
+  }
+
+  var appTab = document.getElementById("job-application-form");
+  var overviewTab = document.getElementById("job-overview");
+  var overviewPanel = document.getElementById("overview");
+  var formPanel = document.getElementById("form");
+
+  appTab.addEventListener("click", function (ev) {
+    ev.preventDefault();
+    overviewTab.setAttribute("aria-selected", "false");
+    appTab.setAttribute("aria-selected", "true");
+    overviewPanel.style.display = "none";
+    formPanel.style.display = "block";
+
+    if (variant === "captcha" && !document.getElementById("captcha-frame")) {
+      var iframe = document.createElement("iframe");
+      iframe.id = "captcha-frame";
+      iframe.title = "reCAPTCHA challenge";
+      iframe.src = "about:blank?recaptcha=1";
+      formPanel.appendChild(iframe);
+    }
+  });
+
+  overviewTab.addEventListener("click", function (ev) {
+    ev.preventDefault();
+    appTab.setAttribute("aria-selected", "false");
+    overviewTab.setAttribute("aria-selected", "true");
+    formPanel.style.display = "none";
+    overviewPanel.style.display = "block";
+  });
+
+  if (variant === "altconfirm") {
+    // Success is signalled by the form vanishing and a panel whose text does
+    // NOT match the "submitted"/"thank you" phrases -- and with no error
+    // banner. The broadened confirmation detector must read this as success.
+    appForm.addEventListener("submit", function (ev) {
+      ev.preventDefault();
+      var formPanelEl = document.getElementById("form");
+      appForm.parentNode.removeChild(appForm);
+      var done = document.createElement("div");
+      done.id = "alt-confirmation";
+      done.textContent = "All set on our end.";
+      formPanelEl.appendChild(done);
+    });
+  } else if (variant === "formidmismatch") {
+    // Submit does nothing observable at all: no confirmation phrase, no
+    // removal, no navigation -- the ONLY way this run can ever resolve is
+    // signal 3 (form-vanish), which must stay disabled because the form was
+    // never found present under the adapter's assumed id to begin with.
+    appForm.addEventListener("submit", function (ev) {
+      ev.preventDefault();
+    });
+  } else if (variant !== "nosubmit") {
+    appForm.addEventListener("submit", function (ev) {
+      ev.preventDefault();
+      appForm.style.display = "none";
+      document.getElementById("confirmation").style.display = "block";
+    });
+  }
+})();
+</script>
+</body>
+</html>
