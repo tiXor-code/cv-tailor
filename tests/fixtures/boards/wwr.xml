@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0">
+  <channel>
+    <title>We Work Remotely: programming jobs</title>
+    <item>
+      <title>Acme Inc: Backend Engineer</title>
+      <region>Anywhere</region>
+      <category>Back-End Programming</category>
+      <link>https://weworkremotely.com/remote-jobs/acme-inc-backend-engineer</link>
+      <guid>https://weworkremotely.com/remote-jobs/acme-inc-backend-engineer</guid>
+      <description>&lt;p&gt;Build our &lt;b&gt;API&lt;/b&gt; in Go.&lt;/p&gt;</description>
+    </item>
+    <item>
+      <title>No Colon Title Job</title>
+      <region></region>
+      <category>Programming</category>
+      <link>https://weworkremotely.com/remote-jobs/no-colon-title-job</link>
+      <guid>https://weworkremotely.com/remote-jobs/no-colon-title-job</guid>
+      <description>&lt;p&gt;Plain description.&lt;/p&gt;</description>
+    </item>
+  </channel>
+</rss>

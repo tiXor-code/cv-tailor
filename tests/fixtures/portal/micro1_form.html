@@ -1,0 +1,280 @@
+<!doctype html>
+<!--
+  Local static snapshot of a Micro1 (jobs.micro1.ai) posting's "Interested?"
+  application card, built from a real posting fetched live while building
+  this adapter (jobs.micro1.ai/post/c368cc32-d267-490e-abed-e9521cdf628e,
+  "Content Producer"). Field markup -- input[name=first_name/last_name/
+  email_id/linkedin_url], the select.PhoneInputCountrySelect +
+  input.PhoneInputInput pair (react-phone-number-input, NEITHER carries a
+  `name` attribute on the real DOM), the hidden input[type=file][id=file]
+  behind a styled <label for=file> dropzone, and the submit button's own
+  "Next" label -- is copied faithfully.
+
+  Simplifications, all necessary because the real page is a Next.js SPA with
+  no static equivalent: the country select here lists only Romania/United
+  States/United Kingdom (the real one lists all ~245 ISO countries) --
+  enough to exercise the adapter's "select isn't Romania yet" branch; the
+  phone widget's live reformatting-on-input behavior (confirmed against the
+  real page: filling the tel input with bare local digits while Romania is
+  selected reformats to "+40 xxx xxx xxx", and filling a value carrying a
+  DIFFERENT country's dial code while that other country is selected is
+  silently rejected) is reproduced with a small input-event handler below,
+  not the real react-phone-number-input library; and "the interview
+  process" the real posting's copy warns about is stood in for by a second
+  step of one custom question, gated behind the ?variant= query param
+  (mirrors every other fixture's query-string-variant convention in this
+  directory).
+
+  Variants:
+    (none)                -> step 1 submits straight to a confirmation panel
+    ?variant=step2answerable   -> step 1 reveals ONE more required question
+                                  ("How many hours per week are you
+                                  available?", grounded by answers.yaml's
+                                  availability_parttime) before confirming
+    ?variant=step2unanswerable -> same shape, but the extra required
+                                  question ("What's your favorite fictional
+                                  planet?") has no possible grounded answer
+    ?variant=captcha       -> the page loads clean; clicking Next reveals a
+                              captcha-shaped div instead of progressing,
+                              exercising the adapter's post-click recheck
+    ?variant=nosubmit      -> clicking Next does nothing at all, ever
+                              (no confirmation, no second step)
+    ?variant=notromania    -> the country select geo-defaults to United
+                              States (tel "+1") instead of Romania, so the
+                              adapter must switch it before filling the
+                              number
+    ?variant=resumewidgetstuck -> reproduces the real, live-verified bug:
+                              set_input_files() still flips input.files
+                              synchronously, but the dropzone's own change
+                              listener is never attached, so its "Click to
+                              upload..." placeholder text never updates --
+                              exercises the adapter's widget-state poll
+                              actually catching a stuck widget instead of
+                              trusting input.files alone
+    ?variant=step2startratehours -> reproduces the real, live-verified
+                              "Answer a few questions to complete your
+                              application" card (2026-07-11 ai-labs Content
+                              Producer run, see this adapter's module
+                              docstring): three known questions, none
+                              wrapped in [data-micro1-question] --
+                              "How soon can you start the work? (in days)"
+                              and "How many hours per week are you available
+                              to work?" are steppers whose numeric display is
+                              READONLY (mutated only by their own -/+
+                              buttons, ignoring any direct fill -- exercises
+                              the adapter's is_editable()-gated fallback to
+                              clicking them the required number of times),
+                              "What is your expected hourly rate in USD?" is
+                              a plain fillable input with a "/hour" suffix.
+                              The submit button's own text relabels from
+                              "Next" to "Submit" once this step is showing.
+                              All three carry `name` attributes so their
+                              final values are readable straight out of
+                              form_state.json.
+
+  Resume dropzone: the real widget's own React state (what the Next-click
+  validator gates on, "Resume is required") updates ASYNCHRONOUSLY after the
+  file input's `change` event, live-verified against the real posting at
+  roughly 1.4s (presumably a resume-parse round trip) -- reproduced below via
+  a delayed (400ms) textContent swap on the file input's own `change` event,
+  which is exactly the event set_input_files() dispatches. This is the event
+  path the real widget uses; the fixture does not special-case
+  set_input_files vs. any other upload mechanism.
+-->
+<html>
+<head><meta charset="utf-8"><title>Content Producer | Apply on Job</title></head>
+<body>
+  <form id="application-form">
+    <div id="step1-fields">
+      <input type="text" placeholder="Enter your first name" name="first_name" value="">
+      <input type="text" placeholder="Enter your last name" name="last_name" value="">
+      <input type="text" placeholder="Enter your email address" name="email_id" value="">
+
+      <div class="PhoneInput">
+        <select aria-label="Phone number country" class="PhoneInputCountrySelect">
+          <option value="RO">Romania</option>
+          <option value="US">United States</option>
+          <option value="GB">United Kingdom</option>
+        </select>
+        <input autocomplete="tel" class="PhoneInputInput" type="tel" value="+40">
+      </div>
+
+      <input type="text" placeholder="Enter your LinkedIn URL" name="linkedin_url" value="">
+
+      <label for="file" role="button">
+        <input accept=".pdf" id="file" type="file" name="file" style="display:none">
+        <div id="resume-dropzone-text">Click to upload or drag &amp; drop (.pdf)</div>
+      </label>
+    </div>
+
+    <div id="step2-fields" style="display:none"></div>
+
+    <button type="submit" class="next-btn">Next</button>
+  </form>
+
+  <div id="confirmation" style="display:none"></div>
+
+  <script>
+    (function () {
+      var params = new URLSearchParams(location.search);
+      var variant = params.get("variant") || "";
+      var form = document.getElementById("application-form");
+      var step1 = document.getElementById("step1-fields");
+      var step2 = document.getElementById("step2-fields");
+      var confirmation = document.getElementById("confirmation");
+      var countrySelect = document.querySelector("select.PhoneInputCountrySelect");
+      var telInput = document.querySelector("input.PhoneInputInput");
+      var fileInput = document.getElementById("file");
+      var dropzoneText = document.getElementById("resume-dropzone-text");
+      var DIAL = { RO: "40", US: "1", GB: "44" };
+      var step = 1;
+
+      if (variant === "notromania") {
+        countrySelect.value = "US";
+        telInput.value = "+1";
+      }
+
+      // Reproduces the real widget's live-verified ASYNC settle: the file
+      // input's own `change` event (exactly what set_input_files()
+      // dispatches) fires immediately, but the visible placeholder swap
+      // lands ~400ms later here (~1.4s on the real posting) -- long enough
+      // that a caller reading input.files right after the upload sees a
+      // populated files list while the dropzone still shows its placeholder.
+      // ?variant=resumewidgetstuck skips this listener entirely: input.files
+      // still flips, but the placeholder text never updates, reproducing
+      // the real bug the adapter's widget-state poll must catch.
+      if (variant !== "resumewidgetstuck") {
+        fileInput.addEventListener("change", function () {
+          setTimeout(function () {
+            if (fileInput.files && fileInput.files.length > 0) {
+              dropzoneText.textContent = fileInput.files[0].name;
+            }
+          }, 400);
+        });
+      }
+
+      countrySelect.addEventListener("change", function () {
+        telInput.value = "+" + (DIAL[countrySelect.value] || "");
+      });
+
+      // Reproduces the real widget's live-verified reformat-on-input
+      // behavior: whatever raw digits arrive, re-render as
+      // "+<selected country's dial code> <grouped digits>".
+      telInput.addEventListener("input", function () {
+        var code = DIAL[countrySelect.value] || "";
+        var digits = telInput.value.replace(/\D/g, "");
+        if (code && digits.indexOf(code) === 0) {
+          digits = digits.slice(code.length);
+        }
+        var grouped = digits.replace(/(\d{3})(?=\d)/g, "$1 ");
+        telInput.value = "+" + code + (grouped ? " " + grouped : "");
+      });
+
+      function questionHTML(id, label) {
+        return (
+          '<div data-micro1-question="' + id + '">' +
+          "<label>" + label + "</label>" +
+          '<input type="text" required>' +
+          "</div>"
+        );
+      }
+
+      function showConfirmation() {
+        form.style.display = "none";
+        confirmation.textContent = "Thank you for applying! We'll be in touch soon.";
+        confirmation.style.display = "";
+      }
+
+      form.addEventListener("submit", function (e) {
+        e.preventDefault();
+
+        if (step === 1) {
+          if (variant === "captcha") {
+            var captcha = document.createElement("div");
+            captcha.className = "g-recaptcha";
+            captcha.setAttribute("data-sitekey", "fixture-only");
+            document.body.appendChild(captcha);
+            return;
+          }
+          if (variant === "nosubmit") {
+            return;
+          }
+          if (variant === "step2answerable") {
+            step1.style.display = "none";
+            step2.innerHTML = questionHTML("hours", "How many hours per week are you available?");
+            step2.style.display = "";
+            step = 2;
+            return;
+          }
+          if (variant === "step2unanswerable") {
+            step1.style.display = "none";
+            step2.innerHTML = questionHTML("planet", "What's your favorite fictional planet?");
+            step2.style.display = "";
+            step = 2;
+            return;
+          }
+          if (variant === "step2startratehours") {
+            step1.style.display = "none";
+            // None of these three carry [data-micro1-question] -- the
+            // real card's own markup, only ever seen live via a
+            // screenshot, is unknown; the adapter must find them by label
+            // text alone (see micro1.py's module docstring). `name`
+            // attributes are for THIS TEST's own convenience (reading
+            // form_state.json), not something the adapter relies on.
+            step2.innerHTML =
+              '<div class="q-block">' +
+              '<label>Q1. How soon can you start the work? (in days)</label>' +
+              '<div class="stepper">' +
+              '<button type="button" class="stepper-minus">-</button>' +
+              '<input type="text" class="stepper-input" name="start_availability_days" value="1" readonly>' +
+              '<button type="button" class="stepper-plus">+</button>' +
+              "</div></div>" +
+              '<div class="q-block">' +
+              '<label>Q2. What is your expected <strong>hourly rate</strong> in USD?</label>' +
+              '<div class="rate-wrap">' +
+              '<input type="text" class="rate-input" name="hourly_rate_ask_usd" value="">' +
+              '<span class="rate-suffix">/hour</span>' +
+              "</div></div>" +
+              '<div class="q-block">' +
+              '<label>Q3. How many hours per week are you available to work?</label>' +
+              '<div class="stepper">' +
+              '<button type="button" class="stepper-minus">-</button>' +
+              '<input type="text" class="stepper-input" name="hours_per_week_available" value="1" readonly>' +
+              '<button type="button" class="stepper-plus">+</button>' +
+              "</div></div>";
+            step2.style.display = "";
+            // Real evidence: the button relabels "Next" -> "Submit" once
+            // this step is showing.
+            document.querySelector(".next-btn").textContent = "Submit";
+            // The steppers' own numeric display is readonly (real widgets
+            // gate on their internal state, not the raw input value) --
+            // mutated ONLY by these button handlers, exactly mirroring the
+            // resume dropzone's own "ignore fill, honor real interaction"
+            // shape elsewhere in this fixture.
+            step2.querySelectorAll(".stepper").forEach(function (stepperEl) {
+              var input = stepperEl.querySelector("input");
+              var minus = stepperEl.querySelector(".stepper-minus");
+              var plus = stepperEl.querySelector(".stepper-plus");
+              minus.addEventListener("click", function () {
+                input.value = String(Math.max(0, parseInt(input.value || "0", 10) - 1));
+              });
+              plus.addEventListener("click", function () {
+                input.value = String(parseInt(input.value || "0", 10) + 1);
+              });
+            });
+            step = 2;
+            return;
+          }
+          showConfirmation();
+          return;
+        }
+
+        // step === 2: this fixture always confirms once a second-step Next
+        // is actually clicked -- the adapter itself is what must refuse to
+        // ever reach here on an unanswerable-required question.
+        showConfirmation();
+      });
+    })();
+  </script>
+</body>
+</html>
