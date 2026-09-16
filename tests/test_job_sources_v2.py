@@ -1249,3 +1249,102 @@ def test_fetch_jsearch_gives_a_slow_endpoint_time_to_answer():
 
     assert seen["timeout"] is not None
     assert seen["timeout"] >= 45
+
+
+# --- linkedin -------------------------------------------------------------------
+#
+# Teodor is supplying an API key for LinkedIn jobs. The PROVIDER is not known
+# yet (several resell LinkedIn job search, each with its own host, auth header
+# and response envelope), so this fetcher is deliberately provider-agnostic:
+# endpoint, auth header name and key all come from env, and the row mapping
+# accepts the field spellings those APIs actually use. Nothing here hardcodes
+# a vendor, and -- like adzuna and jsearch -- no credential is ever read from
+# a config file (SEC020): env only.
+
+def test_fetch_linkedin_no_ops_without_a_key():
+    """The state this ships in: the key has not arrived yet. An unconfigured
+    source must cost nothing and touch no network, exactly like adzuna's and
+    jsearch's unset-credential path, so the entry can sit in sources.yaml
+    from today."""
+    job_sources.reset_linkedin_state()
+    with mock.patch("urllib.request.urlopen",
+                    side_effect=AssertionError("must not be called")) as urlopen:
+        out = job_sources.fetch_linkedin("AI engineer remote", api_url="https://x.example/search")
+    urlopen.assert_not_called()
+    assert out == []
+
+
+def test_fetch_linkedin_no_ops_without_an_endpoint():
+    """The key alone is not enough: which host it belongs to is the other
+    half, and guessing it would send his credential to the wrong service."""
+    job_sources.reset_linkedin_state()
+    with mock.patch("urllib.request.urlopen",
+                    side_effect=AssertionError("must not be called")) as urlopen:
+        out = job_sources.fetch_linkedin("AI engineer remote", api_key="k1", api_url="")
+    urlopen.assert_not_called()
+    assert out == []
+
+
+def test_fetch_linkedin_maps_the_field_spellings_these_apis_use():
+    payload = {"data": [
+        {"job_title": "AI Engineer", "employer_name": "Fixture Co",
+         "job_location": "London, United Kingdom", "job_is_remote": True,
+         "job_apply_link": "https://fixture.example/jobs/1",
+         "job_description": "Build agents in Python", "job_id": "abc123"},
+    ]}
+    calls = []
+    job_sources.reset_linkedin_state()
+    with mock.patch("urllib.request.urlopen",
+                    side_effect=_kv_router({"x.example": payload}, calls)):
+        jobs = job_sources.fetch_linkedin("AI engineer remote", api_key="k1",
+                                          api_url="https://x.example/search")
+
+    assert len(jobs) == 1
+    j = jobs[0]
+    assert j.source == "linkedin"
+    assert j.org == "Fixture Co" and j.title == "AI Engineer"
+    assert j.url == "https://fixture.example/jobs/1"
+    assert j.raw_id == "abc123"
+    # Gate 1 reads remoteness off the location string, so a remote flag has
+    # to become the prefix it looks for -- never fabricated when absent.
+    assert j.location.startswith("Remote - ")
+    assert "United Kingdom" in j.location
+
+
+def test_fetch_linkedin_drops_a_row_with_no_apply_link():
+    """A posting with no URL cannot be opened, scored against a real page, or
+    applied to. Dropping it beats carrying a row nothing downstream can use."""
+    payload = {"data": [{"job_title": "AI Engineer", "employer_name": "Fixture Co"}]}
+    job_sources.reset_linkedin_state()
+    with mock.patch("urllib.request.urlopen",
+                    side_effect=_kv_router({"x.example": payload}, [])):
+        jobs = job_sources.fetch_linkedin("q", api_key="k1", api_url="https://x.example/search")
+
+    assert jobs == []
+
+
+def test_fetch_linkedin_sends_the_key_in_the_configured_header():
+    """Providers disagree on the auth header (x-api-key, Authorization,
+    x-rapidapi-key), so the name is configuration, not a guess."""
+    payload = {"data": []}
+    calls = []
+    job_sources.reset_linkedin_state()
+    with mock.patch("urllib.request.urlopen",
+                    side_effect=_kv_router({"x.example": payload}, calls)):
+        job_sources.fetch_linkedin("q", api_key="secret-key",
+                                   api_url="https://x.example/search",
+                                   api_header="Authorization")
+
+    assert len(calls) == 1
+    _, headers = calls[0]
+    assert next(v for k, v in headers.items() if k.lower() == "authorization") == "secret-key"
+
+
+def test_fetch_linkedin_warning_never_echoes_the_key(capsys):
+    job_sources.reset_linkedin_state()
+    with mock.patch("urllib.request.urlopen",
+                    side_effect=RuntimeError("failed with key SECRETKEY")):
+        job_sources.fetch_linkedin("q", api_key="SECRETKEY", api_url="https://x.example/search")
+    printed = capsys.readouterr().out
+    assert "SECRETKEY" not in printed
+    assert "linkedin fetch failed" in printed

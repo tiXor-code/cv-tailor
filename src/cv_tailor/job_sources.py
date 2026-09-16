@@ -955,6 +955,112 @@ def fetch_jsearch(query: str, country: str = "gb", api_keys=None,
     return out
 
 
+# --- linkedin ------------------------------------------------------------------
+#
+# Provider-agnostic on purpose. Several services resell LinkedIn job search and
+# they disagree on host, auth header and response envelope, so endpoint, header
+# name and key are ALL configuration -- guessing the host would send a live
+# credential to the wrong service. Credentials come from env only, never from a
+# config file or a sources.yaml entry (SEC020), exactly like adzuna and jsearch.
+_LINKEDIN_DEFAULT_HEADER = "x-api-key"
+_LINKEDIN_STATE: dict = {"dead": set()}
+
+# The field spellings these APIs actually use, most specific first.
+_LINKEDIN_TITLE_KEYS = ("job_title", "title", "position")
+_LINKEDIN_ORG_KEYS = ("employer_name", "company_name", "company", "organization")
+_LINKEDIN_URL_KEYS = ("job_apply_link", "apply_link", "job_url", "url", "link")
+_LINKEDIN_DESC_KEYS = ("job_description", "description", "snippet")
+_LINKEDIN_LOC_KEYS = ("job_location", "location", "formatted_location", "job_city")
+_LINKEDIN_ID_KEYS = ("job_id", "id", "urn", "job_urn")
+_LINKEDIN_REMOTE_KEYS = ("job_is_remote", "is_remote", "remote")
+
+
+def reset_linkedin_state() -> None:
+    """Clear per-process linkedin state (tests, and a fresh scan run)."""
+    _LINKEDIN_STATE["dead"] = set()
+
+
+def _first_key(row: dict, keys) -> str:
+    for k in keys:
+        v = row.get(k)
+        if isinstance(v, str) and v.strip():
+            return v.strip()
+        if v not in (None, "", [], {}) and not isinstance(v, (dict, list)):
+            return str(v)
+    return ""
+
+
+def fetch_linkedin(query: str, country: str = "gb", api_key=None, api_url=None,
+                   api_header=None, budget=None) -> list[JobPosting]:
+    """LinkedIn jobs through whichever provider's key is configured.
+
+    No-ops with a warning unless BOTH the key and the endpoint are set: the
+    key alone does not say which host it belongs to. That means the source
+    entry can sit in sources.yaml from today and simply start working when
+    the credential lands, with no code change.
+    """
+    api_key = api_key if api_key is not None else os.environ.get("LINKEDIN_API_KEY", "")
+    api_url = api_url if api_url is not None else os.environ.get("LINKEDIN_API_URL", "")
+    api_header = api_header or os.environ.get("LINKEDIN_API_HEADER", _LINKEDIN_DEFAULT_HEADER)
+    if not str(api_key).strip():
+        print("warning: LINKEDIN_API_KEY not set; skipping linkedin source")
+        return []
+    if not str(api_url).strip():
+        print("warning: LINKEDIN_API_URL not set (which provider?); skipping linkedin source")
+        return []
+
+    if budget is not None and not budget.take():
+        print(f"linkedin budget exhausted; dropped {query!r}")
+        return []
+
+    sep = "&" if "?" in api_url else "?"
+    url = f"{api_url}{sep}query={quote_plus(query or '')}&country={quote_plus(country or '')}"
+    req = urllib.request.Request(url, headers={
+        api_header: str(api_key), "Accept": "application/json", "User-Agent": _BOARD_UA})
+    try:
+        with urllib.request.urlopen(req, timeout=_JSEARCH_TIMEOUT_S) as resp:
+            data = json.load(resp)
+    except Exception as e:      # noqa: BLE001 -- one dead feed never kills the scan
+        print(f"warning: linkedin fetch failed for {query!r}: {_redact(e, str(api_key))}")
+        return []
+
+    if isinstance(data, list):
+        rows = data
+    elif isinstance(data, dict):
+        rows = data.get("data") or data.get("jobs") or data.get("results") or []
+    else:
+        rows = []
+
+    out: list[JobPosting] = []
+    seen: set[str] = set()
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        link = _first_key(row, _LINKEDIN_URL_KEYS)
+        if not link:
+            # Nothing downstream can open, score or apply to a posting with no
+            # URL, so a row without one is dropped rather than carried.
+            continue
+        raw_id = _first_key(row, _LINKEDIN_ID_KEYS) or link
+        if raw_id in seen:
+            continue
+        seen.add(raw_id)
+        where = re.sub(r"\s+", " ", _first_key(row, _LINKEDIN_LOC_KEYS)).strip()[:_LOCATION_WIDTH]
+        remote = any(_flag(row.get(k)) for k in _LINKEDIN_REMOTE_KEYS) or \
+            str(row.get("workplace_type") or "").strip().lower() == "remote"
+        out.append(JobPosting(
+            source="linkedin", org=_first_key(row, _LINKEDIN_ORG_KEYS),
+            title=_first_key(row, _LINKEDIN_TITLE_KEYS),
+            # Gate 1 reads remoteness off the location string, so a provider's
+            # remote flag has to become the prefix it looks for -- and is never
+            # fabricated when the flag is absent.
+            location=f"Remote - {where}" if remote and where else (where or ""),
+            url=link, description=_strip_html(_first_key(row, _LINKEDIN_DESC_KEYS)),
+            raw_id=raw_id,
+        ))
+    return out
+
+
 def fetch_all(sources: list[dict], serp_budget=None, jsearch_budget=None) -> list[JobPosting]:
     """sources = [{'kind': 'ashby'|'greenhouse'|'lever', 'slug': '...', 'name': '...'}, ...]
 
