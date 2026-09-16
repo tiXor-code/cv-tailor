@@ -159,3 +159,56 @@ def test_a_disabled_slug_is_dropped_and_never_re_enrolled(tmp_path):
 
     assert harvest.load_harvested_sources(path) == []
     assert harvest.enrol_ashby_slugs(path, ["badboard"]) == []
+
+
+# --- one pass: probe, enrol, remember -------------------------------------------
+
+def test_harvest_and_enrol_adds_the_boards_it_finds(tmp_path):
+    path = tmp_path / "sources_harvested.yaml"
+    payload = {"jobs": [{"id": "1", "title": "Engineer"}]}
+
+    with mock.patch("urllib.request.urlopen", side_effect=_answers(payload)):
+        added = harvest.harvest_and_enrol(path, ["Checkly"])
+
+    assert added == ["checkly"]
+    assert harvest.load_harvested_sources(path) == [
+        {"kind": "ashby", "slug": "checkly", "name": "checkly"}]
+
+
+def test_a_slug_probed_in_an_earlier_run_is_never_probed_again(tmp_path):
+    """The pool is every company ever seen (1,435 today) and this runs every
+    morning. Without a memory of what has already been probed, each run would
+    re-ask someone else's API thousands of questions it already knows the
+    answer to -- and a company with no board is the common case, so the
+    no-board answer is exactly the one worth remembering."""
+    path = tmp_path / "sources_harvested.yaml"
+    calls = []
+
+    def _count(*a, **kw):
+        calls.append(1)
+        return _fake_urlopen({"jobs": []})
+
+    with mock.patch("urllib.request.urlopen", side_effect=_count):
+        harvest.harvest_and_enrol(path, ["Nobody Inc"])
+        first = len(calls)
+        harvest.harvest_and_enrol(path, ["Nobody Inc"])
+
+    assert first > 0, "the first run must actually probe"
+    assert len(calls) == first, "the second run must probe nothing"
+
+
+def test_the_number_of_probes_in_one_run_is_capped(tmp_path):
+    """Day one faces the whole backlog. The cap keeps a single morning's run
+    bounded and polite; the probe memory means the backlog still drains."""
+    path = tmp_path / "sources_harvested.yaml"
+    calls = []
+
+    def _count(*a, **kw):
+        calls.append(1)
+        return _fake_urlopen({"jobs": []})
+
+    companies = [f"Company {i}" for i in range(10)]
+    with mock.patch("urllib.request.urlopen", side_effect=_count):
+        harvest.harvest_and_enrol(path, companies, limit=3)
+
+    assert len(calls) == 3

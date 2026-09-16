@@ -110,12 +110,13 @@ def _read_registry(path) -> dict:
     harvested."""
     p = Path(path)
     if not p.exists():
-        return {"sources": [], "disabled": []}
+        return {"sources": [], "disabled": [], "probed": []}
     doc = yaml.safe_load(p.read_text()) or {}
     if not isinstance(doc, dict):
-        return {"sources": [], "disabled": []}
+        return {"sources": [], "disabled": [], "probed": []}
     doc.setdefault("sources", [])
     doc.setdefault("disabled", [])
+    doc.setdefault("probed", [])
     return doc
 
 
@@ -157,6 +158,60 @@ def enrol_ashby_slugs(path, slugs) -> list[str]:
         existing.add(low)
         added.append(slug)
     if added:
+        _write_registry(path, doc)
+    return added
+
+
+# 200 probes is roughly a minute of polite sequential requests, and the
+# backlog drains over a few mornings rather than in one burst.
+DEFAULT_PROBE_LIMIT = 200
+
+
+def harvest_and_enrol(path, companies, known_slugs=(), limit=DEFAULT_PROBE_LIMIT) -> list[str]:
+    """One harvest pass: probe unseen candidate slugs, enrol the boards that
+    validate, and remember every slug probed. Returns the slugs added.
+
+    Two properties make this safe to run every morning against someone
+    else's API:
+
+    * Probe memory. The pool is every company the scan has ever seen (1,435
+      today) and this runs daily, so without a record of what has already
+      been asked, each run would repeat thousands of questions it knows the
+      answer to. A MISS is recorded too -- "this company has no Ashby board"
+      is the common case and the answer most worth keeping.
+    * A per-run cap. Day one faces the whole backlog; the cap keeps one
+      morning bounded, and the probe memory means the backlog still drains
+      across subsequent runs instead of being retried forever.
+    """
+    doc = _read_registry(path)
+    enrolled = _lower_set(e.get("slug") for e in (doc.get("sources") or [])
+                          if isinstance(e, dict))
+    skip = _lower_set(known_slugs) | enrolled | _lower_set(doc.get("disabled"))
+    probed = _lower_set(doc.get("probed"))
+    budget = max(0, int(limit))
+    added: list[str] = []
+    changed = False
+
+    for name in companies or ():
+        if budget <= 0:
+            break
+        for slug in _slug_candidates(name):
+            if budget <= 0:
+                break
+            low = slug.lower()
+            if low in skip or low in probed:
+                continue
+            budget -= 1
+            probed.add(low)
+            doc["probed"].append(slug)
+            changed = True
+            if validate_ashby_slug(slug):
+                doc["sources"].append({"kind": "ashby", "slug": slug, "name": slug})
+                skip.add(low)
+                added.append(slug)
+                break
+
+    if changed:
         _write_registry(path, doc)
     return added
 
