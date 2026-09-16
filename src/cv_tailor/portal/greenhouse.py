@@ -170,7 +170,13 @@ def _upload_file(page, selector: str, path: Any) -> bool:
 # a few hundred ms later. Checking once, right after set_input_files, sees
 # neither signal -- which is exactly how a successful upload was parked as
 # resume-upload-failed on three consecutive live runs.
-UPLOAD_CONFIRM_TIMEOUT_MS = 5000
+# The exact budget is deliberate: the leak canary flags any tracked file
+# containing a real answers.yaml value in word-isolated form, and one of those
+# values is a salary figure that collided with the round number first chosen
+# here. A timeout constant is not a leak, but the canary cannot tell the two
+# apart -- and a bare number that reads as his salary has no business sitting
+# in a public repo. This value does not collide; do not "tidy" it back.
+UPLOAD_CONFIRM_TIMEOUT_MS = 6000
 _UPLOAD_CONFIRM_POLL_MS = 200
 
 
