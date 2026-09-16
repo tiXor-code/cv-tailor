@@ -386,6 +386,77 @@ def test_capture_evidence_never_writes_the_captcha_token(tmp_path):
     assert json.loads(written) == {"full_name": "Teodor"}
 
 
+# --- explicit-refusal detector ------------------------------------------------
+#
+# These pin the branch the whole robco fix rests on. submit_rejected decides
+# whether a park KEEPS its ledger row (ambiguous) or rolls it back (proven not
+# sent), and a kept row blocks that company|role forever through norm_key.
+
+
+class _TextHit:
+    def __init__(self, matches, visible=True):
+        self._matches = matches
+        self._visible = visible
+
+    @property
+    def first(self):
+        return self
+
+    def count(self):
+        return self._matches
+
+    def is_visible(self):
+        return self._visible
+
+
+class _TextPage:
+    """Minimal page exposing only get_by_text, optionally raising."""
+
+    def __init__(self, *, matches=0, visible=True, error=None):
+        self._matches = matches
+        self._visible = visible
+        self._error = error
+
+    def get_by_text(self, pattern):
+        if self._error is not None:
+            raise self._error
+        return _TextHit(self._matches, self._visible)
+
+
+def test_submit_rejected_matches_the_live_robco_wording():
+    """The exact sentence from the real evidence screenshot
+    (portal/no-confirmation.png, 2026-09-16). If this ever stops matching, the
+    regex has drifted away from the only refusal wording we have actually
+    observed in the wild."""
+    text = ("We couldn't submit your application. Your application submission "
+            "was flagged as possible spam. If you believe this was a mistake, "
+            "please submit your application again.")
+    assert portal_base._SUBMIT_REJECTED_RE.search(text) is not None
+
+
+def test_submit_rejected_true_on_a_visible_refusal():
+    assert portal_base.submit_rejected(_TextPage(matches=1)) is True
+
+
+def test_submit_rejected_false_when_no_refusal_text_is_present():
+    assert portal_base.submit_rejected(_TextPage(matches=0)) is False
+
+
+def test_submit_rejected_false_when_the_refusal_is_not_visible():
+    """A hidden template node is not the portal telling the user anything."""
+    assert portal_base.submit_rejected(_TextPage(matches=1, visible=False)) is False
+
+
+def test_submit_rejected_reads_a_locator_error_as_no_refusal():
+    """SAFE DIRECTION, and the reason this branch exists: a closed/navigated
+    page must read as "no refusal found", leaving the caller on its ambiguous
+    no-confirmation reason. That KEEPS the ledger row. Returning True here
+    would delete the row for a submit that may really have landed, and the
+    next run would send a duplicate application to a real employer."""
+    page = _TextPage(error=PlaywrightError("Target page, context or browser has been closed"))
+    assert portal_base.submit_rejected(page) is False
+
+
 def test_capture_evidence_creates_missing_evidence_dir(tmp_path):
     page = FakePage()
     evidence_dir = tmp_path / "nested" / "portal"
