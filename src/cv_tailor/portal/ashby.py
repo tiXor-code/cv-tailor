@@ -508,7 +508,16 @@ class AshbyAdapter(PortalAdapter):
                     return f"unanswerable-required:{question.label}"
                 continue  # optional + ungrounded -> leave blank, not a failure
 
-            if question.kind == "select":
+            if question.kind == "radio":
+                # A Yes/No toggle: the screening tier must return one of the
+                # button labels verbatim (_kind_gate enforces that for radio),
+                # so anything else is as unsafe as an ungrounded answer.
+                if answer.value not in options:
+                    if question.required:
+                        return f"unanswerable-required:{question.label}"
+                    continue
+                written = self._toggle(wrapper, answer.value)
+            elif question.kind == "select":
                 if answer.value not in options:
                     # Deterministic tier isn't options-aware; a value that
                     # doesn't match one of this select's exact options is
@@ -529,6 +538,42 @@ class AshbyAdapter(PortalAdapter):
                 return f"unwritable-required:{question.label}"
 
         return None
+
+    @staticmethod
+    def _toggle(wrapper, value: str) -> bool:
+        """Press the Yes/No option whose label is `value`, then read it back.
+
+        Verified by TWO independent signals, because a click that silently
+        does nothing is exactly how an incomplete application reached the
+        submit button on 2026-09-16: the pressed button must report
+        aria-pressed="true", AND the widget's backing hidden checkbox must
+        report checked. Measured live on the robco posting:
+
+            before  Yes:aria-pressed=false  No:aria-pressed=false  checkbox=False
+            after   Yes:aria-pressed=true   No:aria-pressed=false  checkbox=True
+
+        Returns False on any error, so a required question parks rather than
+        being submitted blank.
+        """
+        try:
+            yesno = wrapper.locator(".ashby-application-form-input-yesno").first
+            buttons = yesno.locator("button")
+            target = None
+            for i in range(buttons.count()):
+                if (buttons.nth(i).inner_text() or "").strip() == value:
+                    target = buttons.nth(i)
+                    break
+            if target is None:
+                return False
+            target.click()
+            if (target.get_attribute("aria-pressed") or "") != "true":
+                return False
+            backing = yesno.locator("input[type=checkbox]")
+            if backing.count() == 0:
+                return False
+            return backing.first.is_checked()
+        except PlaywrightError:
+            return False
 
     @staticmethod
     def _select(page, selector: str, value: str) -> bool:
@@ -609,6 +654,25 @@ class AshbyAdapter(PortalAdapter):
                     if (opt.get_attribute("value") or "") != ""
                 )
                 return Question(label=label, kind="select", required=required, options=options), selector, options
+
+            # Yes/No toggle BEFORE the input branch: the widget is backed by a
+            # hidden checkbox, so the input branch would otherwise claim it as
+            # kind="text" and fill_field would write nothing at all. Measured
+            # live on the robco posting 2026-09-16 -- two <button>s inside
+            # .ashby-application-form-input-yesno, not a <select>, not a radio
+            # group. The container class is the unhashed, stable part.
+            yesno_el = wrapper.locator(".ashby-application-form-input-yesno")
+            if yesno_el.count() > 0:
+                buttons = yesno_el.first.locator("button")
+                options = tuple(
+                    (buttons.nth(i).inner_text() or "").strip()
+                    for i in range(buttons.count())
+                    if (buttons.nth(i).inner_text() or "").strip()
+                )
+                if options:
+                    required = self._is_required(label_el, None)
+                    return (Question(label=label, kind="radio", required=required,
+                                     options=options), selector, options)
 
             textarea_el = wrapper.locator("textarea")
             if textarea_el.count() > 0:

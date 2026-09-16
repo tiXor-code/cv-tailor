@@ -33,6 +33,20 @@ _PROFILE = {
 }
 _ANSWERS = {
     "notice_period": "30 calendar days",
+    # Grounding material for work-authorization questions. DELIBERATELY
+    # FICTIONAL -- this file is tracked in a PUBLIC repo, and the rule here is
+    # that real answers.yaml values never appear in one. The first draft of
+    # this line copied the opening clause of his actual answer, which the leak
+    # canary would have MISSED (it matches the full value, not a prefix), so
+    # the guard would not have saved it.
+    #
+    # _work_auth_answer maps this to a Yes/No option ONLY when the question
+    # label names a jurisdiction; a label like RobCo's ("...the country for
+    # which you are applying") names none, so it deliberately falls through to
+    # the LLM tier rather than guessing -- which is the path this fixture
+    # exercises.
+    "work_authorization": "Fixture citizen of Examplestan; authorised to work "
+                          "in Examplestan without sponsorship.",
 }
 
 
@@ -596,6 +610,25 @@ def _tiered_client(prose: str, calls: list | None = None):
         chat=SimpleNamespace(completions=SimpleNamespace(create=create)))
 
 
+def _factual_client(reply: str):
+    """A client that answers the FACTUAL screening prompt (not the compose one).
+
+    A Yes/No toggle is a radio question, so it goes through the factual tier --
+    _tiered_client answers UNKNOWN there by design, which is right for a
+    motivation question and wrong for this one. The real LLM is instructed to
+    reply with the EXACT text of one option, and _kind_gate then requires an
+    exact match, so "Yes" is what production actually produces here.
+    """
+    from types import SimpleNamespace
+
+    def create(**kwargs):
+        return SimpleNamespace(
+            choices=[SimpleNamespace(message=SimpleNamespace(content=reply))])
+
+    return SimpleNamespace(
+        chat=SimpleNamespace(completions=SimpleNamespace(create=create)))
+
+
 def test_open_ended_required_question_is_answered_from_the_letter(chromium_page, package):
     """The last thing that parked real applications.
 
@@ -703,3 +736,55 @@ def test_a_question_required_by_rendered_asterisk_is_not_treated_as_optional(chr
 
     assert result.status == "needs_human", result.reason
     assert result.reason == "unanswerable-required:How did you hear about us?"
+
+
+# --- Yes/No toggle widgets -----------------------------------------------------
+#
+# What now stands between the system and a completed application. Measured live
+# on the robco posting 2026-09-16: "Mobility & Relocation" and "Legal
+# Eligibility to Work" are REQUIRED and are rendered as two <button>s inside
+# .ashby-application-form-input-yesno, backed by a hidden checkbox -- not a
+# <select>, not a radio group. _question_for_wrapper sees the hidden <input>,
+# calls it kind="text", and fill_field writes nothing.
+#
+# The answers are already grounded (answers.work_authorization,
+# answers.relocation), so this is a widget-driving problem, not an answering
+# one. State change observed on clicking "Yes":
+#     before  Yes:aria-pressed=false  No:aria-pressed=false  checkbox=False
+#     after   Yes:aria-pressed=true   No:aria-pressed=false  checkbox=True
+
+def test_a_yes_no_toggle_is_answered_and_verified(chromium_page, package):
+    page = chromium_page
+    # RobCo's real label names no jurisdiction, so the deterministic
+    # work-auth rule defers to the LLM -- exactly as it will live.
+    client = _factual_client("Yes")
+
+    with serve_fixtures() as base_url:
+        _goto(page, base_url, variant="yesno")
+        result = AshbyAdapter().apply(page, {"id": "job-yesno"}, package, _PROFILE,
+                                      _ANSWERS, dry_run=True, client=client)
+
+        wrapper = page.locator('[data-field-path="q_source"]')
+        yes_pressed = wrapper.locator("button", has_text="Yes").first.get_attribute("aria-pressed")
+        no_pressed = wrapper.locator("button", has_text="No").first.get_attribute("aria-pressed")
+        backing_checked = wrapper.locator("input[type=checkbox]").first.is_checked()
+
+    assert result.status == "filled", result.reason
+    assert yes_pressed == "true"
+    assert no_pressed == "false"
+    assert backing_checked is True
+
+
+def test_an_unanswerable_yes_no_toggle_parks_rather_than_leaving_it_blank(chromium_page, package):
+    """No client means the deterministic tier only, which cannot ground this
+    question -- a REQUIRED toggle with no grounded answer must park, never be
+    left silently empty the way it was before requiredness was detected."""
+    page = chromium_page
+
+    with serve_fixtures() as base_url:
+        _goto(page, base_url, variant="yesno")
+        result = AshbyAdapter().apply(page, {"id": "job-yesno-blank"}, package,
+                                      _PROFILE, _ANSWERS, dry_run=True)
+
+    assert result.status == "needs_human", result.reason
+    assert result.reason.startswith("unanswerable-required:")

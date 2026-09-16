@@ -179,6 +179,50 @@
       "Briefly describe a recent project or challenge you're proud of.";
   }
 
+  if (variant === "yesno") {
+    // Ashby's real Yes/No control, measured live on the robco posting
+    // 2026-09-16. It is NOT a <select> and NOT a radio group: it is two
+    // <button>s inside .ashby-application-form-input-yesno, backed by a
+    // hidden unnamed checkbox. Observed state change on clicking "Yes":
+    //     before  Yes:aria-pressed=false  No:aria-pressed=false  checkbox=False
+    //     after   Yes:aria-pressed=true   No:aria-pressed=false  checkbox=True
+    //
+    // _question_for_wrapper sees the hidden <input> and calls it kind="text",
+    // so fill_field writes nothing and the field stays empty. Before
+    // requiredness detection was fixed that meant an incomplete application
+    // reached the submit click; now it parks as unwritable-required. Neither
+    // is "applied", which is what this widget support is for.
+    var ynWrap = document.querySelector('[data-field-path="q_source"]');
+    var ynLabel = ynWrap.querySelector("label");
+    ynLabel.textContent = "Are you legally authorized to work in the country for which you are applying?";
+    ynLabel.className = "_heading_f7cvd_52 _required_f7cvd_91 ashby-application-form-question-title";
+    var oldSelect = ynWrap.querySelector("select");
+    if (oldSelect) { oldSelect.parentNode.removeChild(oldSelect); }
+
+    var yn = document.createElement("div");
+    yn.className = "_container_1svni_28 _yesno_1e3gg_148 ashby-application-form-input-yesno";
+    var hidden = document.createElement("input");
+    hidden.type = "checkbox";
+    hidden.style.display = "none";
+    yn.appendChild(hidden);
+    ["Yes", "No"].forEach(function (text) {
+      var btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "_container_pjyt6_1 _option_1svni_3 ashby-application-form-input-yesno-option";
+      btn.setAttribute("aria-pressed", "false");
+      btn.textContent = text;
+      btn.addEventListener("click", function () {
+        yn.querySelectorAll("button").forEach(function (o) {
+          o.setAttribute("aria-pressed", "false");
+        });
+        btn.setAttribute("aria-pressed", "true");
+        hidden.checked = true;
+      });
+      yn.appendChild(btn);
+    });
+    ynWrap.appendChild(yn);
+  }
+
   if (variant === "requiredbyclass") {
     // Ashby marks a required question with a CSS-module class on the LABEL,
     // never with the HTML `required` attribute. Measured live on the robco
