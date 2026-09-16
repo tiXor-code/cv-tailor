@@ -209,6 +209,92 @@ def test_expiry_sweep_boundary_and_statuses(tmp_path):
     assert _read(tmp_path, edge_day)["job-5"]["status"] == "pending"
 
 
+def test_a_park_that_proves_no_submission_is_retried_once(tmp_path):
+    """A park was NEVER retried, so every fix was retroactively useless.
+
+    Measured 2026-09-16: Sardine (score 8), Checkly (7) and Flip (6) each
+    parked `resume-upload-failed: no file input found` between 09-10 and
+    09-16. The cause was that the Ashby form was not reachable -- fixed the
+    same day at 13:50 (wait for render) and 14:53 (navigate to the application
+    route) -- and a live probe afterwards found the resume input present on all
+    three boards. Nothing ever re-attempted them. Same story for the arbeitnow
+    jobs that parked `no-adapter` before greenhouse learned the EU board
+    domain at 14:02.
+
+    Safe BY CONSTRUCTION: only reasons that PROVE no submission are revived, so
+    a retry can never duplicate a real application. Ambiguous parks, where the
+    send may already have landed, must stay parked forever."""
+    yesterday = (NOW - timedelta(days=1)).date().isoformat()
+    _write_day(tmp_path, yesterday, [
+        _entry(1, score=8, status="needs_human",
+               error="resume-upload-failed: no file input found"),
+        _entry(2, score=8, status="needs_human",
+               error="no-confirmation: submission may have succeeded, VERIFY on the portal"),
+        _entry(3, score=8, status="needs_review"),
+    ])
+    _write_day(tmp_path, TODAY, [])
+    ran = []
+
+    def runner(day, job_id):
+        ran.append(job_id)
+        update_entry(day, job_id, lambda e: e.update(status="sent"), queue_dir=tmp_path)
+        return 0
+
+    run_autopilot(NOW, queue_dir=tmp_path, runner=runner)
+
+    assert ran == ["job-1"], "only a park proving no submission may be retried"
+    q = _read(tmp_path, yesterday)
+    assert q["job-1"]["status"] == "sent"
+    assert q["job-1"].get("revived_at"), "the retry must be stamped, so it happens once"
+    assert q["job-2"]["status"] == "needs_human", "ambiguous park must never be retried"
+    # needs_review is the cover-letter human gate and carries no error, so
+    # proves_no_submission("") is False and it is left alone -- a gate Teodor
+    # has not ruled on must never be bypassed by this sweep.
+    assert q["job-3"]["status"] == "needs_review"
+
+
+def test_a_revived_park_is_not_revived_again(tmp_path):
+    """One free retry per job, not a loop. Without the stamp a job that parks
+    for an unfixed cause would revive, re-park and revive again every run,
+    burning a browser launch each time, forever."""
+    yesterday = (NOW - timedelta(days=1)).date().isoformat()
+    _write_day(tmp_path, yesterday, [
+        _entry(1, score=8, status="needs_human", error="no-adapter",
+               revived_at="2026-09-15T00:00:00+00:00"),
+    ])
+    _write_day(tmp_path, TODAY, [])
+    ran = []
+
+    run_autopilot(NOW, queue_dir=tmp_path, runner=lambda d, j: ran.append(j) or 0)
+
+    assert ran == []
+    assert _read(tmp_path, yesterday)["job-1"]["status"] == "needs_human"
+
+
+def test_reviving_drops_the_phantom_ledger_row(tmp_path, monkeypatch):
+    """Without this the feature is silently useless. Sardine's park left a row
+    in the applications ledger (09:04 2026-09-16), and apply_approved refuses a
+    job that already has one -- so a revived entry would be rejected as a
+    duplicate and nothing would be gained. Dropping the row is safe for exactly
+    the same reason the retry is: the reason PROVES nothing was sent."""
+    from cv_tailor import autopilot as autopilot_mod
+
+    forgotten = []
+    monkeypatch.setattr(autopilot_mod, "_ledger_forget", forgotten.append)
+
+    yesterday = (NOW - timedelta(days=1)).date().isoformat()
+    _write_day(tmp_path, yesterday, [
+        _entry(1, score=8, status="needs_human",
+               error="unwritable-required:What would be your salary expectation for this role?"),
+        _entry(2, score=8, status="needs_human", error="handoff-manual: no adapter"),
+    ])
+    _write_day(tmp_path, TODAY, [])
+
+    run_autopilot(NOW, queue_dir=tmp_path, runner=lambda d, j: 0)
+
+    assert forgotten == ["job-1"], "only the proven-no-submission row is dropped"
+
+
 def test_backlog_within_window_is_approved(tmp_path):
     yesterday = (NOW - timedelta(days=1)).date().isoformat()
     _write_day(tmp_path, yesterday, [_entry(1, score=8)])

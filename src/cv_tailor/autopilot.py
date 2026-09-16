@@ -157,6 +157,60 @@ def _reload(scan_date: str, job_id: str, *, queue_dir=None) -> dict:
     return {"id": job_id, "status": "failed", "error": "entry vanished"}
 
 
+def _sweep_revivable(now: datetime, *, queue_dir=None) -> list[tuple[str, dict]]:
+    """Give a park that PROVES no submission one more attempt.
+
+    A park used to be terminal: nothing ever re-attempted it, so every fix
+    landed too late for the jobs it would have unblocked. Measured 2026-09-16 --
+    three Ashby boards (Sardine 8, Checkly 7, Flip 6) parked
+    `resume-upload-failed: no file input found` because the FORM was not
+    reachable; that was fixed hours later the same day (13:50 wait-for-render,
+    14:53 application route) and a live probe then found the resume input
+    present on all three. They still sat at needs_human. Same for the arbeitnow
+    jobs that parked `no-adapter` before greenhouse learned the EU board domain
+    at 14:02.
+
+    Safe BY CONSTRUCTION: only reasons in proves_no_submission() qualify, so a
+    retry can never duplicate a real application. An ambiguous park -- where
+    the send may already have landed -- is left alone forever, and so is
+    needs_review, whose empty error is not a proof of anything (that gate is
+    Teodor's to rule on, not this sweep's to bypass).
+
+    Stamped with revived_at, so each job gets exactly ONE free retry instead of
+    looping park -> revive -> park and burning a browser launch every run.
+
+    The pre-inserted ledger row goes too: apply_approved refuses a job that
+    already owns one, so a revived entry would otherwise be turned away as a
+    duplicate of an application that provably never happened.
+    """
+    window_start = (now - timedelta(days=EXPIRE_DAYS)).date().isoformat()
+    revived: list[tuple[str, dict]] = []
+    for scan_date, day_dir in _day_dirs(queue_dir):
+        # Outside the window nothing would pick the entry up anyway, and
+        # flipping it to pending would only lose the park reason at expiry.
+        if scan_date < window_start:
+            continue
+        for entry in _read_day(day_dir):
+            if entry.get("status") != "needs_human" or entry.get("revived_at"):
+                continue
+            if not proves_no_submission(entry.get("error")):
+                continue
+
+            def _mut(e: dict) -> None:
+                e["status"] = "pending"
+                e["error"] = ""
+                e["revived_at"] = now.isoformat()
+
+            try:
+                fresh = update_entry(scan_date, entry["id"], _mut,
+                                      queue_dir=queue_dir, expect_status="needs_human")
+            except (StatusConflict, KeyError):
+                continue  # lost the race to a manual tap; leave it alone
+            _ledger_forget(entry["id"])
+            revived.append((scan_date, fresh))
+    return revived
+
+
 def _sweep_expired(now: datetime, *, queue_dir=None) -> list[tuple[str, dict]]:
     cutoff = now - timedelta(days=EXPIRE_DAYS)
     expired: list[tuple[str, dict]] = []
@@ -363,6 +417,11 @@ def run_autopilot(now: datetime | None = None, *, queue_dir=None,
     # new work, so stranded entries can never accumulate across days.
     report.stranded = _sweep_stranded(now, queue_dir=queue_dir,
                                       ledger_has=ledger_has)
+
+    # A park that PROVES no submission gets one more attempt, BEFORE candidates
+    # are collected, so a fix that landed after the park still reaches the job
+    # it would have unblocked -- in this same run rather than never.
+    _sweep_revivable(now, queue_dir=queue_dir)
     window_start = (now - timedelta(days=EXPIRE_DAYS)).date().isoformat()
     today = now.date().isoformat()
 
