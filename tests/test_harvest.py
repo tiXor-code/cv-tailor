@@ -49,3 +49,64 @@ def test_a_failed_probe_is_never_treated_as_a_valid_slug():
     an unreachable probe must not enrol a source."""
     with mock.patch("urllib.request.urlopen", side_effect=TimeoutError("slow")):
         assert harvest.validate_ashby_slug("checkly") is False
+
+
+# --- turning seen companies into slugs -----------------------------------------
+
+def test_harvest_returns_the_validated_slug_for_a_company_name():
+    payload = {"jobs": [{"id": "1", "title": "Forward Deployed Engineer"}]}
+    with mock.patch("urllib.request.urlopen", side_effect=_answers(payload)):
+        found = harvest.harvest_ashby_slugs(["Checkly"])
+
+    assert found == ["checkly"]
+
+
+def test_harvest_never_re_enrols_a_slug_already_configured():
+    """Enrolment must be idempotent: a slug enrolling twice, or silently
+    replacing an existing entry, has to be impossible. Comparison is
+    case-folded because sources.yaml carries 'Deel' while the derived
+    candidate is 'deel'."""
+    payload = {"jobs": [{"id": "1", "title": "Engineer"}]}
+    with mock.patch("urllib.request.urlopen", side_effect=_answers(payload)):
+        found = harvest.harvest_ashby_slugs(["Deel"], known_slugs=["Deel"])
+
+    assert found == []
+
+
+def test_harvest_collapses_two_spellings_of_the_same_company():
+    """Real duplicate from the live probe: seen_jobs carries both 'Camunda'
+    and 'camunda', and both normalise to the same board."""
+    payload = {"jobs": [{"id": "1", "title": "Engineer"}]}
+    with mock.patch("urllib.request.urlopen", side_effect=_answers(payload)):
+        found = harvest.harvest_ashby_slugs(["Camunda", "camunda"])
+
+    assert found == ["camunda"]
+
+
+def test_harvest_skips_an_aggregator_even_when_it_has_a_board():
+    """An aggregator is not an employer. Enrolling one pours thousands of
+    aggregator-quality postings into a scan that sees ~11 new postings a day,
+    burning scoring spend on jobs that never clear the floor. The board API
+    cannot tell us this -- the deny list is the only guard."""
+    payload = {"jobs": [{"id": "1", "title": "Engineer"}]}
+    with mock.patch("urllib.request.urlopen", side_effect=_answers(payload)):
+        found = harvest.harvest_ashby_slugs(["Jobgether"])
+
+    assert found == []
+
+
+def test_harvest_never_probes_the_same_slug_twice():
+    """One probe per candidate slug: the pool is every company ever seen
+    (1,435 of them), so a duplicate probe is a duplicate HTTP request against
+    someone else's API."""
+    payload = {"jobs": [{"id": "1", "title": "Engineer"}]}
+    calls = []
+
+    def _count(*a, **kw):
+        calls.append(getattr(a[0], "full_url", str(a[0])))
+        return _fake_urlopen(payload)
+
+    with mock.patch("urllib.request.urlopen", side_effect=_count):
+        harvest.harvest_ashby_slugs(["Camunda", "camunda", "Camunda"])
+
+    assert len(calls) == 1
