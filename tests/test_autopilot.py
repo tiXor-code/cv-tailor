@@ -271,6 +271,44 @@ def test_a_revived_park_is_not_revived_again(tmp_path):
     assert _read(tmp_path, yesterday)["job-1"]["status"] == "needs_human"
 
 
+def test_a_park_whose_reason_changed_earns_another_retry(tmp_path):
+    """One retry per DISTINCT reason, not one ever.
+
+    Measured 2026-09-16: the first revive moved Sardine from
+    `resume-upload-failed` to `unanswerable-required:How did you hear about
+    Sardine?` -- real progress, the widget bug gone and only a missing ANSWER
+    left. The answer was written minutes later. Under a once-ever cap that fix
+    could never reach the job it was written for, recreating exactly the
+    "every fix is retroactively useless" problem this sweep exists to solve.
+
+    A job re-parking at the SAME wall still gets nothing, so this cannot loop."""
+    yesterday = (NOW - timedelta(days=1)).date().isoformat()
+    _write_day(tmp_path, yesterday, [
+        _entry(1, score=8, status="needs_human",
+               error="unanswerable-required:How did you hear about Sardine?",
+               revived_at="2026-09-15T00:00:00+00:00",
+               revived_for="resume-upload-failed: no file input found"),
+        _entry(2, score=8, status="needs_human",
+               error="no-adapter",
+               revived_at="2026-09-15T00:00:00+00:00",
+               revived_for="no-adapter"),
+    ])
+    _write_day(tmp_path, TODAY, [])
+    ran = []
+
+    def runner(day, job_id):
+        ran.append(job_id)
+        update_entry(day, job_id, lambda e: e.update(status="sent"), queue_dir=tmp_path)
+        return 0
+
+    run_autopilot(NOW, queue_dir=tmp_path, runner=runner)
+
+    assert ran == ["job-1"], "a changed reason means progress, so one more retry"
+    q = _read(tmp_path, yesterday)
+    assert q["job-1"]["revived_for"] == "unanswerable-required:How did you hear about Sardine?"
+    assert q["job-2"]["status"] == "needs_human", "same wall twice: no further retry"
+
+
 def test_reviving_drops_the_phantom_ledger_row(tmp_path, monkeypatch):
     """Without this the feature is silently useless. Sardine's park left a row
     in the applications ledger (09:04 2026-09-16), and apply_approved refuses a

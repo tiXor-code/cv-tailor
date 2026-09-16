@@ -224,6 +224,44 @@ def _start_date_answer(answers: dict) -> Answer | None:
     return Answer(f"Within {raw.value} days of an offer", raw.grounded_in)
 
 
+def _yes_no_from_flag(answers: dict, key: str) -> Answer | None:
+    """A boolean fact rendered as the Yes/No these forms actually offer."""
+    value = (answers or {}).get(key)
+    if value is None:
+        return None
+    return Answer("Yes" if value else "No", f"answers:{key}")
+
+
+def _language_answer(label: str, q: Question, answers: dict) -> Answer | None:
+    """Yes/No for "do you speak X", grounded in the languages actually spoken.
+
+    Deliberately NOT a blanket No. Teodor speaks English and Romanian, and a
+    posting's own "are you fluent in English?" screening question would reject
+    every English-language job if this answered No to everything.
+
+    Only answers an OPTION question. A free-text "which languages do you
+    speak?" wants a list, not a Yes, so it falls through to a later tier.
+
+    Measured 2026-09-16: "Do you speak fluent german (C1-Level)?" blocked Flip.
+    Teodor: "I know zero german ... anything asking for anything but
+    english/romanian is a hard no". Spanish is being learned but is explicitly
+    not conversational, so it is absent from the list and must never be
+    claimed."""
+    spoken = (answers or {}).get("languages_spoken") or []
+    if not spoken or q.kind not in _OPTION_KINDS:
+        return None
+    for lang in spoken:
+        if re.search(rf"\b{re.escape(str(lang))}\b", label, re.I):
+            return Answer("Yes", "answers:languages_spoken")
+    # Only answer No when a language is actually NAMED. Without this,
+    # "Do you speak with customers daily?" and "Are you proficient with
+    # Kubernetes?" both answered No -- wrong values sent to a real employer.
+    for known in _KNOWN_LANGUAGES:
+        if re.search(rf"\b{re.escape(known)}\b", label, re.I):
+            return Answer("No", "answers:languages_spoken")
+    return None
+
+
 def _split_contact_name(contact: dict, *, want_last: bool) -> Answer | None:
     """One half of profile.contact.name, for a First/Last question.
 
@@ -274,6 +312,43 @@ _START_DATE_RE = re.compile(
     re.I,
 )
 _AVAILAB_RE = re.compile(r"\bavailab", re.I)
+# Questions that blocked REAL applications on 2026-09-16 until Teodor answered
+# them once: Sardine (8) "How did you hear about Sardine?", pragmatike (8)
+# "Total years of experience", Mistral.ai (7) monthly travel, Flip (6) fluent
+# German. All are facts, so they come from answers.yaml and are never inferred.
+_HOW_HEARD_RE = re.compile(r"how did you hear|where did you (?:hear|find)|how you heard", re.I)
+# TOTAL experience only. "How many years of Kubernetes experience do you have?"
+# must NOT be answered from this key -- years with one technology is a
+# different fact, and stating the overall figure there is a false claim on a
+# real application. Caught by test_context_never_lets_a_factual_question_be_composed
+# when the first version was a loose \byears?\b.{0,24}\bexperience\b.
+_YEARS_EXP_RE = re.compile(
+    r"\btotal years\b"
+    r"|\byears of (?:professional |relevant |work |industry |overall )?experience\b"
+    r"|\byears'? experience\b",
+    re.I,
+)
+_TRAVEL_RE = re.compile(r"\btravel(?:l?ing)?\b", re.I)
+_LANGUAGE_CTX_RE = re.compile(
+    r"\bspeak\b|\bfluen\w*|\bprofici\w*|\bnative speaker\b|\bmother tongue\b|\blanguage\b",
+    re.I,
+)
+# A language must actually be NAMED before this rule may answer No. Measured
+# while writing it: "Do you speak with customers daily?" and "Are you
+# proficient with Kubernetes?" both hit the context regex, named no language,
+# and were answered "No" -- a WRONG answer submitted to a real employer, the
+# worst failure class here. Anything not naming a language falls through.
+_KNOWN_LANGUAGES = frozenset({
+    "english", "romanian", "german", "french", "spanish", "italian", "dutch",
+    "portuguese", "polish", "czech", "slovak", "hungarian", "greek", "turkish",
+    "swedish", "danish", "norwegian", "finnish", "icelandic", "russian",
+    "ukrainian", "bulgarian", "serbian", "croatian", "slovenian", "bosnian",
+    "albanian", "macedonian", "estonian", "latvian", "lithuanian", "irish",
+    "welsh", "catalan", "basque", "arabic", "hebrew", "farsi", "persian",
+    "hindi", "urdu", "bengali", "tamil", "mandarin", "cantonese", "chinese",
+    "japanese", "korean", "vietnamese", "thai", "indonesian", "malay",
+    "tagalog", "swahili", "afrikaans",
+})
 _NAME_RE = re.compile(r"\bname\b", re.I)
 # Ashby renders First/Last as separate CUSTOM questions, which go through this
 # module rather than through greenhouse's own _split_name -- so without these
@@ -576,6 +651,22 @@ def _deterministic_answer(q: Question, profile: dict, answers: dict) -> Answer |
         return _work_auth_answer(q, answers)
     if _CURRENT_COMPANY_RE.search(label):
         return _current_company_answer(q, profile)
+
+    # Facts that blocked real applications until answered once (2026-09-16).
+    # Travel and language answer Yes/No only for an OPTION question; a
+    # free-text version wants prose and falls through to a later tier.
+    if _HOW_HEARD_RE.search(label):
+        return _from_answers(answers, "how_heard")
+    if _YEARS_EXP_RE.search(label):
+        return _from_answers(answers, "years_experience")
+    if _TRAVEL_RE.search(label) and q.kind in _OPTION_KINDS:
+        flag = _yes_no_from_flag(answers, "open_to_travel")
+        if flag is not None:
+            return flag
+    if _LANGUAGE_CTX_RE.search(label):
+        spoken = _language_answer(label, q, answers)
+        if spoken is not None:
+            return spoken
     # Before the availability rule: a start-date question wants a DATE, and
     # \bavailab would otherwise hand it the part-time day pattern.
     if _START_DATE_RE.search(label):

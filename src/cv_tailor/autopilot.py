@@ -191,15 +191,30 @@ def _sweep_revivable(now: datetime, *, queue_dir=None) -> list[tuple[str, dict]]
         if scan_date < window_start:
             continue
         for entry in _read_day(day_dir):
-            if entry.get("status") != "needs_human" or entry.get("revived_at"):
+            if entry.get("status") != "needs_human":
                 continue
-            if not proves_no_submission(entry.get("error")):
+            reason = entry.get("error")
+            if not proves_no_submission(reason):
                 continue
+            if entry.get("revived_at"):
+                previous = entry.get("revived_for")
+                # Once per DISTINCT reason, not once ever. Re-parking at the
+                # SAME wall earns nothing, so this cannot loop -- but a CHANGED
+                # reason means the job made real progress (measured
+                # 2026-09-16: Sardine went resume-upload-failed ->
+                # unanswerable-required once the widget bug was fixed) and
+                # deserves another attempt. Without this, a fix written minutes
+                # after a revive could never reach the job it was written for,
+                # recreating the exact problem this sweep exists to solve.
+                # A legacy stamp with no revived_for blocks, staying safe.
+                if previous is None or previous == reason:
+                    continue
 
             def _mut(e: dict) -> None:
                 e["status"] = "pending"
                 e["error"] = ""
                 e["revived_at"] = now.isoformat()
+                e["revived_for"] = reason
 
             try:
                 fresh = update_entry(scan_date, entry["id"], _mut,

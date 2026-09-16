@@ -17,5 +17,18 @@ links:
 # Optional -- not in REQUIRED_KEYS, only used by portals that ask these
 # specific questions (e.g. micro1's post-Next "start/rate/hours" step).
 start_availability_days: 14
+
+# Screening questions that blocked real applications until they were answered.
+# how_heard must match a dropdown option on most forms ("Job board",
+# "Company website", "LinkedIn", "Other").
+how_heard: "Job board"
+# A factual claim on a real application -- never inferred from the CV.
+years_experience: 5
+# Structured, so a rule can answer YES for a language you speak and NO for one
+# you do not. A blanket "No" would reject every English-language posting via
+# its own screening question.
+languages_spoken:
+  - English
+open_to_travel: false
 hourly_rate_ask_usd: 25
 hours_per_week_available: 10

@@ -29,6 +29,13 @@ _ANSWERS = {
     "hourly_rate_min_eur": 30,
     "availability_parttime": "Tuesday and Thursday evenings",
     "start_availability_days": 14,
+    # DELIBERATELY FICTIONAL and different from the real answers.yaml values:
+    # this file is tracked in a PUBLIC repo and the leak canary compares
+    # tracked test files against the real ones.
+    "how_heard": "Fixture careers page",
+    "years_experience": 9,
+    "languages_spoken": ["Examplish"],
+    "open_to_travel": True,
     "work_authorization": "EU citizen, can work anywhere in the EU.",
     "notice_period": "30 calendar days",
     "relocation": "Not open to relocation; remote only.",
@@ -102,6 +109,73 @@ def test_start_date_question_grounds_to_start_availability_days(label):
     q = _q(label)
     out = answer_question(q, _PROFILE, _ANSWERS)
     assert out == Answer("Within 14 days of an offer", "answers:start_availability_days")
+
+
+def test_how_did_you_hear_grounds_to_answers():
+    """Blocked Sardine (score 8) and others. Usually a dropdown, so the
+    deterministic value must match an option exactly."""
+    q = _q("How did you hear about Sardine?")
+    out = answer_question(q, _PROFILE, _ANSWERS)
+    assert out == Answer("Fixture careers page", "answers:how_heard")
+
+
+def test_total_years_of_experience_is_a_bare_number():
+    """Blocked pragmatike (score 8). A factual claim, so it comes from
+    answers.yaml and is never inferred from the CV."""
+    q = _q("Total years of experience", kind="number")
+    out = answer_question(q, _PROFILE, _ANSWERS)
+    assert out.value == "9"
+    assert out.grounded_in == "answers:years_experience"
+
+
+def test_a_language_he_does_not_speak_is_answered_no():
+    """Blocked Flip GmbH. Teodor speaks English and Romanian only -- German is
+    zero -- so any OTHER language must be a hard No. Claiming a language
+    falsely surfaces in the first interview, which is worse than a rejection."""
+    q = _q("Do you speak fluent german (C1-Level)?", kind="radio", options=("Yes", "No"))
+    out = answer_question(q, _PROFILE, _ANSWERS)
+    assert out.value == "No"
+
+
+def test_a_language_he_does_speak_is_answered_yes():
+    """The other half, and the reason this cannot be a blanket No: an English
+    question must answer Yes or every English-language posting would be
+    rejected by its own screening question."""
+    q = _q("Are you fluent in Examplish?", kind="radio", options=("Yes", "No"))
+    out = answer_question(q, _PROFILE, _ANSWERS)
+    assert out.value == "Yes"
+
+
+@pytest.mark.parametrize("label", [
+    "Are you comfortable speaking at conferences?",
+    "Do you speak with customers daily?",
+    "Are you proficient with Kubernetes?",
+])
+def test_a_speaking_question_that_names_no_language_is_left_alone(label):
+    r"""The hazard hiding in a bare \bspeak\b.
+
+    None of these names a language, so the "not in languages_spoken" branch
+    would answer "No" -- a WRONG answer submitted to a real employer, which is
+    the worst failure class in this system and the one the whole day was spent
+    removing. A language rule may only fire when a language is actually named;
+    anything else falls through to a later tier."""
+    q = _q(label, kind="radio", options=("Yes", "No"))
+    assert answer_question(q, _PROFILE, _ANSWERS) is None
+
+
+def test_regular_travel_question_is_answered_from_the_flag():
+    """Blocked Mistral.ai (score 7).
+
+    BOTH directions are pinned, because the flag is the only thing that may
+    decide this. The fixture deliberately carries the opposite of the real
+    answers.yaml value so this public file cannot mirror it."""
+    q = _q("This role involves occasional travel, roughly once a month. "
+           "Are you comfortable with that?", kind="radio", options=("Yes", "No"))
+    assert answer_question(q, _PROFILE, _ANSWERS).value == "Yes"
+
+    grounded = answer_question(q, _PROFILE, dict(_ANSWERS, open_to_travel=False))
+    assert grounded.value == "No"
+    assert grounded.grounded_in == "answers:open_to_travel"
 
 
 def test_number_salary_box_without_currency_fills_the_number_and_notes_the_currency():
