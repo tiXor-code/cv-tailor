@@ -20,6 +20,16 @@ LOG="$LOG_DIR/$(date +%F).log"
   set +a
 
   source "$REPO/.venv/bin/activate"
+
+  # Ashby board harvest: probes companies the scan has already seen against the
+  # keyless board API and auto-enrols the ones with a live board. Runs BEFORE
+  # the scan so a board found this morning is already a source this morning.
+  # Gated INSIDE the script by SCOUT_HARVEST in .env (safe to call always),
+  # bounded to 200 probes per run, and it ALWAYS exits 0 -- a dead board API
+  # must never stop the day's scan and autopilot from happening.
+  python "$REPO/scripts/harvest.py"
+  echo "=== harvest exit code: $? ==="
+
   # --min-score is the queue-entry floor (what gets written for review), NOT the
   # apply floor -- autopilot below applies only at/above SCOUT_AUTO_APPROVE_MIN.
   # This value must track scan.py's argparse default; the explicit flag wins, so
