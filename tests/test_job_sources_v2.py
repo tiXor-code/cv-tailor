@@ -1209,3 +1209,43 @@ def test_redact_also_blanks_the_percent_encoded_form():
     assert quote_plus(secret) not in job_sources._redact(leaked, secret)
     # and the plain form is still blanked
     assert "plain" not in job_sources._redact("a plain b", "plain")
+
+
+def test_fetch_jsearch_retries_the_next_key_when_one_times_out():
+    """A timeout is not a dead key and not an empty market -- it is one slow
+    request. The handler treated any non-HTTPError as fatal and abandoned the
+    whole query, AFTER the budget slot for that attempt was already spent, so
+    a healthy-but-slow endpoint read as "no UK jobs today".
+
+    Measured live 2026-09-16: api.openwebninja.com answered in under 45s but
+    not under 25s, and five of the six keys returned 10 results each.
+    """
+    payload = _load_fixture_json("jsearch.json")
+    calls = []
+    job_sources.reset_jsearch_key_rotation()
+    with mock.patch("urllib.request.urlopen",
+                    side_effect=_kv_router(
+                        {"openwebninja.com": [TimeoutError("read timed out"), payload]}, calls)):
+        jobs = job_sources.fetch_jsearch("AI engineer remote UK", api_keys=["k1", "k2"])
+
+    assert len(calls) == 2, "a timeout must roll to the next key, not end the query"
+    assert len(jobs) == 3
+
+
+def test_fetch_jsearch_gives_a_slow_endpoint_time_to_answer():
+    """20s was the shipped timeout; the endpoint measurably needs more than
+    25s and answers within 45s. The timeout must be generous enough that a
+    working key is not retired as dead for being slow."""
+    seen = {}
+    payload = _load_fixture_json("jsearch.json")
+
+    def _open(req, *a, **kw):
+        seen["timeout"] = kw.get("timeout", a[0] if a else None)
+        return _fake_urlopen(payload)
+
+    job_sources.reset_jsearch_key_rotation()
+    with mock.patch("urllib.request.urlopen", side_effect=_open):
+        job_sources.fetch_jsearch("AI engineer remote UK", api_keys=["k1"])
+
+    assert seen["timeout"] is not None
+    assert seen["timeout"] >= 45

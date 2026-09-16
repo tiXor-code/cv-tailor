@@ -768,6 +768,13 @@ _JSEARCH_NUM_PAGES = 1
 # `data["status"] == "FAIL"` / error-code branch could never fire and the query
 # was simply lost.
 _JSEARCH_DEAD_KEY_CODES = (401, 403, 429)
+# This endpoint is SLOW. Measured live 2026-09-16: it does not answer within
+# 20s or 25s, and does answer within 45s, with five of the six keys returning
+# a full page. The shipped 20s turned every one of those into a "fetch
+# failed" warning and an empty result -- a working source that read as a dead
+# one. Generous on purpose: the budget counter, not the clock, is what bounds
+# spend here.
+_JSEARCH_TIMEOUT_S = 60
 
 # Round-robin state, per process. Six keys exist so the load can be spread;
 # spending one down while five sit idle is exactly how the htgaj run burned
@@ -876,7 +883,7 @@ def fetch_jsearch(query: str, country: str = "gb", api_keys=None,
         req = urllib.request.Request(url, headers={
             "x-api-key": key, "Accept": "application/json", "User-Agent": _BOARD_UA})
         try:
-            with urllib.request.urlopen(req, timeout=20) as resp:
+            with urllib.request.urlopen(req, timeout=_JSEARCH_TIMEOUT_S) as resp:
                 data = json.load(resp)
             break
         except urllib.error.HTTPError as e:
@@ -889,11 +896,17 @@ def fetch_jsearch(query: str, country: str = "gb", api_keys=None,
                   f"HTTP {e.code} {_redact(e.reason, *keys)}")
             return []
         except Exception as e:
-            print(f"warning: jsearch fetch failed for {query!r}: {_redact(e, *keys)}")
-            return []
+            # A timeout or a dropped connection is neither a dead key nor an
+            # empty market -- it is one slow request. Roll to the next key
+            # instead of abandoning the query, and do NOT retire the key:
+            # being slow is not the key's fault, and retiring it would shrink
+            # the pool for the rest of the run over a transient fault.
+            print(f"warning: jsearch fetch failed for {query!r}: "
+                  f"{_redact(e, *keys)}; trying the next key")
+            continue
     if data is None:
-        print(f"warning: no usable jsearch key left (all {len(keys)} rejected); "
-              f"dropped {query!r}")
+        print(f"warning: no usable jsearch key left (all {len(keys)} rejected "
+              f"or failed); dropped {query!r}")
         return []
 
     # A budget unit has now been spent, so "nothing came back" must never be
