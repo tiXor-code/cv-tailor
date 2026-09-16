@@ -57,8 +57,21 @@ NO_SUBMIT_REASONS = frozenset({
 # the authority on whether it accepted the form. Without it the reason degraded
 # to the ambiguous no-confirmation, the row survived, and norm_key blocked
 # every robco role forever for an application that never left the machine.
+#
+# unwritable-required: the sibling of unanswerable-required, and it aborts in
+# the same place for the same reason -- a required answer EXISTED but did not
+# land in the DOM, so "grounded" was not "written" and the adapter stopped.
+# ashby raises at 583 inside the question loop vs its submit at 899,
+# greenhouse 408 vs 474, lever 279 vs 478; micro1's wizard abort can follow
+# earlier Next clicks but it checks _confirmed() after each, so an abort is
+# only ever reached on a step that was NOT the confirmed final submit.
+#
+# Live everfield 2026-09-16: aborted on a REQUIRED <input type="number">
+# salary box with only name/email/resume filled (aborted.png shows every
+# question below it untouched), and the row survived -- blocking every
+# everfield role for an application that never left the machine.
 NO_SUBMIT_REASON_PREFIXES = ("resume-upload-failed", "unanswerable-required",
-                             "submit-rejected")
+                             "submit-rejected", "unwritable-required")
 
 
 def proves_no_submission(reason: str) -> bool:
