@@ -358,3 +358,27 @@ def test_resume_upload_survives_an_uploader_that_removes_the_input(browser_page,
 
     assert filename_rendered == "cv.pdf"
     assert result.status == "filled", result.reason
+
+
+def test_armed_submit_finds_the_real_greenhouse_submit_button(tmp_path, browser_page):
+    """The live submit control carries no id.
+
+    Measured 2026-09-16 on job-boards.eu.greenhouse.io/saasgroup/jobs/4973041101:
+    #submit_app matches 0, button[type=submit] matches 1. This fixture ships
+    the button WITH id="submit_app", so test_armed_submit_reaches_confirmation
+    passes against a shape the real board does not have -- the same trap that
+    cost a camunda application on Ashby that day, which reached the submit
+    click and then spent 119 seconds waiting for an element that did not exist.
+    """
+    adapter = GreenhouseAdapter()
+    package = _package(tmp_path)
+    entry = {"id": "job-1"}
+    # Keep the red fast: live this is an actionability timeout, not a miss.
+    browser_page.set_default_timeout(3000)
+
+    with serve_fixtures() as base_url:
+        browser_page.goto(f"{base_url}/greenhouse_form.html?nosubmitid=1", wait_until="load")
+        result = adapter.apply(browser_page, entry, package, PROFILE, ANSWERS, dry_run=False)
+
+    assert result.status == "submitted", result.reason
+    assert (Path(result.evidence_dir) / "submitted.png").exists()

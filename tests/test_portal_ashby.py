@@ -630,3 +630,36 @@ def test_open_ended_required_question_is_answered_from_the_letter(chromium_page,
 
     assert result.status == "filled", result.reason
     assert "payment" in answered.lower()
+
+
+def test_armed_submit_finds_the_real_ashby_submit_button(chromium_page, package):
+    """The last step, and the one no test ever exercised against the real shape.
+
+    Every armed test here runs against ashby_form.html, whose submit button
+    carries id="submit-btn". Live Ashby does not: measured 2026-09-16 on a real
+    application page, #submit-btn matches 0 elements, there is no
+    button[type=submit] and no input[type=submit] -- the control is a plain
+    <button> with no id, no type, a hashed CSS-module class and the text
+    "Submit Application".
+
+    So the scheduled run on 2026-09-16T13:23Z got a real application all the
+    way through -- discovered, scored, approved, assembled, resume attached,
+    screening answered, free text composed -- and then spent 119 seconds
+    waiting to click an element that does not exist, failing at the very last
+    step (camunda).
+    """
+    page = chromium_page
+    # Keep the red fast: live this was a 119s actionability timeout.
+    page.set_default_timeout(3000)
+    client = _tiered_client(
+        "Fixture Co works on payment integrations, which is the same end-to-end "
+        "work I have been doing, including the reconciliation nobody wants to "
+        "debug at 2am."
+    )
+
+    with serve_fixtures() as base_url:
+        page.goto(f"{base_url}/ashby_openended.html", wait_until="load")
+        result = AshbyAdapter().apply(page, {"id": "job-armed"}, package, _PROFILE,
+                                      _ANSWERS, dry_run=False, client=client)
+
+    assert result.status == "submitted", result.reason

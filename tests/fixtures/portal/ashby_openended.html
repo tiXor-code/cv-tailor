@@ -79,7 +79,22 @@
       <textarea name="5d69bc56-0ca7-49e3-b539-ce4c829fd8fa" id="5d69bc56-0ca7-49e3-b539-ce4c829fd8fa" placeholder="Type here..." required></textarea>
     </div>
 
-    <button type="submit" id="submit-btn">Submit Application</button>
+    <!--
+      The REAL Ashby submit control: a plain <button> with NO id, NO type
+      attribute, a hashed CSS-module class, and the text "Submit Application".
+      Measured live 2026-09-16 on jobs.ashbyhq.com/cohere/.../application:
+        #submit-btn                          -> 0
+        button[type=submit]                  -> 0
+        input[type=submit]                   -> 0
+        button:has-text('Submit Application') -> 1   class="_button_zyh3g_28 _primary_..."
+
+      ashby_form.html uses id="submit-btn", so every armed test passed while
+      the live click waited 119s for an element that does not exist and the
+      application failed at the very last step (camunda, scheduled run
+      2026-09-16T13:23Z). A <button> inside a form with no type defaults to
+      type=submit, which is why the click still submits here.
+    -->
+    <button class="_button_zyh3g_28 _primary_zyh3g_44">Submit Application</button>
   </form>
 </div>
 

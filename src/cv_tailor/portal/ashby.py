@@ -79,7 +79,21 @@ _RESUME_SELECTOR = "#_systemfield_resume"
 # file input on the page (see _find_resume_locator).
 _RESUME_FALLBACK_SELECTOR = "input[type='file']"
 _COVER_LETTER_SELECTOR = "#_systemfield_cover_letter"
-_SUBMIT_SELECTOR = "#submit-btn"
+# Live Ashby renders the submit control as a plain <button> with NO id, NO
+# type attribute and a hashed CSS-module class. Measured 2026-09-16 on the
+# cohere and camunda application pages:
+#     #submit-btn                           -> 0
+#     button[type=submit]                   -> 0
+#     input[type=submit]                    -> 0
+#     button:has-text('Submit Application') -> 1 (visible, on both)
+#
+# "#submit-btn" is what ashby_form.html uses, so every armed test passed while
+# a real application spent 119 seconds waiting to click an element that does
+# not exist. The scheduled run on 2026-09-16T13:23Z took a camunda application
+# all the way -- discovered, scored, approved, assembled, resume attached,
+# screening answered, free text composed -- and lost it at the final click.
+_SUBMIT_SELECTOR = ("#submit-btn, button[type=submit], input[type=submit], "
+                    "button:has-text('Submit Application')")
 
 # Broadened confirmation detection (armed path). A real Ashby submit can signal
 # success several ways -- the canonical "been submitted" banner, a generic

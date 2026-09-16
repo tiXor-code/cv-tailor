@@ -69,6 +69,23 @@
       var form = document.getElementById("application-form");
       var submitBtn = document.getElementById("submit_app");
 
+      if (params.get("nosubmitid") === "1") {
+        // The REAL Greenhouse submit control has no id. Measured live
+        // 2026-09-16 on job-boards.eu.greenhouse.io/saasgroup/jobs/4973041101:
+        //     #submit_app                           -> 0
+        //     button[type=submit]                   -> 1
+        //     button:has-text('Submit application') -> 1
+        // This fixture ships it WITH id="submit_app", so every armed test
+        // passes while a real posting would wait out the click timeout and
+        // lose the application at the very last step -- exactly what happened
+        // to a camunda application on Ashby the same day.
+        //
+        // Stripped here rather than in the markup so the id stays available to
+        // the other variants; submitBtn was captured above, so the fixture's
+        // own handlers are unaffected.
+        if (submitBtn) { submitBtn.removeAttribute("id"); }
+      }
+
       if (params.get("captcha") === "1") {
         var captcha = document.createElement("div");
         captcha.className = "g-recaptcha";

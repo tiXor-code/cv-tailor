@@ -182,6 +182,24 @@ UPLOAD_CONFIRM_TIMEOUT_MS = 6000
 _UPLOAD_CONFIRM_POLL_MS = 200
 
 
+# The live submit control carries NO id. Measured 2026-09-16 on
+# job-boards.eu.greenhouse.io/saasgroup/jobs/4973041101:
+#     #submit_app                           -> 0
+#     button[type=submit]                   -> 1
+#     button:has-text('Submit application') -> 1
+#
+# greenhouse_form.html ships the button WITH id="submit_app", so the armed
+# tests passed against a shape the real board does not have. The same class of
+# bug on Ashby cost a real camunda application on that date: it reached the
+# submit click after everything else succeeded, then spent 119 seconds waiting
+# for an element that does not exist.
+#
+# Only _submit uses this. The handoff path deliberately never clicks -- it
+# polls the confirmation signal while a human presses the button themselves.
+_SUBMIT_SELECTOR = ("#submit_app, button[type=submit], input[type=submit], "
+                    "button:has-text('Submit application')")
+
+
 def _upload_confirmed(page, selector: str, cv_path: Any) -> bool:
     """True when the upload actually landed, by EITHER signal.
 
@@ -451,7 +469,7 @@ class GreenhouseAdapter(PortalAdapter):
     def _submit(self, page, evidence_dir: Path) -> PortalResult:
 
         try:
-            page.locator("#submit_app").click()
+            page.locator(_SUBMIT_SELECTOR).first.click()
             page.wait_for_selector("#confirmation-message", timeout=self.CONFIRM_TIMEOUT_MS)
         except PlaywrightTimeoutError:
             return PortalResult(status="needs_human", reason="no-confirmation",
