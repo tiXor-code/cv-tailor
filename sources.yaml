@@ -157,3 +157,17 @@ sources:
     query: "content producer remote part-time"
   - kind: serpapi
     query: "freelance video editor remote europe"
+  # LinkedIn. Needs LINKEDIN_API_KEY *and* LINKEDIN_API_URL in .env -- NEVER
+  # here. Several services resell LinkedIn job search and they disagree on
+  # host, auth header and response envelope, so the provider is configuration:
+  #   LINKEDIN_API_KEY=<key>
+  #   LINKEDIN_API_URL=https://<provider>/<search-path>
+  #   LINKEDIN_API_HEADER=x-api-key   # or Authorization, x-rapidapi-key, ...
+  # Until both the key and the URL are set, every entry below no-ops with one
+  # warning per scan and costs nothing -- that is the warning working, not a
+  # fault. The key alone is not enough: it does not say which host it belongs
+  # to, and guessing would send a live credential to the wrong service.
+  - kind: linkedin
+    query: "AI engineer remote europe"
+  - kind: linkedin
+    query: "forward deployed engineer remote europe"

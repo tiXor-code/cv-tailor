@@ -1097,6 +1097,12 @@ def fetch_all(sources: list[dict], serp_budget=None, jsearch_budget=None) -> lis
             pages=s.get("pages", 1), max_days_old=s.get("max_days_old")),
         "jsearch": lambda s: fetch_jsearch(
             s["query"], country=s.get("country", "gb"), budget=jsearch_budget),
+        # Same rule as the two above: no credential is read from `s`. The
+        # entry lives in the COMMITTED sources.yaml, so accepting a key there
+        # at all would invite someone to put a live value in a tracked file
+        # (SEC020). Endpoint, header and key are env only.
+        "linkedin": lambda s: fetch_linkedin(
+            s["query"], country=s.get("country", "gb")),
     }
     out: list[JobPosting] = []
     for s in sources:

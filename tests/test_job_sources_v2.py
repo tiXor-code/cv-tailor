@@ -1348,3 +1348,27 @@ def test_fetch_linkedin_warning_never_echoes_the_key(capsys):
     printed = capsys.readouterr().out
     assert "SECRETKEY" not in printed
     assert "linkedin fetch failed" in printed
+
+
+def test_fetch_all_dispatches_a_linkedin_source(monkeypatch):
+    """The entry has to be wired into fetch_all or it is inert config: an
+    unknown kind is skipped with a warning, which would look exactly like a
+    provider returning nothing once the key lands."""
+    seen = {}
+
+    def fake(query, country="gb", budget=None, **kw):
+        seen["query"] = query
+        seen["country"] = country
+        return [job_sources.JobPosting(
+            source="linkedin", org="Fixture Co", title="AI Engineer",
+            location="Remote - European Union", url="https://fixture.example/1",
+            description="d", raw_id="1")]
+
+    monkeypatch.setattr(job_sources, "fetch_linkedin", fake)
+
+    out = job_sources.fetch_all([
+        {"kind": "linkedin", "query": "AI engineer remote", "country": "gb"}])
+
+    assert seen["query"] == "AI engineer remote"
+    assert seen["country"] == "gb"
+    assert [j.source for j in out] == ["linkedin"]
