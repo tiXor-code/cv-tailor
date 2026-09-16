@@ -354,3 +354,40 @@ def test_fatal_auth_message_cannot_be_forged_by_the_exception_text(tmp_path, mon
     assert "\n  queue written" not in message         # ...as content, not a new line
     assert not any(ln.strip().startswith(("queue written", "FATAL: nothing wrong"))
                    for ln in message.splitlines()[1:])
+
+
+# --- harvested sources ----------------------------------------------------------
+
+def test_scan_merges_harvested_boards_with_the_curated_list(tmp_path):
+    """Harvested boards auto-enrol, so the scan has to actually read them --
+    an enrolment the scan never loads buys nothing. The generated registry is
+    machine-written under data/; sources.yaml stays hand-curated."""
+    (tmp_path / "sources.yaml").write_text(
+        "sources:\n  - kind: ashby\n    slug: xbowcareers\n    name: XBow\n")
+    (tmp_path / "data").mkdir()
+    (tmp_path / "data" / "sources_harvested.yaml").write_text(
+        "sources:\n  - kind: ashby\n    slug: checkly\n    name: checkly\ndisabled: []\n")
+
+    sources = scan.load_sources(tmp_path)
+
+    assert [s["slug"] for s in sources] == ["xbowcareers", "checkly"]
+
+
+def test_scan_loads_the_curated_list_when_nothing_was_ever_harvested(tmp_path):
+    (tmp_path / "sources.yaml").write_text(
+        "sources:\n  - kind: ashby\n    slug: xbowcareers\n    name: XBow\n")
+
+    assert scan.load_sources(tmp_path) == [
+        {"kind": "ashby", "slug": "xbowcareers", "name": "XBow"}]
+
+
+def test_scan_never_loads_a_disabled_board(tmp_path):
+    """A board de-enrolled for being bad must not come back through the
+    merge path."""
+    (tmp_path / "sources.yaml").write_text("sources: []\n")
+    (tmp_path / "data").mkdir()
+    (tmp_path / "data" / "sources_harvested.yaml").write_text(
+        "sources:\n  - kind: ashby\n    slug: badboard\n    name: badboard\n"
+        "disabled:\n  - badboard\n")
+
+    assert scan.load_sources(tmp_path) == []

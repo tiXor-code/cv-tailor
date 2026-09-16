@@ -31,6 +31,27 @@ from cv_tailor.digest import format_digest
 from cv_tailor.telegram import format_digest_for_telegram, send_text
 from cv_tailor.scout_queue import write_jobs_queue
 from cv_tailor.budget import JSearchBudget, SerpBudget
+from cv_tailor.harvest import load_harvested_sources
+
+# Generated registry of auto-enrolled Ashby boards, relative to the repo root.
+# Under data/ because it is machine-written runtime state (and gitignored);
+# sources.yaml stays hand-curated.
+HARVESTED_SOURCES = Path("data") / "sources_harvested.yaml"
+
+
+def load_sources(root: Path | None = None) -> list[dict]:
+    """The curated sources.yaml plus any auto-enrolled harvested boards.
+
+    Harvested boards enrol with no review step, so the scan has to read them
+    -- an enrolment the scan never loads buys nothing. A missing registry is
+    normal (nothing harvested yet), and disabled slugs are already filtered
+    out by load_harvested_sources, so a board de-enrolled for being bad
+    cannot come back through this path.
+    """
+    root = Path(root) if root is not None else ROOT
+    with open(root / "sources.yaml") as f:
+        curated = yaml.safe_load(f)["sources"] or []
+    return list(curated) + list(load_harvested_sources(root / HARVESTED_SOURCES))
 
 
 def _is_auth_error(exc: Exception) -> bool:
@@ -234,8 +255,7 @@ def main(argv=None):
     # 'ai' track built from the legacy target_keywords list so an older
     # profile.yaml (missing the tracks: block) doesn't crash the scan.
     tracks = profile.get("tracks") or {"ai": {"keywords": profile.get("target_keywords", [])}}
-    with open(ROOT / "sources.yaml") as f:
-        sources = yaml.safe_load(f)["sources"]
+    sources = load_sources()
 
     db = ":memory:" if args.dry_run else DB_PATH
     conn = connect(db)
