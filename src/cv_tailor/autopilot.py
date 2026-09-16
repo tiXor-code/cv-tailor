@@ -32,6 +32,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+from cv_tailor.apply_policy import proves_no_submission
 from cv_tailor.scout_queue import StatusConflict, queue_root, update_entry
 
 AUTO_APPROVE_MIN = 6  # hard floor; SCOUT_AUTO_APPROVE_MIN may raise it, never lower it
@@ -172,12 +173,25 @@ def _sweep_expired(now: datetime, *, queue_dir=None) -> list[tuple[str, dict]]:
                 e["error"] = "auto_expired"
                 e["decided_at"] = now.isoformat()
 
+            # Read BEFORE the mutation: _mut overwrites error with
+            # "auto_expired", which would erase the only evidence of whether
+            # this attempt ever reached a submit.
+            parked_reason = entry.get("error")
+
             try:
                 fresh = update_entry(scan_date, entry["id"], _mut,
                                       queue_dir=queue_dir, expect_status=status)
                 expired.append((scan_date, fresh))
             except (StatusConflict, KeyError):
                 continue
+
+            # The row apply_approved pre-inserted for an attempt that provably
+            # never submitted would otherwise outlive the entry and block every
+            # same-company|role sibling as a duplicate, forever, for an
+            # application nobody ever sent. Only after the CAS update lands, so
+            # a row is never dropped for an entry we failed to expire.
+            if proves_no_submission(parked_reason):
+                _ledger_forget(entry["id"])
     return expired
 
 
@@ -188,6 +202,38 @@ def ledger_db_path() -> Path:
     a test) takes effect without a restart."""
     env = os.environ.get("SCOUT_DB_PATH")
     return Path(env) if env else DEFAULT_DB_PATH
+
+
+def _ledger_forget(job_id: str) -> None:
+    """Drop this job's ledger row. Used only for a park whose reason PROVES no
+    submission happened.
+
+    Same lazy, per-call, degrade-quietly shape as _ledger_has below, including
+    the early return on a missing file: cache.connect() CREATES the database it
+    is pointed at, so cleaning up an absent ledger must not leave a phantom
+    empty one behind.
+
+    A failure here is deliberately silent. The sweep's job is to expire the
+    entry; a ledger it cannot open is a tidy-up it cannot do, not a reason to
+    kill the pass.
+    """
+    path = ledger_db_path()
+    if not path.exists():
+        return
+    try:
+        from cv_tailor import cache
+        conn = cache.connect(path)
+    except Exception:  # noqa: BLE001 - ledger unavailable, nothing to tidy
+        return
+    try:
+        cache.delete_application(conn, job_id=job_id)
+    except Exception:  # noqa: BLE001
+        pass
+    finally:
+        try:
+            conn.close()
+        except Exception:  # noqa: BLE001
+            pass
 
 
 def _ledger_has(job_id: str) -> bool:

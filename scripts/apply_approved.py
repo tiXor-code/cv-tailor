@@ -49,6 +49,11 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "src"))
 
 from cv_tailor.answers import load_answers
+from cv_tailor.apply_policy import (
+    NO_SUBMIT_REASON_PREFIXES,
+    NO_SUBMIT_REASONS,
+    proves_no_submission,
+)
 from cv_tailor.ats_resolve import resolve_ats_url
 from cv_tailor.assemble import AssembleError, assemble_package
 from cv_tailor.cache import (
@@ -233,10 +238,12 @@ def _finish_portal_dry_run(args, result) -> int:
 # "handoff-manual: no adapter" is deliberately absent: a human was driving a
 # real browser at the posting, so a genuine application is entirely possible
 # and deleting the row would let a duplicate go out later.
-_NO_SUBMIT_REASONS = {
-    "no-adapter", "missing-apply-target", "captcha", "login-required",
-    "handoff-timeout: captcha not solved",
-}
+# The judgement itself now lives in cv_tailor.apply_policy, so the expiry
+# sweep in cv_tailor.autopilot applies exactly the same rule days later. Two
+# copies would drift, and drift here is silent: a row left behind marks a job
+# as applied forever. Re-exported under the original names, which the tests
+# and the use site below pin.
+_NO_SUBMIT_REASONS = NO_SUBMIT_REASONS
 
 # Families that prove the same thing but carry a diagnostic suffix, so exact
 # membership cannot match them. Every adapter verifies the resume upload
@@ -248,14 +255,14 @@ _NO_SUBMIT_REASONS = {
 # (2026-09-10), Checkly (09-12) and Sardine (09-16): each kept a ledger row
 # for an application that was never sent, and norm_key then blocked every
 # same-company|role sibling as a duplicate forever.
-_NO_SUBMIT_REASON_PREFIXES = ("resume-upload-failed",)
+_NO_SUBMIT_REASON_PREFIXES = NO_SUBMIT_REASON_PREFIXES
 
 
 def _proves_no_submission(reason: str) -> bool:
     """True when `reason` PROVES no submission could have happened, so the
     pre-inserted ledger row must be rolled back. Exact members first, then
     the diagnostic-carrying families."""
-    return reason in _NO_SUBMIT_REASONS or reason.startswith(_NO_SUBMIT_REASON_PREFIXES)
+    return proves_no_submission(reason)
 
 
 def _handle_portal(args, entry: dict, meta: dict) -> int:

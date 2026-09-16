@@ -272,3 +272,64 @@ def test_notify_called_only_with_activity(tmp_path):
     run_autopilot(NOW + timedelta(days=1), queue_dir=tmp_path, runner=lambda d, j: 0,
                   notify=lambda t: sent2.append(t) or True)
     assert sent2 == []
+
+
+# --- expiry rolls back a ledger row that never meant anything -------------------
+#
+# The 2026-09-16 phantom rows: Flip GmbH, Checkly and Sardine each parked with
+# resume-upload-failed -- an abort that happens before any submit click -- and
+# each KEPT the ledger row apply_approved had pre-inserted. norm_key then
+# blocked every same-company|role sibling as a duplicate, permanently, for
+# applications that were never sent. Clearing them by hand needs a human; the
+# sweep already visits exactly these entries, so it can clear them itself.
+
+def _seed_ledger(db_path, job_id="job-1"):
+    from cv_tailor import cache
+    conn = cache.connect(db_path)
+    cache.record_application(conn, job_id=job_id, company="Acme Inc.",
+                             role="AI Engineer", url="https://example.test/1",
+                             channel="portal")
+    conn.close()
+
+
+def _ledger_owns(db_path, job_id="job-1") -> bool:
+    from cv_tailor import cache
+    conn = cache.connect(db_path)
+    try:
+        return cache.own_application_recorded(conn, job_id)
+    finally:
+        conn.close()
+
+
+def test_expiring_a_park_that_never_submitted_clears_its_ledger_row(tmp_path, monkeypatch):
+    db = tmp_path / "jobs.db"
+    monkeypatch.setenv("SCOUT_DB_PATH", str(db))
+    _seed_ledger(db)
+    old_day = (NOW - timedelta(days=8)).date().isoformat()
+    _write_day(tmp_path, old_day, [_entry(1, status="needs_human")])
+    update_entry(old_day, "job-1",
+                 lambda e: e.update(error="resume-upload-failed: no file input found"),
+                 queue_dir=tmp_path)
+    _write_day(tmp_path, TODAY, [])
+
+    run_autopilot(NOW, queue_dir=tmp_path, runner=lambda d, j: 0)
+
+    assert _ledger_owns(db) is False, "a park that never submitted must not keep its row"
+
+
+def test_expiring_an_ambiguous_park_keeps_its_ledger_row(tmp_path, monkeypatch):
+    """no-confirmation means the submit may well have landed server-side.
+    Deleting that row would let a genuine duplicate go out later."""
+    db = tmp_path / "jobs.db"
+    monkeypatch.setenv("SCOUT_DB_PATH", str(db))
+    _seed_ledger(db)
+    old_day = (NOW - timedelta(days=8)).date().isoformat()
+    _write_day(tmp_path, old_day, [_entry(1, status="needs_human")])
+    update_entry(old_day, "job-1",
+                 lambda e: e.update(error="no-confirmation: submission may have succeeded"),
+                 queue_dir=tmp_path)
+    _write_day(tmp_path, TODAY, [])
+
+    run_autopilot(NOW, queue_dir=tmp_path, runner=lambda d, j: 0)
+
+    assert _ledger_owns(db) is True
