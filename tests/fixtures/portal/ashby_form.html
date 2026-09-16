@@ -179,6 +179,71 @@
       "Briefly describe a recent project or challenge you're proud of.";
   }
 
+  if (variant === "locationcombo") {
+    // Ashby's Location control is a COMBOBOX: typed text is a search query and
+    // is DISCARDED on blur unless an option is actually picked. Measured live
+    // on the robco posting 2026-09-16:
+    //     after fill            'Bucharest, Romania'   <- fill DOES write
+    //     after blur (no pick)  ''                     <- discarded
+    //     after type + pick     'Bucharest, Romania'
+    //     after pick + blur     'Bucharest, Romania'   <- survives
+    //
+    // The contact path wrote Location with fill_field and then lost it the
+    // moment focus moved to the next contact field -- and _verify_contact only
+    // checks name + email, so the loss was invisible and the adapter believed
+    // the form complete. That is how robco reached the submit click with a
+    // required field empty.
+    //
+    // The decoy is deliberately FIRST: the live list offered
+    // 'Bucharest, Romania' twice plus 'Bucharzewo, Miedzychod County', so
+    // clicking the first row blindly is not good enough -- the exact text has
+    // to be matched.
+    var loc = document.getElementById("_systemfield_location");
+    loc.setAttribute("role", "combobox");
+    loc.setAttribute("aria-expanded", "false");
+    loc.setAttribute("placeholder", "Start typing...");
+    var committed = false;
+
+    var listbox = document.createElement("div");
+    listbox.setAttribute("role", "listbox");
+    listbox.style.display = "none";
+    loc.parentNode.appendChild(listbox);
+
+    loc.addEventListener("input", function () {
+      committed = false;
+      listbox.innerHTML = "";
+      if (!loc.value) {
+        listbox.style.display = "none";
+        loc.setAttribute("aria-expanded", "false");
+        return;
+      }
+      // ?nomatch=1 offers DECOYS ONLY, so the adapter can find no exact match
+      // for the profile's location. A required field it cannot commit must
+      // abort rather than sail on as "filled" with the box empty.
+      var rows = params.get("nomatch") === "1"
+        ? ["Zzz Decoy County", "Elsewhere-On-Thames, Nowhere"]
+        : ["Zzz Decoy County", loc.value, loc.value];
+      rows.forEach(function (text) {
+        var opt = document.createElement("div");
+        opt.setAttribute("role", "option");
+        opt.textContent = text;
+        opt.addEventListener("click", function () {
+          loc.value = text;
+          committed = true;
+          listbox.style.display = "none";
+          loc.setAttribute("aria-expanded", "false");
+        });
+        listbox.appendChild(opt);
+      });
+      listbox.style.display = "block";
+      loc.setAttribute("aria-expanded", "true");
+    });
+
+    loc.addEventListener("blur", function () {
+      if (!committed) { loc.value = ""; }
+    });
+  }
+
   if (variant === "yesno") {
     // Ashby's real Yes/No control, measured live on the robco posting
     // 2026-09-16. It is NOT a <select> and NOT a radio group: it is two

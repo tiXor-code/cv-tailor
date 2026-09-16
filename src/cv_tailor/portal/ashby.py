@@ -71,6 +71,19 @@ CONFIRMATION_TIMEOUT_MS = 30_000
 # and an aborted.png showing a blank/spinner page).
 FORM_READY_TIMEOUT_MS = 15_000
 
+# How long to wait for a combobox's suggestion list after writing the value.
+#
+# Measured live on the robco posting 2026-09-16: a programmatic fill() alone
+# opens the listbox after 0.8s -- simulating keystrokes was never required.
+# 3s is nearly 4x the measured latency.
+#
+# Kept deliberately tight rather than generous: a control can advertise
+# role="combobox" and never suggest anything, and this wait is pure dead time
+# on that path before the plain-write fallback. An over-long value is not
+# harmlessly cautious -- it stalls the whole fill, which in handoff mode hands
+# the page a wide window to change underneath the adapter.
+COMBOBOX_OPTION_TIMEOUT_MS = 3_000
+
 _APPLICATION_TAB_SELECTOR = "#job-application-form"
 _RESUME_SELECTOR = "#_systemfield_resume"
 # Ashby's real resume field is a custom drag-drop widget: a hidden
@@ -189,7 +202,19 @@ class AshbyAdapter(PortalAdapter):
 
         contact = (profile or {}).get("contact", {}) or {}
         for selector, key in _CONTACT_FIELD_SELECTORS:
-            fill_field(page, selector, contact.get(key, ""))
+            value = contact.get(key, "")
+            if not value:
+                continue
+            target = self._contact_selector(page, selector)
+            if target is None:
+                continue        # this board has no such field: a non-event
+            # A combobox (Ashby's Location) discards typed text on blur unless
+            # an option is picked, so fill_field silently loses it. Every other
+            # board and field keeps the plain path.
+            if self._is_combobox(page, target):
+                self._combobox(page, target, value)
+            else:
+                fill_field(page, target, value)
 
         # The two universally-required contact fields (name, email) are
         # write-verified: if either was given but did not land in the DOM,
@@ -456,11 +481,26 @@ class AshbyAdapter(PortalAdapter):
 
     @staticmethod
     def _verify_contact(page, contact: dict) -> str | None:
-        """Read back name + email after filling. Returns the first field key
-        whose non-empty grounded value did not land in the DOM, else None."""
-        for selector, key in (("#_systemfield_name", "name"), ("#_systemfield_email", "email")):
+        """Read back name + email + location after filling. Returns the first
+        field key whose non-empty grounded value did not land in the DOM, else
+        None.
+
+        Location joined this list because it is the one contact field rendered
+        as a combobox: fill_field reports success and the value is discarded on
+        blur, so without a read-back the adapter believed a required field was
+        filled when it was empty -- which is how robco reached the submit click
+        on 2026-09-16.
+        """
+        for selector, key in (("#_systemfield_name", "name"),
+                              ("#_systemfield_email", "email"),
+                              ("#_systemfield_location", "location")):
             expected = (contact or {}).get(key, "")
-            if expected and not verify_filled(page, selector, expected):
+            if not expected:
+                continue
+            target = AshbyAdapter._contact_selector(page, selector)
+            if target is None:
+                continue        # field absent on this board -> nothing to lose
+            if not verify_filled(page, target, expected):
                 return key
         return None
 
@@ -538,6 +578,128 @@ class AshbyAdapter(PortalAdapter):
                 return f"unwritable-required:{question.label}"
 
         return None
+
+    @staticmethod
+    def _contact_selector(page, selector: str) -> str | None:
+        """Resolve a contact field to a selector that actually matches.
+
+        Ashby is inconsistent about ids. Measured live on the robco posting
+        2026-09-16: #_systemfield_name and #_systemfield_email each matched 1,
+        while #_systemfield_location matched ZERO -- that input carries no id
+        and no name, only role="combobox", inside a wrapper whose
+        data-field-path IS "_systemfield_location" (its <label for> points at
+        an id nothing on the page has).
+
+        Returns the id selector when it matches, else the wrapper-scoped
+        input, else None -- and None means the board simply does not have this
+        field, which is a non-event rather than a failure. Conflating "absent"
+        with "lost" is what made five unrelated tests fail on fixtures that
+        legitimately have no location field at all.
+        """
+        try:
+            if page.locator(selector).count() > 0:
+                return selector
+        except PlaywrightError:
+            return None
+        scoped = f'[data-field-path="{selector.lstrip("#")}"] input'
+        try:
+            return scoped if page.locator(scoped).count() > 0 else None
+        except PlaywrightError:
+            return None
+
+    @staticmethod
+    def _is_combobox(page, selector: str) -> bool:
+        """True when this control is a combobox rather than a plain input.
+        Never raises -- an unreadable control reads as "not a combobox", which
+        keeps the plain fill_field path for every other board."""
+        try:
+            loc = page.locator(selector)
+            if loc.count() == 0:
+                return False
+            return (loc.first.get_attribute("role") or "") == "combobox"
+        except PlaywrightError:
+            return False
+
+    @staticmethod
+    def _combobox(page, selector: str, value: str) -> bool:
+        """Type `value`, pick the option matching it EXACTLY, and confirm it
+        survived losing focus.
+
+        Ashby's Location control treats typed text as a SEARCH QUERY and
+        discards it on blur unless an option was actually selected. Measured
+        live on the robco posting 2026-09-16:
+
+            after fill            'Bucharest, Romania'   <- fill DOES write
+            after blur (no pick)  ''                     <- discarded
+            after type + pick     'Bucharest, Romania'
+            after pick + blur     'Bucharest, Romania'   <- survives
+
+        So fill_field "succeeded" and the value vanished the moment the next
+        contact field took focus -- with _verify_contact checking only name and
+        email, that loss was invisible, and robco reached the submit click with
+        a required field empty.
+
+        The match must be EXACT: the live list offered 'Bucharest, Romania'
+        twice alongside 'Bucharzewo, Miedzychod County', so clicking the first
+        row is not good enough. Returns False on anything unexpected, so the
+        caller aborts rather than submitting the field blank.
+        """
+        try:
+            box = page.locator(selector).first
+            box.click()
+            # ATOMIC write, never per-character typing. Measured live: fill()
+            # alone opens the suggestion list after 0.8s, so simulating
+            # keystrokes bought nothing and cost 1.2s -- a window in which the
+            # page can submit or re-render out from under the interaction and
+            # strand a half-typed value. That is precisely what happened in
+            # the handoff fixture, whose auto-clicker submitted mid-typing and
+            # left 'Lo' behind in the box.
+            box.fill(value)
+
+            try:
+                page.wait_for_selector("[role=option]", state="visible",
+                                       timeout=COMBOBOX_OPTION_TIMEOUT_MS)
+            except PlaywrightError:
+                # Advertises role="combobox" but never suggests -- some boards
+                # mark a plain input that way. The value is already written, so
+                # simply confirm it survives losing focus.
+                return AshbyAdapter._value_survives_blur(page, box, value)
+
+            options = page.locator("[role=option]")
+            for i in range(options.count()):
+                if (options.nth(i).inner_text() or "").strip() == value:
+                    options.nth(i).click()
+                    return AshbyAdapter._value_survives_blur(page, box, value)
+
+            # No exact match: discard the uncommitted query rather than leave
+            # it to read back as a filled value. The live list offered
+            # 'Bucharest, Romania' twice alongside 'Romania', so picking the
+            # first row blindly is not good enough.
+            try:
+                box.fill("")
+                box.evaluate("el => el.blur()")
+            except PlaywrightError:
+                pass
+            return False
+        except PlaywrightError:
+            return False
+
+    @staticmethod
+    def _value_survives_blur(page, box, value: str) -> bool:
+        """True iff `box` still holds `value` after it loses focus.
+
+        Read back only AFTER giving up focus: an uncommitted combobox value
+        disappears at exactly that moment, so checking while the field is
+        still focused proves nothing. Never raises."""
+        try:
+            box.evaluate("el => el.blur()")
+            page.wait_for_timeout(150)
+        except PlaywrightError:
+            pass
+        try:
+            return (box.input_value() or "").strip() == value
+        except PlaywrightError:
+            return False
 
     @staticmethod
     def _toggle(wrapper, value: str) -> bool:

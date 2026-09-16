@@ -788,3 +788,50 @@ def test_an_unanswerable_yes_no_toggle_parks_rather_than_leaving_it_blank(chromi
 
     assert result.status == "needs_human", result.reason
     assert result.reason.startswith("unanswerable-required:")
+
+
+# --- location combobox ---------------------------------------------------------
+#
+# The last required widget standing between a robco-shaped posting and a
+# completed application, and the subtlest: fill_field DOES write the value, so
+# nothing looks wrong -- but the control treats typed text as a search query and
+# discards it on blur unless an option is selected. Measured live on robco:
+#
+#     after fill            'Bucharest, Romania'   <- fill DOES write
+#     after blur (no pick)  ''                     <- discarded
+#     after type + pick     'Bucharest, Romania'
+#     after pick + blur     'Bucharest, Romania'   <- survives
+#
+# Location is NOT in the screening path (_systemfield_location is in
+# _HANDLED_FIELD_IDS), so the contact fill owns it -- and _verify_contact only
+# read-verifies name + email, which is why losing it was invisible and robco
+# reached the submit click with a required field empty.
+
+def test_location_combobox_value_survives_moving_to_the_next_field(chromium_page, package):
+    page = chromium_page
+
+    with serve_fixtures() as base_url:
+        _goto(page, base_url, variant="locationcombo")
+        result = AshbyAdapter().apply(page, {"id": "job-loc"}, package, _PROFILE,
+                                      _ANSWERS, dry_run=True)
+        landed = page.locator("#_systemfield_location").input_value()
+
+    assert result.status == "filled", result.reason
+    assert landed == _PROFILE["contact"]["location"]
+
+
+def test_location_combobox_that_offers_no_match_aborts_rather_than_submitting_blank(
+        chromium_page, package):
+    """A required field we cannot commit must abort, never sail on as "filled".
+    The fixture's decoy-only variant offers no exact match for the profile's
+    location."""
+    page = chromium_page
+    profile = {"contact": dict(_PROFILE["contact"], location="Nowhere-On-Sea, Atlantis")}
+
+    with serve_fixtures() as base_url:
+        _goto(page, base_url, variant="locationcombo&nomatch=1")
+        result = AshbyAdapter().apply(page, {"id": "job-loc-nomatch"}, package,
+                                      profile, _ANSWERS, dry_run=True)
+
+    assert result.status == "needs_human", result.reason
+    assert result.reason == "contact-fill-failed"
