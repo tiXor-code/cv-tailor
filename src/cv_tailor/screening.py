@@ -198,6 +198,19 @@ def _from_answers(answers: dict, key: str) -> Answer | None:
     return Answer(str(value), f"answers:{key}")
 
 
+def _start_date_answer(answers: dict) -> Answer | None:
+    """Phrase start_availability_days for a free-text box.
+
+    A bare "14" under a label like "Available from" reads as nothing at all,
+    so the number is spelled out -- the same reason _salary_answer states its
+    currency instead of typing a naked figure.
+    """
+    raw = _from_answers(answers, "start_availability_days")
+    if raw is None:
+        return None
+    return Answer(f"Within {raw.value} days of an offer", raw.grounded_in)
+
+
 def _split_contact_name(contact: dict, *, want_last: bool) -> Answer | None:
     """One half of profile.contact.name, for a First/Last question.
 
@@ -230,6 +243,22 @@ def _from_contact(contact: dict, key: str) -> Answer | None:
 _RELOC_RE = re.compile(r"\breloc", re.I)                       # relocate/relocation
 _SALARY_RE = re.compile(
     r"\bsalary\b|\bcompensation\b|\bremuneration\b|\bpay expectation|\bexpected pay\b", re.I
+)
+# A start-date question is NOT a part-time-availability question, but the bare
+# \bavailab below claims both. Measured on the live RobCo Ashby form
+# 2026-09-16: "Available from" (described there as "Let us know by when you
+# would be able to start") was filled with the part-time DAY PATTERN.
+# Deliberately narrow: the "availab" arm requires a following "from"/"to
+# start", so "What is your availability for part-time work?" still falls
+# through to _AVAILAB_RE. The other arms cover phrasings that used to match
+# nothing here and fell through to the LLM tier ungrounded.
+_START_DATE_RE = re.compile(
+    r"\bstart date\b"
+    r"|\bwhen (can|could|would) you start\b"
+    r"|\bhow soon\b"
+    r"|\bearliest\b"
+    r"|\bavailab\w* (from|to start)\b",
+    re.I,
 )
 _AVAILAB_RE = re.compile(r"\bavailab", re.I)
 _NAME_RE = re.compile(r"\bname\b", re.I)
@@ -520,6 +549,10 @@ def _deterministic_answer(q: Question, profile: dict, answers: dict) -> Answer |
         return _work_auth_answer(q, answers)
     if _CURRENT_COMPANY_RE.search(label):
         return _current_company_answer(q, profile)
+    # Before the availability rule: a start-date question wants a DATE, and
+    # \bavailab would otherwise hand it the part-time day pattern.
+    if _START_DATE_RE.search(label):
+        return _start_date_answer(answers)
     if _AVAILAB_RE.search(label):
         return _from_answers(answers, "availability_parttime")
 

@@ -28,6 +28,7 @@ _ANSWERS = {
     "salary_fulltime_net_eur_month": "2600-2900",
     "hourly_rate_min_eur": 30,
     "availability_parttime": "Tuesday and Thursday evenings",
+    "start_availability_days": 14,
     "work_authorization": "EU citizen, can work anywhere in the EU.",
     "notice_period": "30 calendar days",
     "relocation": "Not open to relocation; remote only.",
@@ -77,6 +78,30 @@ def test_deterministic_answers_yaml_keys(label, key):
     q = _q(label)
     out = answer_question(q, _PROFILE, _ANSWERS)
     assert out == Answer(str(_ANSWERS[key]), f"answers:{key}")
+
+
+@pytest.mark.parametrize(
+    "label",
+    [
+        "Available from",
+        "Available to start",
+        "When can you start?",
+        "How soon can you start?",
+        "Earliest start date",
+        "Start date",
+    ],
+)
+def test_start_date_question_grounds_to_start_availability_days(label):
+    # Measured on the live RobCo Ashby form 2026-09-16: "Available from",
+    # described on the page as "Let us know by when you would be able to
+    # start", was answered with the part-time DAY PATTERN -- because
+    # _AVAILAB_RE is a bare \bavailab and claims every availability phrasing.
+    # Like the First/Last name bug, this does not park the job, it SUBMITS a
+    # wrong value, which is worse. A bare "14" would be just as wrong in a
+    # free-text box, so the number is phrased the way salary already is.
+    q = _q(label)
+    out = answer_question(q, _PROFILE, _ANSWERS)
+    assert out == Answer("Within 14 days of an offer", "answers:start_availability_days")
 
 
 def test_deterministic_salary_gross_by_default():
