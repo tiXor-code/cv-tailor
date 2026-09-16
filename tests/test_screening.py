@@ -104,6 +104,36 @@ def test_start_date_question_grounds_to_start_availability_days(label):
     assert out == Answer("Within 14 days of an offer", "answers:start_availability_days")
 
 
+def test_number_salary_box_without_currency_fills_the_number_and_notes_the_currency():
+    """Teodor's policy, decided 2026-09-16 because it is his money.
+
+    Live everfield (AI Builder, Poland-Warsaw|Remote): the REQUIRED salary box
+    is an <input type="number">, which silently rejects "4500 EUR gross per
+    month" -- fill() writes nothing and the run aborts unwritable-required.
+    A number box can only take a naked 4500, and a Polish employer reads that
+    as PLN, roughly 4x below what was meant, SUBMITTED rather than parked.
+
+    So the number goes in AND the currency is stated separately. screening
+    supplies the sentence; placing it is the adapter's job, and the adapter
+    must park when the form has nowhere suitable to say it."""
+    q = _q("What would be your salary expectation for this role?", kind="number")
+    out = answer_question(q, _PROFILE, _ANSWERS)
+    assert out.value == "4500"
+    assert out.grounded_in == "answers:salary_fulltime_gross_eur_month"
+    assert "4500" in out.note and "EUR" in out.note and "gross" in out.note
+
+
+def test_number_salary_box_that_already_names_eur_needs_no_note():
+    """The label states the currency, so there is nothing left to disambiguate
+    and no note should be produced -- otherwise every EUR-explicit posting
+    would start demanding a free-text box it does not need, and park without
+    one."""
+    q = _q("Expected monthly salary in EUR", kind="number")
+    out = answer_question(q, _PROFILE, _ANSWERS)
+    assert out.value == "4500"
+    assert out.note == ""
+
+
 def test_deterministic_salary_gross_by_default():
     # CHANGED (fix 4): a text salary field now STATES the currency instead of
     # typing a bare number a US employer could read as USD.

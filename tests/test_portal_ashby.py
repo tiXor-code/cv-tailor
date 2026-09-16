@@ -33,6 +33,10 @@ _PROFILE = {
 }
 _ANSWERS = {
     "notice_period": "30 calendar days",
+    # Fictional, like every value here -- this file is tracked in a PUBLIC
+    # repo (see the work_authorization note below for the near-miss that
+    # established the rule). Deliberately not a round, plausible figure.
+    "salary_fulltime_gross_eur_month": 4321,
     # Grounding material for work-authorization questions. DELIBERATELY
     # FICTIONAL -- this file is tracked in a PUBLIC repo, and the rule here is
     # that real answers.yaml values never appear in one. The first draft of
@@ -374,6 +378,57 @@ def test_apply_armed_no_confirmation_within_timeout_returns_needs_human(chromium
 
     evidence_dir = Path(result.evidence_dir)
     assert (evidence_dir / "no-confirmation.png").exists()
+
+
+def test_number_salary_box_is_filled_and_the_currency_stated_elsewhere(chromium_page, package):
+    """Live everfield 2026-09-16: the REQUIRED salary box is <input
+    type="number">, which silently refuses "4321 EUR gross per month" -- so
+    fill() wrote nothing, verify_filled failed, and the run aborted
+    unwritable-required having sent nothing.
+
+    Teodor's policy: write the number, and state the currency in a free-text
+    box on the same form, because a non-euro employer reads a naked 4321 about
+    4x wrong and it would be SUBMITTED rather than parked."""
+    page = chromium_page
+    entry = {"id": "job-1"}
+
+    with serve_fixtures() as base_url:
+        _goto(page, base_url, variant="salarynumber")
+        result = AshbyAdapter().apply(page, entry, package, _PROFILE, _ANSWERS, dry_run=True)
+        salary = page.locator("#q_salary_number").input_value()
+        letter = page.locator("#_systemfield_cover_letter").input_value()
+        other = page.locator("#q_anything_else").input_value()
+
+    assert result.status == "filled", result.reason
+    assert salary == "4321", "a number box can only take the bare figure"
+    # The cover letter is the natural place to say it -- it is a letter to the
+    # employer, and the adapter has already written the letter into that box,
+    # so the note must APPEND rather than clobber it.
+    assert "I would be a strong fit" in letter, "the cover letter was overwritten"
+    assert "4321" in letter and "EUR" in letter, f"currency never stated: {letter!r}"
+    assert other == "", "the cover letter is preferred over a generic free-text box"
+
+
+def test_number_salary_box_with_nowhere_to_state_the_currency_parks(chromium_page, package):
+    """The other half of the policy, and the one that protects real money.
+
+    everfield's only <textarea> is the hidden, unlabelled g-recaptcha-response
+    and its "Cover letter" is a FILE upload, so there is nowhere to say "EUR".
+    With no suitable box the run must PARK rather than submit a bare figure --
+    and must leave no half-filled debris behind, the lesson from the location
+    combobox."""
+    page = chromium_page
+    entry = {"id": "job-1"}
+
+    with serve_fixtures() as base_url:
+        _goto(page, base_url, variant="salarynumbernonote")
+        result = AshbyAdapter().apply(page, entry, package, _PROFILE, _ANSWERS, dry_run=True)
+        salary = page.locator("#q_salary_number").input_value()
+
+    assert result.status == "needs_human"
+    assert result.reason == (
+        "unanswerable-required:What would be your salary expectation for this role?")
+    assert salary == "", "parked, so nothing should have been typed into the box"
 
 
 def test_apply_armed_explicit_refusal_proves_nothing_was_submitted(

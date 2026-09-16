@@ -553,6 +553,20 @@ class AshbyAdapter(PortalAdapter):
                     return f"unanswerable-required:{question.label}"
                 continue  # optional + ungrounded -> leave blank, not a failure
 
+            # A note means the CONTROL cannot carry the whole answer: a salary
+            # <input type="number"> holds 4321 but not "EUR gross per month",
+            # and a non-euro employer reads the naked figure ~4x wrong. Policy
+            # (Teodor, 2026-09-16): state the currency in a free-text box, or
+            # PARK -- never submit the bare number.
+            #
+            # Resolved BEFORE anything is typed, so a park leaves no
+            # half-filled debris behind (the location-combobox lesson).
+            note_box = self._note_target(page) if answer.note else None
+            if answer.note and note_box is None:
+                if question.required:
+                    return f"unanswerable-required:{question.label}"
+                continue
+
             if question.kind == "radio":
                 # A Yes/No toggle: the screening tier must return one of the
                 # button labels verbatim (_kind_gate enforces that for radio),
@@ -581,6 +595,12 @@ class AshbyAdapter(PortalAdapter):
             # blank field, not a needs_human.
             if not written and question.required:
                 return f"unwritable-required:{question.label}"
+
+            # The figure landed; now the currency must too, or the employer
+            # reads a bare number. A failure here is a park, not a shrug.
+            if written and answer.note and note_box is not None:
+                if not self._append_note(note_box, answer.note) and question.required:
+                    return f"unanswerable-required:{question.label}"
 
         return None
 
@@ -849,7 +869,17 @@ class AshbyAdapter(PortalAdapter):
             input_el = wrapper.locator("input")
             if input_el.count() > 0:
                 required = self._is_required(label_el, input_el.first)
-                return Question(label=label, kind="text", required=required), selector, ()
+                # An <input type="number"> silently REFUSES non-numeric text:
+                # fill() writes nothing and verify_filled then fails, so
+                # reporting it as kind="text" made screening compose "4321 EUR
+                # gross per month" for a box that can only hold 4321, and the
+                # run aborted unwritable-required. Measured live on everfield
+                # 2026-09-16 (type="number", not readonly, not disabled).
+                # screening already understands kind="number"; only this
+                # detection was missing.
+                input_type = (input_el.first.get_attribute("type") or "").strip().lower()
+                kind = "number" if input_type == "number" else "text"
+                return Question(label=label, kind=kind, required=required), selector, ()
         except PlaywrightError:
             pass
         return None, None, None
@@ -958,6 +988,56 @@ class AshbyAdapter(PortalAdapter):
         capture_evidence(page, evidence_dir, "no-confirmation")
         return PortalResult(status="needs_human", reason=_NO_CONFIRMATION_REASON,
                              evidence_dir=str(evidence_dir))
+
+    @staticmethod
+    def _note_target(page):
+        """A VISIBLE, meaningfully-labelled long-form box to carry a note that
+        the answer's own control cannot hold, or None.
+
+        The cover letter is preferred: it is a letter to the employer, stating
+        a salary expectation in it is normal, and the adapter has already
+        written the letter there (so _append_note must not clobber it).
+
+        Deliberately strict about the fallback. Live everfield 2026-09-16 has
+        NOWHERE to say this: its "Cover letter" is a FILE upload and its only
+        <textarea> is reCAPTCHA's hidden, unlabelled g-recaptcha-response --
+        the same field that polluted form_state.json. A stray text input is
+        not acceptable either; everfield's other one asks for a GitHub link,
+        and a salary sentence does not belong there. None means PARK."""
+        try:
+            # MUST be a textarea, not merely that id: live everfield's cover
+            # letter is a FILE upload, and matching the id alone returned that
+            # input -- visible, so no park fired, the number was typed, and
+            # only then did the append fail. The bare figure would have been
+            # written with the currency stated nowhere.
+            letter = page.locator(f"textarea{_COVER_LETTER_SELECTOR}")
+            if letter.count() > 0 and letter.first.is_visible():
+                return letter.first
+            boxes = page.locator("[data-field-path] textarea")
+            for i in range(boxes.count()):
+                box = boxes.nth(i)
+                name = (box.get_attribute("name") or "").lower()
+                if "captcha" in name:
+                    continue
+                if not box.is_visible():
+                    continue
+                wrapper = box.locator("xpath=ancestor::*[@data-field-path][1]")
+                if not (wrapper.inner_text() or "").strip():
+                    continue  # unlabelled: not somewhere a human would read
+                return box
+        except PlaywrightError:
+            return None
+        return None
+
+    @staticmethod
+    def _append_note(box, note: str) -> bool:
+        """Add `note` to a free-text box without destroying what is there."""
+        try:
+            existing = (box.input_value() or "").strip()
+            box.fill(f"{existing}\n\n{note}" if existing else note)
+            return note in (box.input_value() or "")
+        except PlaywrightError:
+            return False
 
     @staticmethod
     def _form_present(page) -> bool:

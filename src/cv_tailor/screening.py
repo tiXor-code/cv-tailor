@@ -52,6 +52,15 @@ class Answer(NamedTuple):
     value: str                 # text to type or the EXACT option string to pick
     grounded_in: str           # "profile:<path>" | "answers:<key>" | "policy:eeo-decline" |
                                 # "policy:skip" | "llm:grounded"
+    note: str = ""             # a sentence the ADAPTER must place in a separate
+                                # free-text box on the same form, or PARK.
+                                # Used when the control cannot carry the whole
+                                # answer: a bare <input type="number"> salary
+                                # box holds 4500 but not "4500 EUR gross per
+                                # month", and a non-euro employer reads the
+                                # naked figure ~4x wrong. Defaulted, so every
+                                # existing Answer(value, grounded_in) call is
+                                # unchanged.
 
 
 # Sentinel: a category was recognized but cannot be answered safely. Resolves to
@@ -178,12 +187,16 @@ def _kind_gate(q: Question, ans: Answer) -> Answer | _FailClosed:
     this gate sees the value, so here select/radio/checkbox only needs an exact
     option match. number requires a bare number. text/textarea pass through.
     """
+    # Both branches REBUILD the Answer, so they must carry `note` across or the
+    # adapter loses the currency sentence and writes a bare, misreadable figure.
+    # The deterministic tier passes through this gate too (see _kind_gate call
+    # near the end of answer_question), so dropping it here would be silent.
     if q.kind in _OPTION_KINDS:
         matched = _match_option(ans.value, q.options)
-        return Answer(matched, ans.grounded_in) if matched is not None else _FAIL_CLOSED
+        return Answer(matched, ans.grounded_in, ans.note) if matched is not None else _FAIL_CLOSED
     if q.kind == "number":
         num = _bare_number(ans.value)
-        return Answer(num, ans.grounded_in) if num is not None else _FAIL_CLOSED
+        return Answer(num, ans.grounded_in, ans.note) if num is not None else _FAIL_CLOSED
     return ans
 
 
@@ -517,10 +530,24 @@ def _salary_answer(q: Question, answers: dict) -> Answer | _FailClosed | None:
     band = "net" if net else "gross"
 
     if q.kind == "number":
-        if not eur_explicit:
-            return _FAIL_CLOSED  # a bare number without EUR context is ambiguous
         num = _bare_number(raw.value)
-        return Answer(num, raw.grounded_in) if num is not None else _FAIL_CLOSED
+        if num is None:
+            return _FAIL_CLOSED
+        if eur_explicit:
+            return Answer(num, raw.grounded_in)
+        # The label names no currency and a number box physically cannot hold
+        # one, so the figure ALONE is ambiguous: a Poland/UK/US reader takes
+        # 4500 as PLN or USD, roughly 4x off what was meant -- and it would be
+        # SUBMITTED, not parked. Measured live on everfield (AI Builder,
+        # Poland-Warsaw|Remote) 2026-09-16.
+        #
+        # Teodor's policy, decided 2026-09-16: write the number AND state the
+        # currency in a free-text box on the same form. Placing it is the
+        # ADAPTER's job, and the adapter must PARK when the form has nowhere
+        # suitable to say it -- a hidden captcha textarea or a "GitHub link"
+        # box does not count.
+        return Answer(num, raw.grounded_in,
+                       f"Salary expectation: {num} EUR {band} per month")
 
     if q.kind in _OPTION_KINDS:
         return _FAIL_CLOSED  # salary as a picklist: don't guess

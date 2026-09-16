@@ -173,6 +173,59 @@
   var variant = params.get("variant");
   var appForm = document.getElementById("application-form");
 
+  // salarynumber / salarynumbernonote: a REQUIRED salary box rendered as
+  // <input type="number">, exactly as live everfield does (probed 2026-09-16:
+  // type="number", not readonly, not disabled). A number input silently
+  // refuses non-numeric text, so the currency phrase screening composes for a
+  // TEXT box writes nothing at all and the run aborts unwritable-required.
+  //
+  // salarynumber also offers a visible, LABELLED long-form box for the
+  // currency note. salarynumbernonote offers none -- everfield's own only
+  // textarea is the hidden, unlabelled g-recaptcha-response, and its "Cover
+  // letter" is a file upload -- so that variant must PARK rather than submit
+  // a bare figure a non-euro employer reads roughly 4x wrong.
+  if (variant === "salarynumber" || variant === "salarynumbernonote") {
+    var anchorEl = document.getElementById("q_required_text")
+      .closest(".ashby-application-form-field-entry");
+
+    var salaryWrap = document.createElement("div");
+    salaryWrap.className = "ashby-application-form-field-entry";
+    salaryWrap.setAttribute("data-field-path", "q_salary_number");
+    salaryWrap.innerHTML =
+      '<label for="q_salary_number">What would be your salary expectation for this role?</label>' +
+      '<input type="number" name="q_salary_number" id="q_salary_number" placeholder="Type here..." required>';
+    anchorEl.parentNode.insertBefore(salaryWrap, anchorEl);
+
+    if (variant === "salarynumbernonote") {
+      // Live everfield has NO usable free-text box: its "Cover letter" is a
+      // FILE upload and its only <textarea> is reCAPTCHA's hidden, unlabelled
+      // g-recaptcha-response. The default fixture's cover letter IS a visible
+      // textarea, which would have handed this variant a perfectly good note
+      // target and quietly defeated the test -- so swap it for the real shape.
+      var clWrap = document.querySelector('[data-field-path="_systemfield_cover_letter"]');
+      if (clWrap) {
+        clWrap.innerHTML =
+          '<label for="_systemfield_cover_letter">Cover letter (Optional)</label>' +
+          '<input type="file" id="_systemfield_cover_letter" name="_systemfield_cover_letter">';
+      }
+      var hidden = document.createElement("textarea");
+      hidden.name = "g-recaptcha-response";
+      hidden.id = "g-recaptcha-response";
+      hidden.style.display = "none";
+      document.body.appendChild(hidden);
+    }
+
+    if (variant === "salarynumber") {
+      var noteWrap = document.createElement("div");
+      noteWrap.className = "ashby-application-form-field-entry";
+      noteWrap.setAttribute("data-field-path", "q_anything_else");
+      noteWrap.innerHTML =
+        '<label for="q_anything_else">Anything else you would like us to know?</label>' +
+        '<textarea name="q_anything_else" id="q_anything_else" placeholder="Type here..."></textarea>';
+      anchorEl.parentNode.insertBefore(noteWrap, anchorEl);
+    }
+  }
+
   if (variant === "formidmismatch") {
     // Simulate a real posting whose form doesn't actually carry the id the
     // adapter assumes: rename AFTER capturing this script's own reference
