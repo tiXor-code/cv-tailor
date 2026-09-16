@@ -173,10 +173,15 @@ def test_resume_missing_cv_path_aborts_to_resume_upload_failed(tmp_path, browser
     assert not (Path(result.evidence_dir) / "filled.png").exists()
 
 
-def test_resume_input_absent_aborts_to_resume_upload_failed(tmp_path, browser_page):
+def test_resume_input_absent_aborts_to_resume_upload_failed(tmp_path, browser_page, monkeypatch):
+    import cv_tailor.portal.greenhouse as greenhouse_mod
+
     adapter = GreenhouseAdapter()
     package = _package(tmp_path)
     entry = {"id": "job-1"}
+    # This fixture genuinely has no file input, so the confirmation window can
+    # only ever time out here -- shortened so the abort path stays fast.
+    monkeypatch.setattr(greenhouse_mod, "UPLOAD_CONFIRM_TIMEOUT_MS", 400)
 
     with serve_fixtures() as base_url:
         browser_page.goto(f"{base_url}/greenhouse_form.html?noresume=1", wait_until="load")
@@ -325,3 +330,31 @@ def test_adapter_claims_the_eu_greenhouse_board_domain():
     found = adapter_for("https://job-boards.eu.greenhouse.io/yld/jobs/4972161101")
 
     assert isinstance(found, GreenhouseAdapter)
+
+
+def test_resume_upload_survives_an_uploader_that_removes_the_input(browser_page, tmp_path):
+    """Greenhouse's real uploader removes the native input after a file is
+    chosen and renders the filename instead.
+
+    Measured live on job-boards.eu.greenhouse.io/saasgroup/jobs/4973041101
+    (2026-09-16): before set_input_files #resume count is 1 and visible;
+    after it the count is 0, evaluating el.files times out because the node
+    is gone, and the filename is on the page. The upload succeeded -- only
+    the read-back target vanished.
+
+    Checking el.files.length alone therefore parked a perfectly good
+    application as resume-upload-failed. That is what happened to saas.group
+    in that day's armed run. Ashby already learned this lesson and verifies
+    with a second signal; this is the same fix for greenhouse.
+    """
+    adapter = GreenhouseAdapter()
+    package = _package(tmp_path)
+
+    with serve_fixtures() as base_url:
+        browser_page.goto(f"{base_url}/greenhouse_form.html?swapresume=1", wait_until="load")
+        result = adapter.apply(browser_page, {"id": "job-1"}, package,
+                               PROFILE, ANSWERS, dry_run=True)
+        filename_rendered = browser_page.locator(".uploaded-filename").inner_text()
+
+    assert filename_rendered == "cv.pdf"
+    assert result.status == "filled", result.reason

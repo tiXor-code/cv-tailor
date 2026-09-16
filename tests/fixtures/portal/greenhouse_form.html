@@ -81,6 +81,49 @@
         if (resumeInput) { resumeInput.parentNode.removeChild(resumeInput); }
       }
 
+      if (params.get("swapresume") === "1") {
+        // Greenhouse's real Job Board uses a custom uploader (Attach /
+        // Dropbox / Google Drive / Enter manually). Measured live on
+        // job-boards.eu.greenhouse.io/saasgroup/jobs/4973041101, 2026-09-16:
+        // after set_input_files the native input is REMOVED from the DOM
+        // (#resume count 1 -> 0, and evaluating el.files then times out
+        // because the element is gone) while the widget renders the filename
+        // instead. The upload SUCCEEDED; only the read-back target vanished.
+        //
+        // verify_file_attached("#resume") therefore queried a node that no
+        // longer existed, returned False, and parked a perfectly good
+        // application as resume-upload-failed -- which is exactly what
+        // happened to saas.group in the 2026-09-16 armed run.
+        // The two halves do NOT happen at the same moment, and that gap is
+        // the whole bug. Measured live on the saas.group board, polling after
+        // set_input_files returned:
+        //     t~   0ms  #resume=0  files=False  filename=0  remove=0
+        //     t~ 150ms  #resume=0  files=False  filename=0  remove=0
+        //     t~ 400ms  #resume=0  files=False  filename=1  remove=1
+        // The native input is removed IMMEDIATELY, while the widget's
+        // post-upload UI (filename, remove control) lands a few hundred ms
+        // later. A confirmation checked once, right after set_input_files,
+        // therefore sees neither signal and parks a successful upload.
+        var swap = document.getElementById("resume");
+        if (swap) {
+          swap.addEventListener("change", function () {
+            var name = swap.files.length ? swap.files[0].name : "";
+            var parent = swap.parentNode;
+            parent.removeChild(swap);          // immediately, as the real one does
+            window.setTimeout(function () {    // UI state lands later
+              var shown = document.createElement("div");
+              shown.className = "uploaded-filename";
+              shown.textContent = name;
+              parent.appendChild(shown);
+              var remove = document.createElement("button");
+              remove.type = "button";
+              remove.textContent = "Remove";
+              parent.appendChild(remove);
+            }, 600);
+          });
+        }
+      }
+
       if (params.get("locked") === "1") {
         // Required LinkedIn text question that rejects every write.
         var locked = document.getElementById("question_1002");

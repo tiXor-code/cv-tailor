@@ -156,6 +156,75 @@ def _upload_file(page, selector: str, path: Any) -> bool:
         return False
 
 
+# How long to keep looking for a successful upload before giving up, and how
+# often to look. Module constants (not literals) so tests can shorten them,
+# same contract as CONFIRM_TIMEOUT_MS.
+#
+# The window matters because the two halves of the swap do NOT happen
+# together. Measured live on the saas.group board, polling after
+# set_input_files:
+#     t~   0ms  #resume=0  files=False  filename=0  remove=0
+#     t~ 150ms  #resume=0  files=False  filename=0  remove=0
+#     t~ 400ms  #resume=0  files=False  filename=1  remove=1
+# The native input is removed immediately; the widget's post-upload UI lands
+# a few hundred ms later. Checking once, right after set_input_files, sees
+# neither signal -- which is exactly how a successful upload was parked as
+# resume-upload-failed on three consecutive live runs.
+UPLOAD_CONFIRM_TIMEOUT_MS = 5000
+_UPLOAD_CONFIRM_POLL_MS = 200
+
+
+def _upload_confirmed(page, selector: str, cv_path: Any) -> bool:
+    """True when the upload actually landed, by EITHER signal.
+
+    files.length on the input is the primary read-back, but Greenhouse's real
+    uploader (Attach / Dropbox / Google Drive / Enter manually) REMOVES the
+    native input from the DOM once a file is chosen and renders the filename
+    instead. Measured live on job-boards.eu.greenhouse.io/saasgroup/jobs/
+    4973041101, 2026-09-16: #resume went 1 -> 0 and evaluating el.files then
+    timed out because the node was gone, while "cv.pdf" was on the page. The
+    upload had succeeded; only the read-back target had vanished.
+
+    Reading files.length alone therefore parked a perfectly good application
+    as resume-upload-failed -- which is what happened to saas.group in that
+    day's armed run. So fall back to the widget's post-upload UI state: the
+    filename rendered anywhere, or a remove/delete control. This is the same
+    dual signal the ashby adapter already uses, for the same reason.
+
+    A missing cv_path still fails: with no filename there is nothing to look
+    for, and an upload that never happened must never read as confirmed.
+    """
+    filename = Path(str(cv_path)).name if cv_path else ""
+    attempts = max(1, int(UPLOAD_CONFIRM_TIMEOUT_MS / _UPLOAD_CONFIRM_POLL_MS))
+    for attempt in range(attempts):
+        if verify_file_attached(page, selector):
+            return True
+        # No filename means no upload was ever attempted (missing cv_path):
+        # there is nothing to wait for, so fail immediately rather than
+        # burning the whole window on a certainty.
+        if not filename:
+            return False
+        try:
+            if page.get_by_text(filename, exact=False).count() > 0:
+                return True
+        except PlaywrightError:
+            pass
+        try:
+            if page.locator(
+                "button:has-text('Remove'), button:has-text('Delete'), "
+                "[aria-label*='remove' i], [aria-label*='delete' i]"
+            ).count() > 0:
+                return True
+        except PlaywrightError:
+            pass
+        if attempt + 1 < attempts:
+            try:
+                page.wait_for_timeout(_UPLOAD_CONFIRM_POLL_MS)
+            except PlaywrightError:
+                break
+    return False
+
+
 def _enumerate_questions(page) -> list[tuple[dict, Question]]:
     """Return (target, Question) for every question_* control. `target` carries
     {id, name, kind} so the adapter can address a text/select control by `#id`
@@ -258,7 +327,7 @@ class GreenhouseAdapter(PortalAdapter):
         # attached must abort to needs_human BEFORE any armed submit rather
         # than applying with no resume attached.
         _upload_file(page, "#resume", package.get("cv_path"))
-        if not verify_file_attached(page, "#resume"):
+        if not _upload_confirmed(page, "#resume", package.get("cv_path")):
             capture_evidence(page, evidence_dir, "aborted")
             return PortalResult(status="needs_human", reason="resume-upload-failed",
                                  evidence_dir=str(evidence_dir))
