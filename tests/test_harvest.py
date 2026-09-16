@@ -110,3 +110,52 @@ def test_harvest_never_probes_the_same_slug_twice():
         harvest.harvest_ashby_slugs(["Camunda", "camunda", "Camunda"])
 
     assert len(calls) == 1
+
+
+# --- enrolment ------------------------------------------------------------------
+#
+# Harvested slugs auto-enrol: no review queue (Teodor, 2026-08-17). That makes
+# three properties load-bearing, so each has a test below: enrolment is
+# idempotent, a missing file is not an error, and there is a de-enrol path that
+# is not "hand-edit a generated file the next harvest will simply re-add".
+#
+# The file is generated, changes daily and lives under data/ (already
+# gitignored as runtime state), so it is deliberately NOT sources.yaml: that
+# one is hand-curated and carries measured notes a machine rewrite would
+# destroy.
+
+def test_enrolment_writes_entries_fetch_all_understands(tmp_path):
+    path = tmp_path / "sources_harvested.yaml"
+
+    added = harvest.enrol_ashby_slugs(path, ["checkly", "camunda"])
+
+    assert added == ["checkly", "camunda"]
+    assert harvest.load_harvested_sources(path) == [
+        {"kind": "ashby", "slug": "checkly", "name": "checkly"},
+        {"kind": "ashby", "slug": "camunda", "name": "camunda"},
+    ]
+
+
+def test_enrolling_the_same_slug_twice_never_duplicates_it(tmp_path):
+    path = tmp_path / "sources_harvested.yaml"
+    harvest.enrol_ashby_slugs(path, ["checkly"])
+
+    assert harvest.enrol_ashby_slugs(path, ["checkly"]) == []
+    assert len(harvest.load_harvested_sources(path)) == 1
+
+
+def test_a_missing_harvest_file_is_not_an_error(tmp_path):
+    """The scan must run normally on a machine that has never harvested."""
+    assert harvest.load_harvested_sources(tmp_path / "never_written.yaml") == []
+
+
+def test_a_disabled_slug_is_dropped_and_never_re_enrolled(tmp_path):
+    """The registry must not be a one-way ratchet: a bad board has to be
+    removable without hand-editing, and the next harvest must not undo it."""
+    path = tmp_path / "sources_harvested.yaml"
+    harvest.enrol_ashby_slugs(path, ["badboard"])
+
+    harvest.disable_ashby_slug(path, "badboard")
+
+    assert harvest.load_harvested_sources(path) == []
+    assert harvest.enrol_ashby_slugs(path, ["badboard"]) == []
