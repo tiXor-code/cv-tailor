@@ -238,6 +238,25 @@ _NO_SUBMIT_REASONS = {
     "handoff-timeout: captcha not solved",
 }
 
+# Families that prove the same thing but carry a diagnostic suffix, so exact
+# membership cannot match them. Every adapter verifies the resume upload
+# BEFORE any field is typed (ashby) or at least before any submit click
+# (greenhouse), and aborts there -- so a resume-upload-failed of any shape
+# is as certain a "never submitted" as a captcha wall.
+#
+# Left un-rolled-back, this family is what permanently blocked Flip GmbH
+# (2026-09-10), Checkly (09-12) and Sardine (09-16): each kept a ledger row
+# for an application that was never sent, and norm_key then blocked every
+# same-company|role sibling as a duplicate forever.
+_NO_SUBMIT_REASON_PREFIXES = ("resume-upload-failed",)
+
+
+def _proves_no_submission(reason: str) -> bool:
+    """True when `reason` PROVES no submission could have happened, so the
+    pre-inserted ledger row must be rolled back. Exact members first, then
+    the diagnostic-carrying families."""
+    return reason in _NO_SUBMIT_REASONS or reason.startswith(_NO_SUBMIT_REASON_PREFIXES)
+
 
 def _handle_portal(args, entry: dict, meta: dict) -> int:
     """Portal apply path (replaces the Phase A stub that parked every portal
@@ -367,7 +386,7 @@ def _handle_portal(args, entry: dict, meta: dict) -> int:
         # left as-is") stay OUT of this set: those may have touched or even
         # submitted the form, so their row keeps the documented semantics.
         # The set itself lives at module scope so the invariant is testable.
-        if not own_row_skip and result.reason in _NO_SUBMIT_REASONS:
+        if not own_row_skip and _proves_no_submission(result.reason):
             delete_application(conn, job_id=job_id)
 
         def _needs_human(e: dict) -> None:

@@ -462,6 +462,19 @@ def test_portal_armed_needs_human_keeps_ledger_row(mod, monkeypatch, tmp_path):
 @pytest.mark.parametrize("reason", [
     "captcha", "login-required", "no-adapter", "missing-apply-target",
     "handoff-timeout: captcha not solved",
+    # The resume upload is verified BEFORE any field is typed and long
+    # before any submit click, in every adapter -- so this family proves no
+    # submission happened just as surely as a captcha wall does. It arrives
+    # in two shapes: bare (greenhouse) and with a diagnostic suffix naming
+    # what was checked (ashby), so exact-match membership cannot catch it.
+    #
+    # Left un-rolled-back, it is what permanently blocked Flip GmbH
+    # (2026-09-10), Checkly (09-12) and Sardine (09-16): each kept a ledger
+    # row for an application that was never sent, and norm_key then blocked
+    # every sibling role at those companies forever.
+    "resume-upload-failed",
+    "resume-upload-failed: no file input found (#_systemfield_resume and "
+    "input[type='file'] fallback both matched 0 elements)",
 ])
 def test_portal_armed_needs_human_presubmit_rolls_back_ledger(mod, monkeypatch, tmp_path, reason):
     """The 2026-07-10 phantom-row cascade: these reasons PROVE no submission
