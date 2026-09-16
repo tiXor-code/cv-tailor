@@ -46,7 +46,8 @@ _HREF_RE = re.compile(r"""href=["']([^"']+)["']""", re.I)
 # Fallback when the portal registry is unavailable (keeps unit tests free of
 # playwright). The registry, when importable, is the source of truth.
 _FALLBACK_HOSTS = ("jobs.ashbyhq.com", "boards.greenhouse.io",
-                   "job-boards.greenhouse.io", "jobs.lever.co", "jobs.micro1.ai")
+                   "job-boards.greenhouse.io", "job-boards.eu.greenhouse.io",
+                   "jobs.lever.co", "jobs.micro1.ai")
 
 
 def adapter_hosts() -> tuple[str, ...]:

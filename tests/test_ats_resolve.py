@@ -152,3 +152,21 @@ def test_region_preference_still_refuses_when_no_european_posting(monkeypatch):
     monkeypatch.setattr(ats_resolve, "fetch_greenhouse_org", lambda s, n: [])
     monkeypatch.setattr(ats_resolve, "fetch_lever_org", lambda s, n: [])
     assert ats_resolve.resolve_from_boards("Acme", "Backend Engineer, Payments Team") is None
+
+
+def test_fallback_hosts_cover_every_registered_adapter_host():
+    """_FALLBACK_HOSTS stands in for the portal registry when playwright is
+    not importable. It is a hand-maintained copy, so it drifts silently --
+    and it did: when the greenhouse adapter claimed the EU board domain,
+    this list was not updated, so on any host without playwright the
+    resolver would refuse a perfectly good EU posting.
+
+    The guard is a subset check, not equality: the fallback may carry a host
+    whose adapter failed to import, but it must never be MISSING one.
+    """
+    import cv_tailor.portal  # noqa: F401  -- importing registers the adapters
+    from cv_tailor.portal import base as portal_base
+
+    registered = {h for a in portal_base._REGISTRY for h in a.hosts}
+    assert registered, "no adapters registered; this guard needs them importable"
+    assert registered <= set(ats_resolve._FALLBACK_HOSTS)
