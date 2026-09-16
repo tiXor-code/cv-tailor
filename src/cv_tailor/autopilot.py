@@ -206,8 +206,14 @@ def _sweep_revivable(now: datetime, *, queue_dir=None) -> list[tuple[str, dict]]
                 # deserves another attempt. Without this, a fix written minutes
                 # after a revive could never reach the job it was written for,
                 # recreating the exact problem this sweep exists to solve.
-                # A legacy stamp with no revived_for blocks, staying safe.
-                if previous is None or previous == reason:
+                # A stamp with NO revived_for predates reason tracking, which
+                # was added in the same session as the sweep itself. Blocking
+                # those would strand every entry revived before it existed --
+                # including jobs whose exact blocker was fixed minutes later --
+                # so they get exactly one grandfather pass. Bounded and
+                # self-correcting: after it every entry carries the field and
+                # the same-wall rule below applies normally.
+                if previous is not None and previous == reason:
                     continue
 
             def _mut(e: dict) -> None:

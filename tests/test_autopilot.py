@@ -260,7 +260,7 @@ def test_a_revived_park_is_not_revived_again(tmp_path):
     yesterday = (NOW - timedelta(days=1)).date().isoformat()
     _write_day(tmp_path, yesterday, [
         _entry(1, score=8, status="needs_human", error="no-adapter",
-               revived_at="2026-09-15T00:00:00+00:00"),
+               revived_at="2026-09-15T00:00:00+00:00", revived_for="no-adapter"),
     ])
     _write_day(tmp_path, TODAY, [])
     ran = []
@@ -269,6 +269,36 @@ def test_a_revived_park_is_not_revived_again(tmp_path):
 
     assert ran == []
     assert _read(tmp_path, yesterday)["job-1"]["status"] == "needs_human"
+
+
+def test_a_stamp_from_before_reason_tracking_gets_one_grandfather_pass(tmp_path):
+    """`revived_for` was added in the same session as the sweep, so entries
+    revived just before it carry `revived_at` alone. Treating those as "already
+    used your retry" would strand every one of them -- including jobs whose
+    exact blocker was fixed minutes later, which is the failure this sweep
+    exists to prevent.
+
+    Bounded and self-correcting: the pass stamps revived_for, after which the
+    same-wall rule applies normally and it cannot repeat."""
+    yesterday = (NOW - timedelta(days=1)).date().isoformat()
+    _write_day(tmp_path, yesterday, [
+        _entry(1, score=8, status="needs_human",
+               error="unanswerable-required:Total years of experience",
+               revived_at="2026-09-16T21:00:00+00:00"),
+    ])
+    _write_day(tmp_path, TODAY, [])
+    ran = []
+
+    def runner(day, job_id):
+        ran.append(job_id)
+        update_entry(day, job_id, lambda e: e.update(status="sent"), queue_dir=tmp_path)
+        return 0
+
+    run_autopilot(NOW, queue_dir=tmp_path, runner=runner)
+
+    assert ran == ["job-1"]
+    assert _read(tmp_path, yesterday)["job-1"]["revived_for"] == (
+        "unanswerable-required:Total years of experience")
 
 
 def test_a_park_whose_reason_changed_earns_another_retry(tmp_path):
