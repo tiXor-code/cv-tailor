@@ -267,14 +267,27 @@ def resolve_blocker(page, blocker: str, evidence_dir, *, stage: str,
 
 # --- evidence capture --------------------------------------------------------
 
+# Captcha widgets render their SOLVED token into a hidden named field, so the
+# blanket name->value sweep below would write a live credential to disk
+# (SEC265, sensitive data at rest). Measured on the real robco run 2026-09-16:
+# form_state.json was 2.4KB of nothing but the g-recaptcha-response token,
+# because by the time evidence was captured the form had been replaced by an
+# error panel and the captcha field was the only named field left. A captcha
+# token is never evidence of what was filled -- it is only ever a secret.
+_SECRET_FIELD_NAMES = frozenset({
+    "g-recaptcha-response", "h-captcha-response", "cf-turnstile-response",
+})
+
+
 def _dump_form_state(page) -> dict:
     try:
-        return page.eval_on_selector_all(
+        state = page.eval_on_selector_all(
             "input[name], select[name], textarea[name]",
             "els => Object.fromEntries(els.map(el => [el.name, el.value]))",
         )
     except PlaywrightError:
         return {}
+    return {k: v for k, v in (state or {}).items() if k not in _SECRET_FIELD_NAMES}
 
 
 def capture_evidence(page, evidence_dir, stage: str) -> None:

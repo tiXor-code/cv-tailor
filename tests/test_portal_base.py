@@ -365,6 +365,27 @@ def test_capture_evidence_writes_screenshot_and_form_state(tmp_path):
     assert json.loads(state_file.read_text()) == {"full_name": "Teodor", "email": "t@example.com"}
 
 
+def test_capture_evidence_never_writes_the_captcha_token(tmp_path):
+    """SEC265: reCAPTCHA renders a hidden textarea[name='g-recaptcha-response'],
+    so the blanket name->value sweep in _dump_form_state swept the live token
+    into the evidence file in plaintext.
+
+    Measured on the real robco run 2026-09-16: form_state.json was 2.4KB of
+    nothing BUT that token. capture_evidence overwrites the file at every
+    stage, and by the 'no-confirmation' stage the form had been replaced by
+    the error panel -- so the captcha field was the only named field left on
+    the page. The dump was therefore both a secret at rest and useless for
+    debugging what had actually been filled."""
+    page = FakePage(form_state={"full_name": "Teodor", "g-recaptcha-response": "03AFcFAKETOKEN"})
+    evidence_dir = tmp_path / "portal"
+
+    capture_evidence(page, evidence_dir, "filled")
+
+    written = (evidence_dir / "form_state.json").read_text()
+    assert "03AFcFAKETOKEN" not in written
+    assert json.loads(written) == {"full_name": "Teodor"}
+
+
 def test_capture_evidence_creates_missing_evidence_dir(tmp_path):
     page = FakePage()
     evidence_dir = tmp_path / "nested" / "portal"
