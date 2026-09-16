@@ -198,6 +198,26 @@ def _from_answers(answers: dict, key: str) -> Answer | None:
     return Answer(str(value), f"answers:{key}")
 
 
+def _split_contact_name(contact: dict, *, want_last: bool) -> Answer | None:
+    """One half of profile.contact.name, for a First/Last question.
+
+    Splits on the first space, mirroring greenhouse's own _split_name. That
+    logic is duplicated rather than imported: the portal adapters import this
+    module, so importing one of them back into screening would invert the
+    layering.
+
+    A single-word name has no surname to give, so a last-name question falls
+    through to None rather than repeating the forename -- guessing a surname
+    on a real application is worse than leaving it for a human.
+    """
+    full = (contact or {}).get("name") or ""
+    first, _, last = str(full).strip().partition(" ")
+    wanted = last.strip() if want_last else first.strip()
+    if not wanted:
+        return None
+    return Answer(wanted, "profile:contact.name")
+
+
 def _from_contact(contact: dict, key: str) -> Answer | None:
     value = (contact or {}).get(key)
     if value is None or value == "":
@@ -213,6 +233,20 @@ _SALARY_RE = re.compile(
 )
 _AVAILAB_RE = re.compile(r"\bavailab", re.I)
 _NAME_RE = re.compile(r"\bname\b", re.I)
+# Ashby renders First/Last as separate CUSTOM questions, which go through this
+# module rather than through greenhouse's own _split_name -- so without these
+# two, \bname\b matched both and the live robco form was filled with
+# "Teodor-Cristian Lutoiu" in BOTH boxes (measured 2026-09-16). That does not
+# park the job, it SUBMITS a wrong value, which is worse.
+#
+# Deliberately anchored on the name words themselves, never a bare "last" or
+# "first": "Company name" and "Project name" must keep falling through to the
+# generic rule (and then to None), which the suite already pins.
+#
+# "Surname" is a separate case worth noting: \bname\b never matched it at all,
+# so that phrasing was silently unanswered rather than wrongly answered.
+_LAST_NAME_RE = re.compile(r"\blast name\b|\bsurname\b|\bfamily name\b", re.I)
+_FIRST_NAME_RE = re.compile(r"\bfirst name\b|\bgiven name\b|\bforename\b", re.I)
 _EMAIL_RE = re.compile(r"\bemail\b", re.I)
 _PHONE_RE = re.compile(r"\bphone\b|\btelephone\b|\bmobile number\b", re.I)
 _WEBSITE_RE = re.compile(
@@ -502,6 +536,12 @@ def _deterministic_answer(q: Question, profile: dict, answers: dict) -> Answer |
         return _from_contact(contact, "website")
     if _is_location(label):
         return _from_contact(contact, "location")
+    # Before the generic rule: a first/last question wants ONE part, and
+    # \bname\b would otherwise hand it the whole string.
+    if _LAST_NAME_RE.search(label):
+        return _split_contact_name(contact, want_last=True)
+    if _FIRST_NAME_RE.search(label):
+        return _split_contact_name(contact, want_last=False)
     if _NAME_RE.search(label):
         return _from_contact(contact, "name")
 

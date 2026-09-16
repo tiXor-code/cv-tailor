@@ -728,3 +728,57 @@ def test_a_composed_answer_that_never_comes_clean_still_parks():
 
     assert answer_question(q, _PROFILE, _ANSWERS, client=client,
                            context={"cover_letter": _LETTER}) is None
+
+
+# ---------------------------------------------------------------------------
+# First/last name splitting
+# ---------------------------------------------------------------------------
+#
+# Measured live on the robco posting 2026-09-16: the filled form showed
+# First Name AND Last Name both reading "Teodor-Cristian Lutoiu". _NAME_RE is
+# \bname\b and sits last in the contact chain, so every name-ish label grounds
+# to contact.name whole. That does not park the job -- it SUBMITS a wrong
+# value under his name, which is worse.
+#
+# greenhouse already splits via its own _split_name, but Ashby renders First
+# and Last as custom questions that go through screening instead, bypassing it.
+
+def test_last_name_question_gets_the_surname_not_the_whole_name():
+    q = _q("Last Name")
+    out = answer_question(q, _PROFILE, _ANSWERS)
+    assert out is not None
+    assert out.value == "Lovelace"
+
+
+def test_first_name_question_gets_the_forename_not_the_whole_name():
+    q = _q("First Name")
+    out = answer_question(q, _PROFILE, _ANSWERS)
+    assert out is not None
+    assert out.value == "Ada"
+
+
+def test_surname_and_family_name_phrasings_also_split():
+    for label in ("Surname", "Family name", "Given name"):
+        out = answer_question(_q(label), _PROFILE, _ANSWERS)
+        assert out is not None, label
+        expected = "Ada" if label == "Given name" else "Lovelace"
+        assert out.value == expected, f"{label} -> {out.value!r}"
+
+
+def test_a_plain_name_question_still_gets_the_whole_name():
+    """Only the first/last phrasings split; "Full Name" and a bare "Name" must
+    keep returning the complete name."""
+    for label in ("Name", "Full Name"):
+        out = answer_question(_q(label), _PROFILE, _ANSWERS)
+        assert out is not None, label
+        assert out.value == "Ada Lovelace", f"{label} -> {out.value!r}"
+
+
+def test_splitting_never_hijacks_a_non_contact_name_label():
+    """A guard the existing suite already cares about: "Company name" is not
+    contact-name routing, and the new first/last rules must not swallow labels
+    like it either."""
+    for label in ("Company name", "Project name", "Product name"):
+        out = answer_question(_q(label), _PROFILE, _ANSWERS)
+        assert out is None or out.value not in ("Ada", "Lovelace"), \
+            f"{label} -> {out.value if out else None!r}"
