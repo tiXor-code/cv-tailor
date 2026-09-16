@@ -191,7 +191,13 @@ def _enumerate_questions(page) -> list[tuple[dict, Question]]:
 
 
 class GreenhouseAdapter(PortalAdapter):
-    hosts = ("boards.greenhouse.io", "job-boards.greenhouse.io")
+    # job-boards.eu.greenhouse.io is Greenhouse's EU-hosted board domain and
+    # serves the same form this adapter fills. It is NOT a subdomain of the
+    # other two (host_matches wants an exact match or a `.<allowed>` suffix),
+    # so it has to be claimed explicitly -- until it was, every EU-hosted
+    # posting died needs_human("no-adapter") before a browser even opened.
+    hosts = ("boards.greenhouse.io", "job-boards.greenhouse.io",
+             "job-boards.eu.greenhouse.io")
     name = "greenhouse"
 
     # Real submit-confirmation wait; tests override this on the instance to

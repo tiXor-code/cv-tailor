@@ -82,9 +82,10 @@ def test_split_name_handles_empty_name():
 
 # --- adapter registration -------------------------------------------------
 
-def test_hosts_include_both_greenhouse_domains():
+def test_hosts_include_every_greenhouse_board_domain():
     adapter = GreenhouseAdapter()
-    assert adapter.hosts == ("boards.greenhouse.io", "job-boards.greenhouse.io")
+    assert adapter.hosts == ("boards.greenhouse.io", "job-boards.greenhouse.io",
+                             "job-boards.eu.greenhouse.io")
     assert adapter.name == "greenhouse"
 
 
@@ -307,3 +308,20 @@ def test_no_confirmation_within_timeout_returns_needs_human_and_never_retries(tm
     assert result.reason == "no-confirmation"
     # confirmation never appeared, so this must never be reported as submitted
     assert not (Path(result.evidence_dir) / "submitted.png").exists()
+
+
+def test_adapter_claims_the_eu_greenhouse_board_domain():
+    """Greenhouse serves EU-hosted boards from job-boards.eu.greenhouse.io,
+    which is NOT a subdomain of either claimed host (host_matches wants an
+    exact match or a `.<allowed>` suffix), so nothing claimed it and every
+    such posting died needs_human("no-adapter") before a browser opened.
+
+    Measured 2026-09-10: the Yld posting arbeitnow pointed at resolves to
+    job-boards.eu.greenhouse.io, and that page serves the same form this
+    adapter already fills (#first_name, #last_name, #email, file inputs).
+    """
+    from cv_tailor.portal import adapter_for
+
+    found = adapter_for("https://job-boards.eu.greenhouse.io/yld/jobs/4972161101")
+
+    assert isinstance(found, GreenhouseAdapter)
