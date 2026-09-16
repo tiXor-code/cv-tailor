@@ -846,3 +846,21 @@ def test_screening_context_survives_an_unreadable_letter(tmp_path):
     package = {"cover_letter_path": str(tmp_path / "gone.md"), "one_line_pitch": "x"}
 
     assert portal_base.screening_context(package) == {}
+
+
+# --- id_selector ---------------------------------------------------------------
+
+def test_id_selector_matches_an_id_that_starts_with_a_digit():
+    """Ashby question ids are UUIDs and roughly a third begin with a digit.
+    "#5d69bc56-..." is not a valid CSS selector: querySelectorAll RAISES on it
+    rather than matching nothing, which is why it surfaced as
+    unwritable-required on a real posting instead of as a missing field."""
+    assert portal_base.id_selector("5d69bc56-0ca7-49e3-b539-ce4c829fd8fa") == (
+        '[id="5d69bc56-0ca7-49e3-b539-ce4c829fd8fa"]')
+
+
+def test_id_selector_escapes_quotes_and_backslashes():
+    """Ids come from an untrusted page; one must not be able to break out of
+    the quoted attribute value."""
+    assert portal_base.id_selector('a"b') == '[id="a\\"b"]'
+    assert portal_base.id_selector("a\\b") == '[id="a\\\\b"]'

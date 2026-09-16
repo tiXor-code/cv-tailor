@@ -37,6 +37,7 @@ from cv_tailor.portal.base import (
     resolve_blocker,
     verify_file_attached,
     verify_filled,
+    id_selector,
     screening_context,
 )
 from cv_tailor.screening import Question, answer_question
@@ -414,7 +415,7 @@ class GreenhouseAdapter(PortalAdapter):
         kind = question.kind
         if kind in ("radio", "checkbox"):
             return self._check_option(page, kind, target["name"], value)
-        selector = f"#{target['id']}"
+        selector = id_selector(target["id"])
         if kind == "select":
             try:
                 page.locator(selector).select_option(label=value)

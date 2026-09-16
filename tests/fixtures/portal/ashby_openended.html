@@ -60,9 +60,23 @@
       <textarea name="_systemfield_cover_letter" id="_systemfield_cover_letter"></textarea>
     </div>
 
-    <div class="ashby-application-form-field-entry" data-field-path="q_open_ended">
-      <label for="q_open_ended" id="q_open_ended_label">What excites you about the opportunity to join Fixture Co?</label>
-      <textarea name="q_open_ended" id="q_open_ended" placeholder="Type here..." required></textarea>
+    <!--
+      The field id is a UUID that STARTS WITH A DIGIT, because that is what
+      Ashby really emits: custom question ids are UUIDs, and roughly a third of
+      those begin with a digit. Measured live 2026-09-16 on the Sardine
+      posting, where this question's id is
+      5d69bc56-0ca7-49e3-b539-ce4c829fd8fa.
+
+      It matters because "#5d69bc56-..." is NOT a valid CSS selector -- an id
+      selector cannot begin with a digit -- so building one raises
+      SyntaxError, the write is reported unverified, and the application parks
+      as unwritable-required. An earlier version of this fixture used a tidy
+      id like "q_open_ended" and passed while the live posting failed, which is
+      exactly the trap of a fixture that does not reproduce the real shape.
+    -->
+    <div class="ashby-application-form-field-entry" data-field-path="5d69bc56-0ca7-49e3-b539-ce4c829fd8fa">
+      <label for="5d69bc56-0ca7-49e3-b539-ce4c829fd8fa" id="q_open_ended_label">What excites you about the opportunity to join Fixture Co?</label>
+      <textarea name="5d69bc56-0ca7-49e3-b539-ce4c829fd8fa" id="5d69bc56-0ca7-49e3-b539-ce4c829fd8fa" placeholder="Type here..." required></textarea>
     </div>
 
     <button type="submit" id="submit-btn">Submit Application</button>

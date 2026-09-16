@@ -656,9 +656,16 @@ def test_a_composed_answer_that_reads_as_slop_is_refused():
     """The same anti-slop bar the letter itself has to clear. A required
     question with no clean answer parks rather than sending generated filler
     under his name."""
+    # One draft per attempt: the composed tier revises up to
+    # COMPOSE_MAX_ATTEMPTS times, and a model that stays sloppy through all of
+    # them must still be refused.
     client = _FakeClient([
         "I am excited and passionate about this dynamic opportunity to leverage my "
-        "proven track record."
+        "proven track record.",
+        "I am excited and passionate about this dynamic role to leverage my "
+        "proven track record.",
+        "I am excited and passionate about this dynamic team to leverage my "
+        "proven track record.",
     ])
     q = _q("What excites you about the opportunity to join Sardine?",
            kind="textarea", required=True)
@@ -674,6 +681,50 @@ def test_context_never_lets_a_factual_question_be_composed():
     client = _FakeClient(["UNKNOWN"])
     q = _q("How many years of Kubernetes experience do you have?",
            kind="text", required=True)
+
+    assert answer_question(q, _PROFILE, _ANSWERS, client=client,
+                           context={"cover_letter": _LETTER}) is None
+
+
+def test_a_composed_answer_is_revised_when_the_first_draft_trips_the_guard():
+    """Measured live 2026-09-16 on the real Sardine letter: asked "what excites
+    you", the model reaches for precisely the filler the letter's own guard
+    bans ("i am eager", "dynamic", "innovative solutions") -- in two drafts out
+    of two, despite the prompt telling it not to.
+
+    cover_letter already solves this by feeding the warnings back and asking
+    again (MAX_ATTEMPTS). A single shot would park a real application over a
+    word choice, which is the worst of both worlds: no answer AND no send.
+    """
+    client = _FakeClient([
+        "I am eager to bring innovative solutions to this dynamic team and would "
+        "love the opportunity to contribute to your mission here.",
+        "Sardine works on fraud infrastructure, and I have shipped an end-to-end "
+        "support agent that wired a retrieval pipeline into a live workflow, "
+        "which is the same integration work this role centres on.",
+    ])
+    q = _q("What excites you about the opportunity to join Sardine?",
+           kind="textarea", required=True)
+
+    out = answer_question(q, _PROFILE, _ANSWERS, client=client,
+                          context={"cover_letter": _LETTER})
+
+    assert out is not None
+    assert out.grounded_in == "llm:composed"
+    assert "fraud" in out.value
+    assert client.calls == 2, "the warnings must be fed back, not given up on"
+
+
+def test_a_composed_answer_that_never_comes_clean_still_parks():
+    """The guard still has teeth: filler that survives every revision is never
+    sent under his name."""
+    client = _FakeClient([
+        "I am eager to leverage my proven track record for this dynamic role.",
+        "I am eager to leverage my proven track record for this dynamic team.",
+        "I am eager to leverage my proven track record in this dynamic company.",
+    ])
+    q = _q("What excites you about the opportunity to join Sardine?",
+           kind="textarea", required=True)
 
     assert answer_question(q, _PROFILE, _ANSWERS, client=client,
                            context={"cover_letter": _LETTER}) is None

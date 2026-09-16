@@ -43,6 +43,7 @@ from cv_tailor.portal.base import (
     fill_field,
     handoff_timeout_s,
     register_adapter,
+    id_selector,
     resolve_blocker,
     screening_context,
     verify_file_attached,
@@ -529,7 +530,9 @@ class AshbyAdapter(PortalAdapter):
         """Return (Question, css_selector, options) for one field-entry
         wrapper, or (None, None, None) when the wrapper's shape isn't a
         fillable question (never raises)."""
-        selector = f"#{field_id}"
+        # Ashby question ids are UUIDs; "#<uuid>" is an invalid CSS selector
+        # whenever one starts with a digit, which raises rather than missing.
+        selector = id_selector(field_id)
         try:
             label_el = wrapper.locator("label").first
             label = label_el.inner_text().strip() if label_el.count() > 0 else field_id

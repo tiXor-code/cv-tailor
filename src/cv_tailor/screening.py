@@ -620,20 +620,32 @@ COMPOSE_SYSTEM_PROMPT = """You answer ONE open-ended job-application question as
 Teodor-Cristian Lutoiu.
 
 You get his cover letter for THIS job (already written and already being sent with
-this application) and his profile. Answer using ONLY what those say.
+this application) and his profile.
 
 RULES:
-- Use ONLY facts already present in the letter or the profile. Never add an
-  employer, title, date, metric, tool or claim that is not already there.
-- If the question cannot be answered honestly from that material, reply with
-  exactly: UNKNOWN
+- Ground every claim in the letter or the profile. Never add an employer, title,
+  date, metric, tool or skill that is not already there.
+- A question about motivation, interest or fit ("what excites you about X",
+  "why do you want to work here") IS answerable: restate, in his voice, the
+  connection the letter already draws between his experience and this role.
+  That is a restatement, not a new claim, so do NOT answer it with UNKNOWN.
+- Reply with exactly UNKNOWN only when the letter and the profile say nothing
+  relevant to what was asked.
 - Write 2 to 4 plain sentences. No markdown, no bullet points, no headings, no
   surrounding quotes, no sign-off.
-- Plain, direct, specific. No em dashes. Do not write "I am excited",
-  "passionate", "leverage", "proven track record" or similar filler.
+- Plain, direct, specific. No em dashes. Do not write "I am excited", "I am
+  eager", "passionate", "dynamic", "leverage", "innovative solutions",
+  "proven track record" or similar filler. State the work instead.
 - Answer the question that was actually asked. Do not restate the whole letter.
 
 Reply with the answer text ONLY (or UNKNOWN). Nothing else."""
+
+# Same shape as cover_llm.MAX_ATTEMPTS, for the same reason: asked "what excites
+# you", the model reaches for precisely the filler the guard bans (measured live
+# 2026-09-16: "i am eager", "dynamic", "innovative solutions" in two drafts out
+# of two, despite the prompt forbidding them). Feeding the warnings back and
+# asking again is what turns that into a clean answer instead of a parked job.
+COMPOSE_MAX_ATTEMPTS = 3
 
 _COMPOSE_WORDS_MIN, _COMPOSE_WORDS_MAX = 12, 150
 
@@ -658,15 +670,28 @@ def _compose_warnings(text: str) -> list[str]:
     return warns
 
 
-def build_compose_messages(q: Question, profile: dict, context: dict) -> list[dict]:
+def build_compose_messages(q: Question, profile: dict, context: dict,
+                           warnings: list[str] | None = None,
+                           previous: str = "") -> list[dict]:
     letter = str((context or {}).get("cover_letter") or "").strip()
     pitch = str((context or {}).get("pitch") or "").strip()
     profile_yaml = yaml.safe_dump(profile, sort_keys=False, allow_unicode=True)
     pitch_block = f"\n# One-line pitch for this job\n{pitch}\n" if pitch else ""
+    # The revision turn: the previous draft AND what was wrong with it, so the
+    # model fixes that draft rather than re-rolling into the same filler.
+    revision = ""
+    if warnings and previous:
+        revision = (
+            f"\n\n# Your previous draft (rejected)\n{previous}\n\n"
+            f"# What was wrong with it\n"
+            + "\n".join(f"- {w}" for w in warnings)
+            + "\n\nRewrite it so none of those apply. Keep every claim grounded "
+              "in the letter and profile."
+        )
     user = (
         f"# His cover letter for THIS job\n{letter}\n{pitch_block}\n"
         f"# Candidate profile (profile.yaml)\n```yaml\n{profile_yaml}```\n\n"
-        f"# Question\n{q.label}"
+        f"# Question\n{q.label}{revision}"
     )
     return [
         {"role": "system", "content": COMPOSE_SYSTEM_PROMPT},
@@ -685,18 +710,26 @@ def _composable(q: Question, context: dict | None) -> bool:
 def _compose_answer(q: Question, profile: dict, context: dict, *, client: Any,
                     deployment: str | None = None) -> Answer | None:
     deployment = deployment or os.environ.get("AZURE_OPENAI_DEPLOYMENT", "gpt-4o-mini")
-    response = client.chat.completions.create(
-        model=deployment,
-        messages=build_compose_messages(q, profile, context),
-        temperature=0.3,
-    )
-    raw = (response.choices[0].message.content or "").strip()
-    if not raw or raw.strip().upper() == "UNKNOWN":
-        return _fail_closed_result(q)
-    if _compose_warnings(raw):
-        # Sending generated filler under his name is worse than parking.
-        return _fail_closed_result(q)
-    return Answer(raw, "llm:composed")
+    warnings: list[str] = []
+    previous = ""
+    for _ in range(COMPOSE_MAX_ATTEMPTS):
+        response = client.chat.completions.create(
+            model=deployment,
+            messages=build_compose_messages(q, profile, context, warnings, previous),
+            temperature=0.3,
+        )
+        raw = (response.choices[0].message.content or "").strip()
+        # UNKNOWN is the model saying the letter holds nothing relevant. Asking
+        # again cannot conjure material, so stop rather than burn attempts.
+        if not raw or raw.strip().upper() == "UNKNOWN":
+            return _fail_closed_result(q)
+        warnings = _compose_warnings(raw)
+        if not warnings:
+            return Answer(raw, "llm:composed")
+        previous = raw
+    # Filler that survived every revision is never sent under his name: a
+    # required question parks instead.
+    return _fail_closed_result(q)
 
 
 # ---------------------------------------------------------------------------

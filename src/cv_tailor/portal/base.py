@@ -371,6 +371,25 @@ def verify_file_attached(page, selector: str) -> bool:
         return False
 
 
+def id_selector(element_id: str) -> str:
+    """A selector matching an element by id, valid for ANY id.
+
+    "#" + id is not safe: a CSS id selector cannot begin with a digit, and
+    Ashby's custom-question ids are UUIDs -- roughly a third of which start
+    with one. Building "#5d69bc56-0ca7-49e3-b539-ce4c829fd8fa" raises
+    SyntaxError ("not a valid selector") rather than matching nothing, so the
+    failure did not look like a selector problem at all: it surfaced on a real
+    posting as unwritable-required, with the answer composed, the write
+    attempted, and the verification blowing up on the way back.
+
+    The attribute form matches regardless of the first character. Backslashes
+    and double quotes are escaped so an id from an untrusted page cannot break
+    out of the quoted value.
+    """
+    escaped = str(element_id).replace("\\", "\\\\").replace('"', '\\"')
+    return f'[id="{escaped}"]'
+
+
 def screening_context(package: dict) -> dict:
     """Material the composed free-text screening tier may answer FROM.
 

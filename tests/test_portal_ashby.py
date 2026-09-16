@@ -622,7 +622,11 @@ def test_open_ended_required_question_is_answered_from_the_letter(chromium_page,
         page.goto(f"{base_url}/ashby_openended.html", wait_until="load")
         result = AshbyAdapter().apply(page, {"id": "job-open"}, package, _PROFILE,
                                       _ANSWERS, dry_run=True, client=client)
-        answered = page.locator("#q_open_ended").input_value()
+        # Attribute form, not "#<id>": the fixture's id is a digit-leading
+        # UUID (as Ashby's really are), and "#5d69..." is not a valid CSS
+        # selector -- which is the very bug this test now covers.
+        answered = page.locator(
+            '[id="5d69bc56-0ca7-49e3-b539-ce4c829fd8fa"]').input_value()
 
     assert result.status == "filled", result.reason
     assert "payment" in answered.lower()
