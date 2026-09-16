@@ -595,6 +595,111 @@ def _llm_answer(
 
 
 # ---------------------------------------------------------------------------
+# Open-ended free-text tier
+# ---------------------------------------------------------------------------
+#
+# LLM_SYSTEM_PROMPT above is deliberately a FACTUAL extractor: profile/answers
+# only, never invent, a few words to one sentence. A motivation question ("what
+# excites you about joining X", "describe the most impactful thing you shipped")
+# has no answer in that material, so it correctly replies UNKNOWN -- and both
+# live parks on 2026-09-16 were exactly that.
+#
+# The honest material for those questions already exists and is already being
+# SENT with the same application: the tailored cover letter, written from the
+# profile + the job description and passed through cover_llm's anti-slop guard.
+# Composing an answer from the letter is not a new claim about him; it is the
+# claim already going out, restated to fit the box.
+#
+# Two hard limits keep this from becoming invention:
+#   * kind == "textarea" ONLY. That is how both boards render long-form
+#     questions, and it keeps salary/years/work-authorization fields on the
+#     fail-closed factual path where they belong.
+#   * the same anti-slop bar the letter itself must clear. A required question
+#     with no clean answer parks; generated filler never goes out under his name.
+COMPOSE_SYSTEM_PROMPT = """You answer ONE open-ended job-application question as \
+Teodor-Cristian Lutoiu.
+
+You get his cover letter for THIS job (already written and already being sent with
+this application) and his profile. Answer using ONLY what those say.
+
+RULES:
+- Use ONLY facts already present in the letter or the profile. Never add an
+  employer, title, date, metric, tool or claim that is not already there.
+- If the question cannot be answered honestly from that material, reply with
+  exactly: UNKNOWN
+- Write 2 to 4 plain sentences. No markdown, no bullet points, no headings, no
+  surrounding quotes, no sign-off.
+- Plain, direct, specific. No em dashes. Do not write "I am excited",
+  "passionate", "leverage", "proven track record" or similar filler.
+- Answer the question that was actually asked. Do not restate the whole letter.
+
+Reply with the answer text ONLY (or UNKNOWN). Nothing else."""
+
+_COMPOSE_WORDS_MIN, _COMPOSE_WORDS_MAX = 12, 150
+
+
+def _compose_warnings(text: str) -> list[str]:
+    """The letter's own anti-slop bar, applied to a screening answer.
+
+    Imported inside the function so screening never takes a module-level
+    dependency on cover_llm (and cannot create an import cycle with it)."""
+    from cv_tailor.cover_llm import BANNED_PHRASES
+
+    warns: list[str] = []
+    low = (text or "").lower()
+    warns.extend(f"banned phrase: {p!r}" for p in BANNED_PHRASES if p in low)
+    if "—" in text or "–" in text:
+        warns.append("contains an em/en dash")
+    n = len(re.findall(r"\b[\w'-]+\b", text))
+    if n < _COMPOSE_WORDS_MIN:
+        warns.append(f"too short ({n} words)")
+    if n > _COMPOSE_WORDS_MAX:
+        warns.append(f"too long ({n} words)")
+    return warns
+
+
+def build_compose_messages(q: Question, profile: dict, context: dict) -> list[dict]:
+    letter = str((context or {}).get("cover_letter") or "").strip()
+    pitch = str((context or {}).get("pitch") or "").strip()
+    profile_yaml = yaml.safe_dump(profile, sort_keys=False, allow_unicode=True)
+    pitch_block = f"\n# One-line pitch for this job\n{pitch}\n" if pitch else ""
+    user = (
+        f"# His cover letter for THIS job\n{letter}\n{pitch_block}\n"
+        f"# Candidate profile (profile.yaml)\n```yaml\n{profile_yaml}```\n\n"
+        f"# Question\n{q.label}"
+    )
+    return [
+        {"role": "system", "content": COMPOSE_SYSTEM_PROMPT},
+        {"role": "user", "content": user},
+    ]
+
+
+def _composable(q: Question, context: dict | None) -> bool:
+    """Only a long-form question, and only when there is a letter to ground it."""
+    return (
+        q.kind == "textarea"
+        and bool(str((context or {}).get("cover_letter") or "").strip())
+    )
+
+
+def _compose_answer(q: Question, profile: dict, context: dict, *, client: Any,
+                    deployment: str | None = None) -> Answer | None:
+    deployment = deployment or os.environ.get("AZURE_OPENAI_DEPLOYMENT", "gpt-4o-mini")
+    response = client.chat.completions.create(
+        model=deployment,
+        messages=build_compose_messages(q, profile, context),
+        temperature=0.3,
+    )
+    raw = (response.choices[0].message.content or "").strip()
+    if not raw or raw.strip().upper() == "UNKNOWN":
+        return _fail_closed_result(q)
+    if _compose_warnings(raw):
+        # Sending generated filler under his name is worse than parking.
+        return _fail_closed_result(q)
+    return Answer(raw, "llm:composed")
+
+
+# ---------------------------------------------------------------------------
 # Public entry point
 # ---------------------------------------------------------------------------
 
@@ -605,6 +710,7 @@ def answer_question(
     *,
     client: Any = None,
     deployment: str | None = None,
+    context: dict | None = None,
 ) -> Answer | None:
     """Answer one screening question, deterministic tier first.
 
@@ -633,5 +739,14 @@ def answer_question(
     # No deterministic answer -> the LLM tier (if a client is available).
     if client is None:
         return None
+
+    # A long-form question with a letter to ground it is composed from that
+    # letter, not extracted from the profile: the factual tier can only ever
+    # answer UNKNOWN here, and UNKNOWN on a REQUIRED question parks the job.
+    # Everything else -- every short or factual field -- stays on the factual
+    # path below, even when a letter is available.
+    if _composable(q, context):
+        return _compose_answer(q, profile, context or {}, client=client,
+                               deployment=deployment)
 
     return _llm_answer(q, profile, answers, client=client, deployment=deployment)

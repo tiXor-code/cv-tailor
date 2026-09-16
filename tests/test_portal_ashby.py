@@ -570,3 +570,59 @@ def test_apply_reaches_the_form_when_the_tab_click_never_navigates(chromium_page
     assert result.status == "filled", result.reason
     assert uploaded == 1
     assert landed.rstrip("/").endswith("/application")
+
+
+# --- open-ended required question ----------------------------------------------
+
+def _tiered_client(prose: str, calls: list | None = None):
+    """A client that behaves like the real one does on a motivation question:
+    UNKNOWN to the FACTUAL screening prompt (nothing in profile/answers grounds
+    it), prose only to the COMPOSE prompt. Keyed off the real constant, so this
+    cannot drift from what the module actually sends."""
+    from types import SimpleNamespace
+
+    from cv_tailor.screening import COMPOSE_SYSTEM_PROMPT
+
+    def create(**kwargs):
+        messages = kwargs.get("messages") or []
+        system = messages[0]["content"] if messages else ""
+        if calls is not None:
+            calls.append(system)
+        reply = prose if system == COMPOSE_SYSTEM_PROMPT else "UNKNOWN"
+        return SimpleNamespace(
+            choices=[SimpleNamespace(message=SimpleNamespace(content=reply))])
+
+    return SimpleNamespace(
+        chat=SimpleNamespace(completions=SimpleNamespace(create=create)))
+
+
+def test_open_ended_required_question_is_answered_from_the_letter(chromium_page, package):
+    """The last thing that parked real applications.
+
+    Measured live 2026-09-16 with a real Azure client: Sardine (ashby) stopped
+    on "What excites you about the opportunity to join Sardine?" and
+    saas.group (greenhouse) on "Shortly describe your most impactful AI feature
+    you shipped end to end" -- both REQUIRED free text, with every other field
+    on the form already filled and the resume attached.
+
+    The factual tier can only answer UNKNOWN there, so the adapter has to hand
+    the screening module the letter that ships with THIS application and let it
+    compose from that.
+    """
+    page = chromium_page
+    systems: list[str] = []
+    client = _tiered_client(
+        "Fixture Co works on payment integrations, which is the same end-to-end "
+        "work I have been doing, including the reconciliation nobody wants to "
+        "debug at 2am.",
+        systems,
+    )
+
+    with serve_fixtures() as base_url:
+        page.goto(f"{base_url}/ashby_openended.html", wait_until="load")
+        result = AshbyAdapter().apply(page, {"id": "job-open"}, package, _PROFILE,
+                                      _ANSWERS, dry_run=True, client=client)
+        answered = page.locator("#q_open_ended").input_value()
+
+    assert result.status == "filled", result.reason
+    assert "payment" in answered.lower()

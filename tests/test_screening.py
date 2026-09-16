@@ -596,3 +596,84 @@ def test_current_company_never_confused_with_generic_company_name_routing():
     q = _q("Company name")
     out = answer_question(q, _PROFILE_MULTI_CURRENT, _ANSWERS)
     assert out != Answer("Big Corp", "profile:experiences.current")
+
+
+# ---------------------------------------------------------------------------
+# Open-ended free-text tier (composed from the letter that ships with the job)
+# ---------------------------------------------------------------------------
+#
+# The last thing standing between Scout and a zero-touch application. Measured
+# live 2026-09-16 with a real Azure client: Sardine (ashby) parked on "What
+# excites you about the opportunity to join Sardine?" and saas.group
+# (greenhouse) on "Shortly describe your most impactful AI feature you shipped
+# end to end". Both are REQUIRED free-text questions, and the factual tier
+# correctly answers UNKNOWN: nothing in profile.yaml or answers.yaml grounds a
+# motivation answer, and LLM_SYSTEM_PROMPT forbids inventing one.
+#
+# The material to answer them honestly already exists and is already being SENT
+# with that same application: the tailored cover letter, written from the
+# profile + JD and passed through cover_llm's anti-slop guard. Composing from
+# that is not a new claim -- it is the claim already going out, restated.
+#
+# Eligibility is kind == "textarea" ONLY. That is how both boards render
+# long-form questions, and it keeps every short/factual field (salary, years,
+# work authorization) on the fail-closed path where it belongs.
+
+_LETTER = (
+    "I have spent the last two years building payment and fraud integrations end to end, "
+    "most recently wiring a risk-scoring pipeline into a live checkout flow. I work in "
+    "Python and TypeScript, and I like owning the unglamorous parts: retries, idempotency, "
+    "and the reconciliation nobody wants to debug at 2am."
+)
+
+
+def test_open_ended_question_without_context_still_fails_closed():
+    """Unchanged behaviour when no letter is available: never invent one."""
+    client = _FakeClient(["UNKNOWN"])
+    q = _q("What excites you about the opportunity to join Sardine?",
+           kind="textarea", required=True)
+
+    assert answer_question(q, _PROFILE, _ANSWERS, client=client) is None
+
+
+def test_open_ended_question_is_composed_from_the_letter():
+    client = _FakeClient([
+        "Sardine works on fraud infrastructure at scale, which is the same problem I "
+        "have been wiring risk scoring into checkout flows to solve."
+    ])
+    q = _q("What excites you about the opportunity to join Sardine?",
+           kind="textarea", required=True)
+
+    out = answer_question(q, _PROFILE, _ANSWERS, client=client,
+                          context={"cover_letter": _LETTER})
+
+    assert out is not None
+    assert out.grounded_in == "llm:composed"
+    assert "fraud" in out.value
+
+
+def test_a_composed_answer_that_reads_as_slop_is_refused():
+    """The same anti-slop bar the letter itself has to clear. A required
+    question with no clean answer parks rather than sending generated filler
+    under his name."""
+    client = _FakeClient([
+        "I am excited and passionate about this dynamic opportunity to leverage my "
+        "proven track record."
+    ])
+    q = _q("What excites you about the opportunity to join Sardine?",
+           kind="textarea", required=True)
+
+    assert answer_question(q, _PROFILE, _ANSWERS, client=client,
+                           context={"cover_letter": _LETTER}) is None
+
+
+def test_context_never_lets_a_factual_question_be_composed():
+    """The safety property. Having a letter on hand must not turn "never invent
+    facts" into invention: a short factual field stays on the factual tier and
+    fails closed, however much prose is available to riff on."""
+    client = _FakeClient(["UNKNOWN"])
+    q = _q("How many years of Kubernetes experience do you have?",
+           kind="text", required=True)
+
+    assert answer_question(q, _PROFILE, _ANSWERS, client=client,
+                           context={"cover_letter": _LETTER}) is None

@@ -37,6 +37,7 @@ from cv_tailor.portal.base import (
     resolve_blocker,
     verify_file_attached,
     verify_filled,
+    screening_context,
 )
 from cv_tailor.screening import Question, answer_question
 
@@ -357,7 +358,13 @@ class GreenhouseAdapter(PortalAdapter):
             # that means ANY ungrounded question returns None, not just
             # required ones). Only abort when the question was actually
             # required; an ungrounded optional question is a normal skip.
-            answer = answer_question(question, profile, answers, client=client, deployment=deployment)
+            # The letter written for THIS job travels with the questions: a
+            # required open-ended one has no answer in profile/answers, so
+            # without it the factual tier can only say UNKNOWN and the whole
+            # application parks (saas.group, 2026-09-16).
+            answer = answer_question(question, profile, answers, client=client,
+                                      deployment=deployment,
+                                      context=screening_context(package))
             if answer is None:
                 if not question.required:
                     continue

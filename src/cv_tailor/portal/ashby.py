@@ -44,6 +44,7 @@ from cv_tailor.portal.base import (
     handoff_timeout_s,
     register_adapter,
     resolve_blocker,
+    screening_context,
     verify_file_attached,
     verify_filled,
 )
@@ -186,7 +187,13 @@ class AshbyAdapter(PortalAdapter):
 
         self._fill_cover_letter(page, package.get("cover_letter_path"))
 
-        aborted = self._answer_remaining_questions(page, profile, answers, client=client, deployment=deployment)
+        # The letter written for THIS job travels with the questions: a
+        # required open-ended one ("what excites you about joining X") has no
+        # answer in profile/answers, so without it the factual tier can only
+        # say UNKNOWN and the whole application parks.
+        aborted = self._answer_remaining_questions(
+            page, profile, answers, client=client, deployment=deployment,
+            context=screening_context(package))
         if aborted is not None:
             capture_evidence(page, evidence_dir, "aborted")
             return PortalResult(status="needs_human", reason=aborted, evidence_dir=str(evidence_dir))
@@ -454,7 +461,8 @@ class AshbyAdapter(PortalAdapter):
     # --- screening questions ----------------------------------------------------
 
     def _answer_remaining_questions(self, page, profile: dict, answers: dict, *,
-                                     client: Any = None, deployment: str | None = None) -> str | None:
+                                     client: Any = None, deployment: str | None = None,
+                                     context: dict | None = None) -> str | None:
         """Enumerate field-entry wrappers not already handled, answer each
         via the screening module, and fill the form. Returns a
         needs_human reason string on a required-unanswerable question,
@@ -473,7 +481,8 @@ class AshbyAdapter(PortalAdapter):
             if question is None:
                 continue
 
-            answer = answer_question(question, profile, answers, client=client, deployment=deployment)
+            answer = answer_question(question, profile, answers, client=client,
+                                      deployment=deployment, context=context)
 
             # answer_question with no client (deterministic tier only) can
             # return None for ANY unmatched question, not just required

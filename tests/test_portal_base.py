@@ -815,3 +815,34 @@ def test_smoke_detect_blockers_ignores_the_invisible_recaptcha_badge():
             assert detect_blockers(page) is None
         finally:
             browser.close()
+
+
+# --- screening context ---------------------------------------------------------
+#
+# The composed free-text tier can only run if the adapter hands it the letter
+# that ships with THIS application. package is the assembled meta, so both the
+# letter path and the one-line pitch are already there.
+
+def test_screening_context_carries_the_letter_and_pitch(tmp_path):
+    letter = tmp_path / "cover_letter.md"
+    letter.write_text("I have shipped payment integrations end to end.\n")
+    package = {"cover_letter_path": str(letter), "one_line_pitch": "Payments engineer"}
+
+    ctx = portal_base.screening_context(package)
+
+    assert ctx["cover_letter"] == "I have shipped payment integrations end to end."
+    assert ctx["pitch"] == "Payments engineer"
+
+
+def test_screening_context_is_empty_without_a_letter():
+    """No letter means no grounded material, and the composed tier must not
+    run at all -- a required question parks instead, as it does today."""
+    assert portal_base.screening_context({}) == {}
+
+
+def test_screening_context_survives_an_unreadable_letter(tmp_path):
+    """A missing or unreadable letter is not a crash: it degrades to the
+    existing fail-closed behaviour."""
+    package = {"cover_letter_path": str(tmp_path / "gone.md"), "one_line_pitch": "x"}
+
+    assert portal_base.screening_context(package) == {}

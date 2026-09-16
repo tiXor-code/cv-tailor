@@ -1,0 +1,89 @@
+<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>Forward Deployed Engineer @ Ashby Open-Ended Fixture Co</title></head>
+<body>
+<!--
+  An Ashby application form whose required screening question is OPEN-ENDED
+  free text -- the shape that parked real applications on 2026-09-16.
+
+  Measured live that day with a real Azure client:
+    Sardine (ashby)      -> "What excites you about the opportunity to join
+                             Sardine?"          -> unanswerable-required
+    saas.group (greenhouse) -> "Shortly describe your most impactful AI feature
+                             you shipped end to end:" -> unanswerable-required
+
+  Both are REQUIRED textareas. The factual screening tier correctly answers
+  UNKNOWN for them (nothing in profile.yaml or answers.yaml grounds a
+  motivation answer, and its prompt forbids inventing one), so every such
+  posting parked with everything else on the form already filled.
+
+  ashby_form.html deliberately keeps its required screening question as a TEXT
+  input, because that exercises the factual/deterministic path. This file is
+  the other half: a required textarea, so the composed tier -- which answers
+  from the cover letter already being sent with this application -- has
+  something to act on.
+
+  Lean on purpose: contact fields, the hidden drag-drop resume input, the
+  cover-letter box, one required open-ended question, submit. The exhaustive
+  field/blocker/submit coverage stays in ashby_form.html.
+-->
+<nav role="tablist">
+  <a id="job-overview" role="tab" aria-selected="false" href="#overview">Overview</a>
+  <a id="job-application-form" role="tab" aria-selected="true" href="#form">Application</a>
+</nav>
+
+<div id="form" role="tabpanel">
+  <form id="application-form">
+    <div class="ashby-application-form-field-entry" data-field-path="_systemfield_name">
+      <label for="_systemfield_name">Name</label>
+      <input type="text" name="_systemfield_name" id="_systemfield_name" required>
+    </div>
+
+    <div class="ashby-application-form-field-entry" data-field-path="_systemfield_email">
+      <label for="_systemfield_email">Email</label>
+      <input type="email" name="_systemfield_email" id="_systemfield_email" required>
+    </div>
+
+    <div class="ashby-application-form-field-entry" data-field-path="_systemfield_resume">
+      <label for="_systemfield_resume">Resume</label>
+      <div class="resume-dropzone">
+        <button type="button" id="resume-btn">Upload File</button>
+        <span id="resume-filename"></span>
+        <input type="file" name="_systemfield_resume" id="_systemfield_resume"
+               accept=".pdf,.doc,.docx"
+               style="position:absolute;width:1px;height:1px;clip:rect(0 0 0 0);overflow:hidden">
+      </div>
+    </div>
+
+    <div class="ashby-application-form-field-entry" data-field-path="_systemfield_cover_letter">
+      <label for="_systemfield_cover_letter">Cover letter</label>
+      <textarea name="_systemfield_cover_letter" id="_systemfield_cover_letter"></textarea>
+    </div>
+
+    <div class="ashby-application-form-field-entry" data-field-path="q_open_ended">
+      <label for="q_open_ended" id="q_open_ended_label">What excites you about the opportunity to join Fixture Co?</label>
+      <textarea name="q_open_ended" id="q_open_ended" placeholder="Type here..." required></textarea>
+    </div>
+
+    <button type="submit" id="submit-btn">Submit Application</button>
+  </form>
+</div>
+
+<div id="confirmation" style="display:none">Your application has been submitted.</div>
+
+<script>
+  var input = document.getElementById("_systemfield_resume");
+  input.addEventListener("change", function () {
+    if (!input.files.length) { return; }
+    document.getElementById("resume-filename").textContent = input.files[0].name;
+    document.getElementById("resume-btn").textContent = "Replace";
+  });
+
+  document.getElementById("application-form").addEventListener("submit", function (ev) {
+    ev.preventDefault();
+    document.getElementById("form").style.display = "none";
+    document.getElementById("confirmation").style.display = "block";
+  });
+</script>
+</body>
+</html>

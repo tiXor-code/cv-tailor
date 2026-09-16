@@ -39,6 +39,7 @@ from cv_tailor.portal.base import (
     resolve_blocker,
     verify_file_attached,
     verify_filled,
+    screening_context,
 )
 from cv_tailor.screening import Answer, Question, answer_question
 
@@ -254,13 +255,15 @@ class LeverAdapter(PortalAdapter):
             return False
         return verify_file_attached(page, "input[name='resume']")
 
-    def _answer_all(self, page, evidence_dir, profile, answers, *, client, deployment) -> PortalResult | None:
+    def _answer_all(self, page, evidence_dir, profile, answers, *, client, deployment,
+                     context: dict | None = None) -> PortalResult | None:
         """Fill every remaining discovered question and verify each write.
         Returns a needs_human PortalResult if a REQUIRED question can't be
         grounded (unanswerable-required) or was grounded but the value didn't
         land in the DOM (unwritable-required), else None."""
         for question, field_name in discover_questions(page):
-            answer = answer_question(question, profile, answers, client=client, deployment=deployment)
+            answer = answer_question(question, profile, answers, client=client,
+                                      deployment=deployment, context=context)
             if answer is None:
                 capture_evidence(page, evidence_dir, "aborted")
                 return PortalResult(status="needs_human",
@@ -399,7 +402,9 @@ class LeverAdapter(PortalAdapter):
                 cover_text = ""
             fill_field(page, "textarea[name='comments']", cover_text)
 
-        aborted = self._answer_all(page, evidence_dir, profile, answers, client=client, deployment=deployment)
+        aborted = self._answer_all(page, evidence_dir, profile, answers, client=client,
+                                    deployment=deployment,
+                                    context=screening_context(package))
         if aborted is not None:
             return aborted
 

@@ -371,6 +371,41 @@ def verify_file_attached(page, selector: str) -> bool:
         return False
 
 
+def screening_context(package: dict) -> dict:
+    """Material the composed free-text screening tier may answer FROM.
+
+    `package` is the assembled meta, so the cover letter written for THIS job
+    and its one-line pitch are already in hand. That letter is the only
+    grounded prose in his voice that is ALREADY being sent with this
+    application, which is what makes composing a long-form answer from it a
+    restatement rather than a fresh claim about him.
+
+    Returns {} when there is no readable letter. With nothing to ground an
+    answer in, the composed tier must not run at all, and a required
+    open-ended question parks exactly as it does today -- the fail-closed
+    direction.
+
+    Built from builtins only (no Path, no yaml): this runs on every portal
+    application, and a helper that gathers evidence must never be the thing
+    that raises.
+    """
+    path = (package or {}).get("cover_letter_path")
+    if not path:
+        return {}
+    try:
+        with open(path, encoding="utf-8") as handle:
+            letter = handle.read().strip()
+    except OSError:
+        return {}
+    if not letter:
+        return {}
+    context = {"cover_letter": letter}
+    pitch = str((package or {}).get("one_line_pitch") or "").strip()
+    if pitch:
+        context["pitch"] = pitch
+    return context
+
+
 # --- orchestration ------------------------------------------------------------
 
 def run_portal_application(entry: dict, package: dict, profile: dict, answers: dict, *,

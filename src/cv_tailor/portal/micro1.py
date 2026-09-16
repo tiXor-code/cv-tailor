@@ -125,6 +125,7 @@ from cv_tailor.portal.base import (
     resolve_blocker,
     verify_file_attached,
     verify_filled,
+    screening_context,
 )
 from cv_tailor.screening import Question, answer_question
 
@@ -283,7 +284,8 @@ class Micro1Adapter(PortalAdapter):
 
         return self._submit_flow(page, entry, evidence_dir, profile, answers,
                                   client=client, deployment=deployment,
-                                  handoff=handoff, notify=notify)
+                                  handoff=handoff, notify=notify,
+                                  context=screening_context(package))
 
     # --- phone -----------------------------------------------------------------
 
@@ -396,7 +398,8 @@ class Micro1Adapter(PortalAdapter):
     # --- submission ----------------------------------------------------------------
 
     def _submit_flow(self, page, entry: dict, evidence_dir: Path, profile: dict,
-                      answers: dict, *, client, deployment, handoff, notify) -> PortalResult:
+                      answers: dict, *, client, deployment, handoff, notify,
+                      context: dict | None = None) -> PortalResult:
         company = (entry or {}).get("company", "")
         steps = 0
         while steps < _MAX_STEPS:
@@ -443,7 +446,8 @@ class Micro1Adapter(PortalAdapter):
 
             if questions:
                 aborted = self._answer_step_questions(page, questions, profile, answers,
-                                                       evidence_dir, client=client, deployment=deployment)
+                                                       evidence_dir, client=client,
+                                                       deployment=deployment, context=context)
                 if aborted is not None:
                     return aborted
             # loop: click Next/submit again on the now-answered step, bounded
@@ -707,9 +711,11 @@ class Micro1Adapter(PortalAdapter):
         return actual == target_num
 
     def _answer_step_questions(self, page, questions, profile: dict, answers: dict,
-                                evidence_dir: Path, *, client, deployment) -> PortalResult | None:
+                                evidence_dir: Path, *, client, deployment,
+                                context: dict | None = None) -> PortalResult | None:
         for selector, question in questions:
-            answer = answer_question(question, profile, answers, client=client, deployment=deployment)
+            answer = answer_question(question, profile, answers, client=client,
+                                      deployment=deployment, context=context)
             if answer is None or not answer.value:
                 if question.required:
                     capture_evidence(page, evidence_dir, "aborted")
