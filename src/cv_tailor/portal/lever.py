@@ -40,6 +40,8 @@ from cv_tailor.portal.base import (
     verify_file_attached,
     verify_filled,
     screening_context,
+    submit_rejected,
+    SUBMIT_REJECTED_REASON,
 )
 from cv_tailor.screening import Answer, Question, answer_question
 
@@ -480,6 +482,18 @@ class LeverAdapter(PortalAdapter):
         try:
             page.wait_for_selector(_CONFIRMATION_SELECTOR, timeout=_CONFIRMATION_TIMEOUT_MS)
         except PlaywrightError:
+            # A timeout (or a closed/navigated page) is genuinely ambiguous --
+            # the submit may already have landed, so it is never retried and
+            # its ledger row is KEPT.
+            #
+            # An explicit refusal is not ambiguous at all: the portal states
+            # nothing was sent (live robco 2026-09-16), so it gets the reason
+            # that rolls the pre-inserted row back, or norm_key would block
+            # that company forever for an application that never happened.
+            if submit_rejected(page):
+                capture_evidence(page, evidence_dir, "submit-rejected")
+                return PortalResult(status="needs_human", reason=SUBMIT_REJECTED_REASON,
+                                     evidence_dir=str(evidence_dir))
             return PortalResult(status="needs_human", reason=_NO_CONFIRMATION_REASON,
                                  evidence_dir=str(evidence_dir))
 

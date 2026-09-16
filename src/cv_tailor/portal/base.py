@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import time
 from pathlib import Path
 from typing import Any, NamedTuple
@@ -288,6 +289,50 @@ def _dump_form_state(page) -> dict:
     except PlaywrightError:
         return {}
     return {k: v for k, v in (state or {}).items() if k not in _SECRET_FIELD_NAMES}
+
+
+# A portal that EXPLICITLY says it refused the submission is a different thing
+# from one that simply never confirmed. Live robco evidence 2026-09-16
+# (portal/no-confirmation.png, an Ashby board): "We couldn't submit your
+# application. Your application submission was flagged as possible spam."
+#
+# This lives in base because ALL FOUR adapters had the identical gap, and the
+# consequence is the same everywhere: the ambiguous no-confirmation reason is
+# deliberately outside the roll-back family, so its ledger row survives -- and
+# a surviving row for an application that never happened blocks that
+# company|role forever through norm_key.
+#
+# Matched on page TEXT rather than an error-banner selector: the wording above
+# is what the evidence screenshot actually shows, whereas nothing tells us
+# which class or role attribute any given board hangs on its banner. A refusal
+# NEVER triggers a retry -- re-submitting a refused form is permanently out of
+# scope, and a retry is the one way a duplicate application could escape.
+_SUBMIT_REJECTED_RE = re.compile(
+    r"couldn['’]?t submit your application|"
+    r"could not submit your application|"
+    r"unable to submit your application|"
+    r"flagged as possible spam|"
+    r"your application was not submitted",
+    re.I,
+)
+SUBMIT_REJECTED_REASON = (
+    "submit-rejected: the portal explicitly refused the submission, nothing "
+    "was sent; NOT retried automatically"
+)
+
+
+def submit_rejected(page) -> bool:
+    """True when the page EXPLICITLY states the submission did not happen.
+
+    Never raises -- a locator error reads as "no refusal found", which leaves
+    the caller on its ambiguous no-confirmation reason. That is the SAFE
+    direction: it KEEPS the ledger row rather than deleting one for a submit
+    that might really have landed."""
+    try:
+        hit = page.get_by_text(_SUBMIT_REJECTED_RE)
+        return hit.count() > 0 and hit.first.is_visible()
+    except PlaywrightError:
+        return False
 
 
 def capture_evidence(page, evidence_dir, stage: str) -> None:

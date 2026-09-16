@@ -341,10 +341,33 @@ class _FakeSubmitLocator:
         self.clicked = True
 
 
+class _FakeTextLocator:
+    """Stands in for page.get_by_text(...). Reports no match by default, so
+    the refusal check reads "nothing refused" and every pre-existing test
+    keeps its ambiguous no-confirmation reason."""
+
+    def __init__(self, matches=0):
+        self._matches = matches
+
+    @property
+    def first(self):
+        return self
+
+    def count(self):
+        return self._matches
+
+    def is_visible(self):
+        return self._matches > 0
+
+
 class _FakeSubmitPage:
-    def __init__(self, *, wait_error=None):
+    def __init__(self, *, wait_error=None, refused=False):
         self.locator_obj = _FakeSubmitLocator()
         self._wait_error = wait_error
+        self._refused = refused
+
+    def get_by_text(self, pattern):
+        return _FakeTextLocator(1 if self._refused else 0)
 
     def locator(self, selector):
         return self.locator_obj
@@ -394,6 +417,34 @@ def test_submit_post_click_timeout_still_returns_needs_human_same_reason(tmp_pat
         "no-confirmation: submission may have succeeded, VERIFY on the portal "
         "before applying manually"
     )
+
+
+def test_submit_explicit_refusal_proves_nothing_was_submitted(tmp_path):
+    """Live robco shape (2026-09-16, an Ashby board, but nothing about it is
+    Ashby-specific): the portal SAYS it refused the submission. Lever had the
+    identical gap -- it returned the ambiguous no-confirmation reason, which
+    is deliberately outside the roll-back family, so the pre-inserted ledger
+    row SURVIVED and norm_key blocked that company forever for an application
+    that provably never went through.
+
+    The two tests above must keep their ambiguous reason: a timeout and a
+    closed page really might have submitted, and deleting those rows would let
+    a duplicate application go out."""
+    from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
+
+    from cv_tailor.apply_policy import proves_no_submission
+
+    adapter = LeverAdapter()
+    page = _FakeSubmitPage(wait_error=PlaywrightTimeoutError("Timeout 30000ms exceeded"),
+                           refused=True)
+    evidence_dir = tmp_path / "portal"
+
+    result = adapter._submit_and_await_confirmation(page, evidence_dir)
+
+    assert result.status == "needs_human"
+    assert result.reason.startswith("submit-rejected")
+    assert proves_no_submission(result.reason), (
+        "an explicitly refused submit must roll the ledger row back")
 
 
 def test_submit_pre_click_error_still_returns_failed(tmp_path):

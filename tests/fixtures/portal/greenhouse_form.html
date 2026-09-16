@@ -183,6 +183,22 @@
         if (params.get("nosubmit") === "1") {
           return;
         }
+        // spamrejected=1: the portal EXPLICITLY refuses the submit and says
+        // so, instead of silently never confirming. Live evidence is from an
+        // Ashby board (robco, 2026-09-16) but the refusal shape is not
+        // Ashby-specific, and greenhouse had the identical gap: an ambiguous
+        // "may have succeeded" reason keeps a ledger row for an application
+        // that never happened. Form hidden AND banner shown, as observed.
+        if (params.get("spamrejected") === "1") {
+          form.style.display = "none";
+          var err = document.createElement("div");
+          err.id = "submit-error";
+          err.setAttribute("role", "alert");
+          err.textContent = "We couldn't submit your application. Your " +
+            "application submission was flagged as possible spam.";
+          document.body.appendChild(err);
+          return;
+        }
         var confirmation = document.createElement("div");
         confirmation.id = "confirmation-message";
         confirmation.textContent = "Thank you for applying to Acme Corp!";

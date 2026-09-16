@@ -126,6 +126,8 @@ from cv_tailor.portal.base import (
     verify_file_attached,
     verify_filled,
     screening_context,
+    submit_rejected,
+    SUBMIT_REJECTED_REASON,
 )
 from cv_tailor.screening import Question, answer_question
 
@@ -452,6 +454,15 @@ class Micro1Adapter(PortalAdapter):
                     return aborted
             # loop: click Next/submit again on the now-answered step, bounded
             # by _MAX_STEPS above.
+
+        # An explicit refusal proves nothing was sent, so it must NOT degrade
+        # to the ambiguous reason below -- that one is outside the roll-back
+        # family, so its ledger row survives and norm_key blocks the company
+        # forever (live robco 2026-09-16).
+        if submit_rejected(page):
+            capture_evidence(page, evidence_dir, "submit-rejected")
+            return PortalResult(status="needs_human", reason=SUBMIT_REJECTED_REASON,
+                                 evidence_dir=str(evidence_dir))
 
         capture_evidence(page, evidence_dir, "no-confirmation")
         return PortalResult(status="needs_human", reason=_NO_CONFIRMATION_REASON,

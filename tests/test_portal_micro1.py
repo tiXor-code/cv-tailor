@@ -420,6 +420,30 @@ def test_apply_armed_no_confirmation_no_second_step_returns_needs_human(chromium
     assert (Path(result.evidence_dir) / "no-confirmation.png").exists()
 
 
+def test_apply_armed_explicit_refusal_proves_nothing_was_submitted(chromium_page, package):
+    """Same class as the live robco failure (2026-09-16): a portal that SAYS
+    it refused the submission must not degrade to the ambiguous "may have
+    succeeded" reason, because that reason is outside the roll-back family --
+    so its ledger row survives and norm_key blocks the company forever for an
+    application that provably never went through.
+
+    Distinct from the nosubmit test above, which is genuinely ambiguous and
+    must KEEP its row."""
+    from cv_tailor.apply_policy import proves_no_submission
+
+    page = chromium_page
+    entry = {"id": "job-1"}
+
+    with serve_fixtures() as base_url:
+        _goto(page, base_url, variant="spamrejected")
+        result = Micro1Adapter().apply(page, entry, package, _PROFILE, _ANSWERS, dry_run=False)
+
+    assert result.status == "needs_human"
+    assert result.reason.startswith("submit-rejected")
+    assert proves_no_submission(result.reason), (
+        "an explicitly refused submit must roll the ledger row back")
+
+
 # --- handoff: second step waits for a human, never auto-answers -------------------
 
 def test_apply_handoff_second_step_notifies_and_times_out_without_auto_answering(

@@ -299,6 +299,33 @@ def test_dry_run_never_clicks_submit_even_when_confirmation_would_fail(tmp_path,
     assert result.status == "filled"
 
 
+def test_explicit_refusal_proves_nothing_was_submitted(tmp_path, browser_page):
+    """A portal that SAYS it refused must never be reported as "may have
+    succeeded". Live robco evidence 2026-09-16 (an Ashby board, but the shape
+    is not Ashby-specific): the page read "We couldn't submit your application
+    ... flagged as possible spam", the run returned the ambiguous
+    no-confirmation reason, and because that reason is outside the roll-back
+    family the pre-inserted ledger row SURVIVED -- blocking every sibling role
+    at that company through norm_key, for an application that never happened.
+    Greenhouse had the identical gap, and returns a bare inlined
+    "no-confirmation" on both the timeout and the generic-error branch."""
+    from cv_tailor.apply_policy import proves_no_submission
+
+    adapter = GreenhouseAdapter()
+    adapter.CONFIRM_TIMEOUT_MS = 300  # instance override -- don't actually wait 30s
+    package = _package(tmp_path)
+    entry = {"id": "job-1"}
+
+    with serve_fixtures() as base_url:
+        browser_page.goto(f"{base_url}/greenhouse_form.html?spamrejected=1", wait_until="load")
+        result = adapter.apply(browser_page, entry, package, PROFILE, ANSWERS, dry_run=False)
+
+    assert result.status == "needs_human"
+    assert result.reason.startswith("submit-rejected")
+    assert proves_no_submission(result.reason), (
+        "an explicitly refused submit must roll the ledger row back")
+
+
 def test_no_confirmation_within_timeout_returns_needs_human_and_never_retries(tmp_path, browser_page):
     adapter = GreenhouseAdapter()
     adapter.CONFIRM_TIMEOUT_MS = 300  # instance override -- don't actually wait 30s

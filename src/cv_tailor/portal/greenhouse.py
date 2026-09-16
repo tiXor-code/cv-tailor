@@ -39,6 +39,8 @@ from cv_tailor.portal.base import (
     verify_filled,
     id_selector,
     screening_context,
+    submit_rejected,
+    SUBMIT_REJECTED_REASON,
 )
 from cv_tailor.screening import Question, answer_question
 
@@ -471,12 +473,19 @@ class GreenhouseAdapter(PortalAdapter):
         try:
             page.locator(_SUBMIT_SELECTOR).first.click()
             page.wait_for_selector("#confirmation-message", timeout=self.CONFIRM_TIMEOUT_MS)
-        except PlaywrightTimeoutError:
-            return PortalResult(status="needs_human", reason="no-confirmation",
-                                 evidence_dir=str(evidence_dir))
-        except PlaywrightError:
-            # Submit control missing/unclickable etc. -- same fallback: the
-            # submission may or may not have gone through, never retry.
+        except (PlaywrightTimeoutError, PlaywrightError):
+            # Either a confirmation timeout, or a submit control that went
+            # missing/unclickable. Both are ambiguous -- the submission may or
+            # may not have gone through -- so neither is ever retried.
+            #
+            # UNLESS the portal explicitly refused, which PROVES nothing was
+            # sent (live robco 2026-09-16: "We couldn't submit your application
+            # ... flagged as possible spam"). Only that reason rolls the
+            # pre-inserted ledger row back; the ambiguous one must keep it.
+            if submit_rejected(page):
+                capture_evidence(page, evidence_dir, "submit-rejected")
+                return PortalResult(status="needs_human", reason=SUBMIT_REJECTED_REASON,
+                                     evidence_dir=str(evidence_dir))
             return PortalResult(status="needs_human", reason="no-confirmation",
                                  evidence_dir=str(evidence_dir))
 

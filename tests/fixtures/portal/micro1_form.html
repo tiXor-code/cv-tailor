@@ -39,6 +39,13 @@
                               exercising the adapter's post-click recheck
     ?variant=nosubmit      -> clicking Next does nothing at all, ever
                               (no confirmation, no second step)
+    ?variant=spamrejected  -> the portal EXPLICITLY refuses: the form is
+                              hidden and a banner says the submission was
+                              flagged as possible spam. Distinct from
+                              nosubmit, which is silently ambiguous -- here
+                              the site STATES nothing was sent, so the result
+                              must prove no submission (live robco shape,
+                              2026-09-16)
     ?variant=notromania    -> the country select geo-defaults to United
                               States (tel "+1") instead of Romania, so the
                               adapter must switch it before filling the
@@ -187,6 +194,20 @@
 
       form.addEventListener("submit", function (e) {
         e.preventDefault();
+
+        if (variant === "spamrejected") {
+          form.style.display = "none";
+          var err = document.getElementById("submit-error");
+          if (!err) {
+            err = document.createElement("div");
+            err.id = "submit-error";
+            err.setAttribute("role", "alert");
+            err.textContent = "We couldn't submit your application. Your " +
+              "application submission was flagged as possible spam.";
+            document.body.appendChild(err);
+          }
+          return;
+        }
 
         if (step === 1) {
           if (variant === "captcha") {
