@@ -66,6 +66,14 @@
     success panel with text that does NOT contain "submitted"/"thank you"
     appears (no error banner) -- exercises the broadened confirmation
     detection (form-disappeared-without-error signal).
+  - ?variant=spamrejected  -- on submit the form is removed AND an error panel
+    appears reading "We couldn't submit your application ... flagged as
+    possible spam" (live RobCo evidence, 2026-09-16 no-confirmation.png).
+    Modelled in the real order -- form gone AND banner present -- so the
+    form-vanish success signal is already correctly suppressed by the error
+    banner and the run can only time out. Exercises the explicit-refusal
+    classification: the portal SAYS nothing was sent, so the result must
+    prove no submission (and must never retry the submit).
   - ?variant=formidmismatch -- the form element's id is renamed away from
     "application-form" (the adapter's id, copied from one real posting and
     never verified against every board config) right after the script
@@ -442,6 +450,23 @@
       done.id = "alt-confirmation";
       done.textContent = "All set on our end.";
       formPanelEl.appendChild(done);
+    });
+  } else if (variant === "spamrejected") {
+    // Live RobCo evidence (2026-09-16): the submit is REFUSED -- the form is
+    // replaced by an error panel saying the submission was flagged as spam.
+    // Both halves happen together, exactly as the screenshot shows, so the
+    // form-vanish signal is suppressed by the banner and the poll runs out.
+    appForm.addEventListener("submit", function (ev) {
+      ev.preventDefault();
+      var formPanelEl = document.getElementById("form");
+      appForm.parentNode.removeChild(appForm);
+      var err = document.createElement("div");
+      err.id = "submit-error";
+      err.setAttribute("role", "alert");
+      err.textContent = "We couldn't submit your application. Your application " +
+        "submission was flagged as possible spam. If you believe this was a " +
+        "mistake, please submit your application again.";
+      formPanelEl.appendChild(err);
     });
   } else if (variant === "formidmismatch") {
     // Submit does nothing observable at all: no confirmation phrase, no

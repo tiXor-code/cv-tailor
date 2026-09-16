@@ -50,7 +50,15 @@ NO_SUBMIT_REASONS = frozenset({
 # which would have blocked every pragmatike role forever for an application
 # that provably never left the machine. Evidence: aborted.png + needs_human.png
 # and an empty field in form_state.json, with no submitted evidence at all.
-NO_SUBMIT_REASON_PREFIXES = ("resume-upload-failed", "unanswerable-required")
+#
+# submit-rejected: the portal ITSELF stated the submission did not happen --
+# live robco 2026-09-16, "We couldn't submit your application ... flagged as
+# possible spam". That is the strongest proof in this list, because the site is
+# the authority on whether it accepted the form. Without it the reason degraded
+# to the ambiguous no-confirmation, the row survived, and norm_key blocked
+# every robco role forever for an application that never left the machine.
+NO_SUBMIT_REASON_PREFIXES = ("resume-upload-failed", "unanswerable-required",
+                             "submit-rejected")
 
 
 def proves_no_submission(reason: str) -> bool:

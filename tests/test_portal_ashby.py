@@ -376,6 +376,37 @@ def test_apply_armed_no_confirmation_within_timeout_returns_needs_human(chromium
     assert (evidence_dir / "no-confirmation.png").exists()
 
 
+def test_apply_armed_explicit_refusal_proves_nothing_was_submitted(
+        chromium_page, package, monkeypatch):
+    """Live RobCo evidence 2026-09-16 (portal/no-confirmation.png): the page
+    read "We couldn't submit your application ... flagged as possible spam",
+    yet the run returned the AMBIGUOUS no-confirmation reason. That reason is
+    in neither NO_SUBMIT_REASONS nor its prefixes, so the pre-inserted ledger
+    row was KEPT -- marking robco applied forever and blocking every sibling
+    role through norm_key, for an application the portal itself says never
+    happened.
+
+    An explicit refusal is PROOF nothing was sent, so the reason must be one
+    proves_no_submission() recognises. It must still never retry the submit:
+    retrying a spam-flagged form is permanently out of scope, and a retry is
+    the one way a duplicate application could escape."""
+    from cv_tailor.apply_policy import proves_no_submission
+
+    monkeypatch.setattr(ashby, "CONFIRMATION_TIMEOUT_MS", 500)
+    page = chromium_page
+    entry = {"id": "job-1"}
+
+    with serve_fixtures() as base_url:
+        _goto(page, base_url, variant="spamrejected")
+        result = AshbyAdapter().apply(page, entry, package, _PROFILE, _ANSWERS, dry_run=False)
+
+    assert result.status == "needs_human"
+    assert result.reason.startswith("submit-rejected")
+    assert proves_no_submission(result.reason), (
+        "an explicitly refused submit must roll the ledger row back")
+    assert not result.reason.startswith("no-confirmation")
+
+
 def test_apply_armed_form_id_mismatch_never_false_reports_submitted(chromium_page, package, monkeypatch):
     """Phase C fix: signal 3 (form-vanish) assumed #application-form is the
     real Ashby id, never verified against a live posting. If the real id

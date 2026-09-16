@@ -129,6 +129,31 @@ _NO_CONFIRMATION_REASON = (
     "no-confirmation: submission may have succeeded, VERIFY on the portal "
     "before applying manually"
 )
+# An EXPLICIT refusal is NOT the same as no confirmation. Live RobCo evidence
+# (2026-09-16, portal/no-confirmation.png): "We couldn't submit your
+# application ... flagged as possible spam". The portal is stating the
+# submission did not happen, so the ambiguous "may have succeeded" reason is
+# actively wrong -- it keeps a ledger row for an application that never left
+# the machine, and norm_key then blocks every sibling role at that company
+# forever.
+#
+# Matched on TEXT, not via _ERROR_BANNER_SELECTOR: the wording below is what
+# the evidence screenshot actually shows, whereas nothing confirms that
+# RobCo's banner carries role="alert" or .error. This never triggers a retry --
+# re-submitting a spam-flagged form is permanently out of scope, and a retry is
+# the one way a duplicate application could escape.
+_SUBMIT_REJECTED_RE = re.compile(
+    r"couldn['’]?t submit your application|"
+    r"could not submit your application|"
+    r"unable to submit your application|"
+    r"flagged as possible spam|"
+    r"your application was not submitted",
+    re.I,
+)
+_SUBMIT_REJECTED_REASON = (
+    "submit-rejected: the portal explicitly refused the submission, nothing "
+    "was sent; NOT retried automatically"
+)
 
 # Contact fields filled directly from profile.contact, keyed by the
 # selector used to fill them. Ashby doesn't have a single universal set of
@@ -940,9 +965,33 @@ class AshbyAdapter(PortalAdapter):
             except PlaywrightError:
                 break
 
+        # An explicit refusal proves nothing was sent, so classify it as such
+        # and let apply_policy roll the pre-inserted ledger row back instead of
+        # leaving a phantom row that blocks the company forever. Checked only
+        # AFTER the confirmation poll has run out, so a page carrying both a
+        # success phrase and some unrelated warning still reads as submitted.
+        if self._submit_rejected(page):
+            capture_evidence(page, evidence_dir, "submit-rejected")
+            return PortalResult(status="needs_human", reason=_SUBMIT_REJECTED_REASON,
+                                 evidence_dir=str(evidence_dir))
+
         capture_evidence(page, evidence_dir, "no-confirmation")
         return PortalResult(status="needs_human", reason=_NO_CONFIRMATION_REASON,
                              evidence_dir=str(evidence_dir))
+
+    @staticmethod
+    def _submit_rejected(page) -> bool:
+        """True when the page EXPLICITLY states the submission did not happen.
+
+        Never raises -- a locator error just reads as "no refusal found", which
+        degrades to the ambiguous no-confirmation reason. That is the safe
+        direction: it KEEPS the ledger row rather than deleting one for a
+        submit that might really have landed."""
+        try:
+            hit = page.get_by_text(_SUBMIT_REJECTED_RE)
+            return hit.count() > 0 and hit.first.is_visible()
+        except PlaywrightError:
+            return False
 
     @staticmethod
     def _form_present(page) -> bool:
