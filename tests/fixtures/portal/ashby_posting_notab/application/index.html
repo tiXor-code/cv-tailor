@@ -1,0 +1,104 @@
+<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>Apply - Forward Deployed Engineer @ Ashby Route Fixture Co</title></head>
+<body>
+<!--
+  The /application route of ashby_posting/ -- a LATE-RENDERING form, which is
+  the half ashby_form.html cannot express.
+
+  ashby_form.html has its form in the initial HTML, so every existing test
+  finds the resume input the instant the Application tab opens. The live site
+  does not behave that way: Ashby's client router renders the form panel
+  ASYNCHRONOUSLY after the route loads, showing a centred spinner on an
+  otherwise blank page until it settles.
+
+  That window is the bug this fixture exists to reproduce. Evidence from the
+  three real parked runs (their own portal/aborted.png, captured at the
+  moment of abort):
+      2026-09-10 Flip GmbH  -> blank page, Ashby spinner mid-screen
+      2026-09-12 Checkly    -> blank page
+      2026-09-16 Sardine    -> blank page, Ashby spinner mid-screen
+  and all three recorded form_state.json == {} with
+      "resume-upload-failed: no file input found (#_systemfield_resume and
+       input[type='file'] fallback both matched 0 elements)"
+
+  The adapter navigated to the right route; it simply read the DOM before the
+  form existed. `networkidle` does not help -- nothing is in flight during a
+  client-side render, so it returns immediately on a still-blank page.
+
+  RENDER_DELAY_MS is deliberately longer than the settle waits that already
+  exist in the adapter, so a fix has to WAIT FOR THE FORM specifically rather
+  than sleep a bit longer and hope.
+
+  The form markup below is lean on purpose: it carries only what proves the
+  adapter waited and then filled. Exhaustive field/screening/submit coverage
+  stays in ashby_form.html and is not duplicated here.
+-->
+<div id="spinner" style="text-align:center;margin-top:20%">
+  <div class="loading-spinner" aria-label="Loading"></div>
+</div>
+
+<div id="app-root"></div>
+
+<script>
+  var RENDER_DELAY_MS = 1500;
+
+  // The live form panel, injected late -- exactly as Ashby's router does.
+  // The resume field mirrors the real DOM's shape: a visually-hidden
+  // input[type=file] clipped off-screen inside a styled dropzone.
+  var FORM_HTML = [
+    '<nav role="tablist">',
+    '  <a id="job-overview" role="tab" aria-selected="false" href="../">Overview</a>',
+    '  <a id="job-application-form" role="tab" aria-selected="true" href="./">Application</a>',
+    '</nav>',
+    '<div id="form" role="tabpanel">',
+    '  <form id="application-form">',
+    '    <div class="ashby-application-form-field-entry" data-field-path="_systemfield_name">',
+    '      <label for="_systemfield_name">Name</label>',
+    '      <input type="text" name="_systemfield_name" id="_systemfield_name" required>',
+    '    </div>',
+    '    <div class="ashby-application-form-field-entry" data-field-path="_systemfield_email">',
+    '      <label for="_systemfield_email">Email</label>',
+    '      <input type="email" name="_systemfield_email" id="_systemfield_email" required>',
+    '    </div>',
+    '    <div class="ashby-application-form-field-entry" data-field-path="_systemfield_resume">',
+    '      <label for="_systemfield_resume">Resume</label>',
+    '      <div class="resume-dropzone">',
+    '        <button type="button" id="resume-btn">Upload File</button>',
+    '        <span id="resume-filename"></span>',
+    '        <span>or drag and drop here</span>',
+    '        <input type="file" name="_systemfield_resume" id="_systemfield_resume"',
+    '               accept=".pdf,.doc,.docx"',
+    '               style="position:absolute;width:1px;height:1px;clip:rect(0 0 0 0);overflow:hidden">',
+    '      </div>',
+    '    </div>',
+    '    <div class="ashby-application-form-field-entry" data-field-path="_systemfield_cover_letter">',
+    '      <label for="_systemfield_cover_letter">Cover letter</label>',
+    '      <textarea name="_systemfield_cover_letter" id="_systemfield_cover_letter"></textarea>',
+    '    </div>',
+    '    <button type="submit" id="submit-btn">Submit Application</button>',
+    '  </form>',
+    '</div>',
+    '<div id="confirmation" style="display:none">Your application has been submitted.</div>'
+  ].join('\n');
+
+  window.setTimeout(function () {
+    document.getElementById("spinner").style.display = "none";
+    document.getElementById("app-root").innerHTML = FORM_HTML;
+
+    var input = document.getElementById("_systemfield_resume");
+    input.addEventListener("change", function () {
+      if (!input.files.length) { return; }
+      document.getElementById("resume-filename").textContent = input.files[0].name;
+      document.getElementById("resume-btn").textContent = "Replace";
+    });
+
+    document.getElementById("application-form").addEventListener("submit", function (ev) {
+      ev.preventDefault();
+      document.getElementById("form").style.display = "none";
+      document.getElementById("confirmation").style.display = "block";
+    });
+  }, RENDER_DELAY_MS);
+</script>
+</body>
+</html>

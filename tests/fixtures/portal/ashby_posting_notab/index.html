@@ -1,0 +1,35 @@
+<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>Solutions Engineer @ Ashby No-Tab Fixture Co</title></head>
+<body>
+<!--
+  Ashby overview whose Application tab is PRESENT but does not get us to the
+  form -- the second live failure mode, and the one ashby_posting/ misses.
+
+  Measured 2026-09-16 on two real boards (deepgram, sardine): both carry
+  #job-application-form as an <a href=".../application">, both show 0 file
+  inputs on the job URL, and both serve 2 file inputs at /application. Yet a
+  live dry-run against the deepgram posting finished still on the JOB url
+  with 0 file inputs: the adapter's tab click never got there, and
+  _open_application_tab swallows PlaywrightError, so the failure was silent.
+
+  A click can fail for reasons the adapter cannot control (actionability
+  timeout, an overlay intercepting it, a handler that cancels it). The route
+  is the contract, not the click -- so the adapter must navigate to
+  <job-url>/application rather than depend on the tab.
+
+  This fixture reproduces that generically: the tab exists, looks right, and
+  its click never navigates.
+-->
+<nav role="tablist">
+  <a id="job-overview" role="tab" aria-selected="true" href="./">Overview</a>
+  <a id="job-application-form" role="tab" aria-selected="false" href="application/"
+     onclick="return false;">Application</a>
+</nav>
+
+<div id="overview" role="tabpanel">
+  <h1>Pre-Sales Solutions Engineer</h1>
+  <p>No-Tab Fixture Co is hiring a solutions engineer.</p>
+</div>
+</body>
+</html>

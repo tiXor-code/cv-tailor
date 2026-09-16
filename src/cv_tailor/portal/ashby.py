@@ -31,7 +31,7 @@ import re
 import time
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urlsplit, urlunsplit
 
 from playwright.sync_api import Error as PlaywrightError
 
@@ -240,6 +240,59 @@ class AshbyAdapter(PortalAdapter):
         # _upload_and_verify_resume produce its own diagnostic abort, which
         # names what was checked and what was observed.
         try:
+            page.wait_for_selector(
+                f"{_RESUME_SELECTOR}, {_RESUME_FALLBACK_SELECTOR}",
+                state="attached", timeout=FORM_READY_TIMEOUT_MS,
+            )
+        except PlaywrightError:
+            pass
+
+        # The tab is not the contract -- the ROUTE is. Measured 2026-09-16 on
+        # two live boards (deepgram, sardine): the job URL serves zero file
+        # inputs and <job-url>/application serves the form.
+        #
+        # Depending on the tab click is what kept failing, silently, in three
+        # different ways: the tab had not rendered yet when tab.count() was
+        # read (so no click happened at all), the click could time out on
+        # actionability, or it could be intercepted -- and every one of those
+        # is swallowed by the except above. A live dry-run against the real
+        # deepgram posting finished still on the JOB url having filled
+        # nothing. So if the form still is not here, go to the route
+        # ourselves rather than trusting a click to have worked.
+        if self._no_file_input(page):
+            self._goto_application_route(page)
+
+    @staticmethod
+    def _no_file_input(page) -> bool:
+        """True when the page exposes no file input at all right now.
+
+        Never raises: a selector-engine error reads as "no form here", which
+        sends the caller to the application route -- the safe direction,
+        since navigating to a page that already has the form is a no-op."""
+        try:
+            return page.locator(_RESUME_FALLBACK_SELECTOR).count() == 0
+        except PlaywrightError:
+            return True
+
+    def _goto_application_route(self, page) -> None:
+        """Navigate to <current-url>/application and wait for the form.
+
+        The query is preserved -- aggregator apply links carry utm params and
+        dropping them changes the URL the board sees -- and the fragment is
+        dropped. A URL already on /application is left alone, so an
+        apply_target that points straight at the form is never doubled.
+
+        Never raises: a failure here falls through to
+        _upload_and_verify_resume's own diagnostic abort, which names what
+        was checked and what was observed."""
+        try:
+            parts = urlsplit(page.url)
+            if parts.path.rstrip("/").endswith("/application"):
+                return
+            target = urlunsplit((parts.scheme, parts.netloc,
+                                 parts.path.rstrip("/") + "/application",
+                                 parts.query, ""))
+            page.goto(target, wait_until="load")
             page.wait_for_selector(
                 f"{_RESUME_SELECTOR}, {_RESUME_FALLBACK_SELECTOR}",
                 state="attached", timeout=FORM_READY_TIMEOUT_MS,

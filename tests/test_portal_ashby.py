@@ -543,3 +543,30 @@ def test_apply_waits_for_late_rendering_form_instead_of_aborting(chromium_page, 
     state = json.loads((Path(result.evidence_dir) / "form_state.json").read_text())
     assert state["_systemfield_name"] == "Ada Lovelace"
     assert state["_systemfield_email"] == "ada@example.com"
+
+
+def test_apply_reaches_the_form_when_the_tab_click_never_navigates(chromium_page, package, monkeypatch):
+    """The second live failure mode. Measured 2026-09-16 against the real
+    deepgram posting: #job-application-form is present as a link to
+    /application, the job URL serves 0 file inputs, /application serves 2 --
+    and a dry-run still ended on the JOB url having filled nothing, because
+    the tab click never navigated and _open_application_tab swallows the
+    error.
+
+    A click can fail for reasons the adapter cannot control. The route is the
+    contract, so the adapter must navigate to <job-url>/application itself.
+    """
+    page = chromium_page
+    entry = {"id": "job-no-tab"}
+    monkeypatch.setattr(ashby, "FORM_READY_TIMEOUT_MS", 1500)
+
+    with serve_fixtures() as base_url:
+        page.goto(f"{base_url}/ashby_posting_notab/", wait_until="load")
+        result = AshbyAdapter().apply(page, entry, package, _PROFILE, _ANSWERS, dry_run=True)
+
+        uploaded = page.locator("#_systemfield_resume").evaluate("el => el.files.length")
+        landed = page.url
+
+    assert result.status == "filled", result.reason
+    assert uploaded == 1
+    assert landed.rstrip("/").endswith("/application")
