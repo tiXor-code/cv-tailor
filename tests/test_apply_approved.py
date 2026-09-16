@@ -475,6 +475,17 @@ def test_portal_armed_needs_human_keeps_ledger_row(mod, monkeypatch, tmp_path):
     "resume-upload-failed",
     "resume-upload-failed: no file input found (#_systemfield_resume and "
     "input[type='file'] fallback both matched 0 elements)",
+    # A required question with no grounded answer aborts BEFORE the submit
+    # call in every adapter (ashby returns at 508/517 with submit at 224;
+    # greenhouse 393 vs 415; lever 270 vs 419), so nothing was ever sent.
+    #
+    # Live 2026-09-16: pragmatike (score 8, ashby) was discovered, scored,
+    # approved and filled by autopilot on its own, then stopped at "Total
+    # years of experience" -- correctly, because that is a factual claim and
+    # guessing it on a real application is worse than parking. Its ledger row
+    # survived anyway, which would block every pragmatike role forever for an
+    # application that provably never left the machine.
+    "unanswerable-required:Total years of experience",
 ])
 def test_portal_armed_needs_human_presubmit_rolls_back_ledger(mod, monkeypatch, tmp_path, reason):
     """The 2026-07-10 phantom-row cascade: these reasons PROVE no submission
