@@ -540,6 +540,55 @@ class AshbyAdapter(PortalAdapter):
             return False
         return verify_filled(page, selector, value)
 
+    @staticmethod
+    def _is_required(label_el, control) -> bool:
+        """True when Ashby marks this question required.
+
+        Ashby does NOT use the HTML `required` attribute, and does not set
+        aria-required either. Measured live on the robco posting 2026-09-16,
+        across all 13 questions: `required` and `aria-required` were None
+        everywhere, and no label's inner_text contained an asterisk -- while
+        the page plainly rendered red asterisks on six of them.
+
+        The marker is on the LABEL, two ways:
+          * a CSS-module class carrying a `_required_` token
+            (`_heading_f7cvd_52 _required_f7cvd_91 ...` on a required label,
+            the same list MINUS that token on an optional one); and
+          * `::after` pseudo-content of "*", which is what actually renders
+            and never appears in inner_text.
+
+        Both are checked because the class hash churns between Ashby deploys
+        while the rendered asterisk does not. The HTML attribute stays first
+        so other boards (and the fixtures) keep working.
+
+        Never raises: an unreadable signal reads as "not required", which is
+        the pre-existing behaviour.
+        """
+        try:
+            if control is not None and control.get_attribute("required") is not None:
+                return True
+        except PlaywrightError:
+            pass
+        if label_el is None:
+            return False
+        try:
+            if label_el.count() == 0:
+                return False
+        except PlaywrightError:
+            return False
+        try:
+            classes = label_el.get_attribute("class") or ""
+            if "_required_" in classes:
+                return True
+        except PlaywrightError:
+            pass
+        try:
+            rendered = label_el.evaluate(
+                "l => getComputedStyle(l, '::after').content") or ""
+            return "*" in rendered
+        except PlaywrightError:
+            return False
+
     def _question_for_wrapper(self, wrapper, field_id: str):
         """Return (Question, css_selector, options) for one field-entry
         wrapper, or (None, None, None) when the wrapper's shape isn't a
@@ -553,7 +602,7 @@ class AshbyAdapter(PortalAdapter):
 
             select_el = wrapper.locator("select")
             if select_el.count() > 0:
-                required = select_el.first.get_attribute("required") is not None
+                required = self._is_required(label_el, select_el.first)
                 options = tuple(
                     opt.inner_text().strip()
                     for opt in select_el.first.locator("option").all()
@@ -563,12 +612,12 @@ class AshbyAdapter(PortalAdapter):
 
             textarea_el = wrapper.locator("textarea")
             if textarea_el.count() > 0:
-                required = textarea_el.first.get_attribute("required") is not None
+                required = self._is_required(label_el, textarea_el.first)
                 return Question(label=label, kind="textarea", required=required), selector, ()
 
             input_el = wrapper.locator("input")
             if input_el.count() > 0:
-                required = input_el.first.get_attribute("required") is not None
+                required = self._is_required(label_el, input_el.first)
                 return Question(label=label, kind="text", required=required), selector, ()
         except PlaywrightError:
             pass

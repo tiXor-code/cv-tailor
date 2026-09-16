@@ -663,3 +663,43 @@ def test_armed_submit_finds_the_real_ashby_submit_button(chromium_page, package)
                                       _ANSWERS, dry_run=False, client=client)
 
     assert result.status == "submitted", result.reason
+
+
+# --- requiredness is not in the HTML ------------------------------------------
+#
+# The most dangerous defect found on 2026-09-16. Live on the robco posting,
+# autopilot filled the form and clicked submit with THREE required fields
+# empty (Location, Mobility & Relocation, Legal Eligibility to Work), because
+# _question_for_wrapper reads requiredness from the HTML `required` attribute
+# and Ashby never sets it -- nor aria-required, nor an asterisk in the label
+# text. Every required field therefore read as OPTIONAL, and "ungrounded
+# optional" means leave it blank and carry on.
+#
+# Parking beats submitting a half-filled application under his name.
+
+def test_a_question_required_by_label_class_is_not_treated_as_optional(chromium_page, package):
+    """Ashby's own marker: a CSS-module class containing _required_ on the label."""
+    page = chromium_page
+
+    with serve_fixtures() as base_url:
+        _goto(page, base_url, variant="requiredbyclass")
+        result = AshbyAdapter().apply(page, {"id": "job-req-class"}, package,
+                                      _PROFILE, _ANSWERS, dry_run=True)
+
+    assert result.status == "needs_human", result.reason
+    assert result.reason == "unanswerable-required:How did you hear about us?"
+
+
+def test_a_question_required_by_rendered_asterisk_is_not_treated_as_optional(chromium_page, package):
+    """The durable signal: the asterisk is ::after pseudo-content, invisible to
+    inner_text but present in computed style. Class hashes churn between Ashby
+    deploys; the rendered asterisk does not."""
+    page = chromium_page
+
+    with serve_fixtures() as base_url:
+        _goto(page, base_url, variant="requiredbystar")
+        result = AshbyAdapter().apply(page, {"id": "job-req-star"}, package,
+                                      _PROFILE, _ANSWERS, dry_run=True)
+
+    assert result.status == "needs_human", result.reason
+    assert result.reason == "unanswerable-required:How did you hear about us?"

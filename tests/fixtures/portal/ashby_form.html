@@ -179,6 +179,33 @@
       "Briefly describe a recent project or challenge you're proud of.";
   }
 
+  if (variant === "requiredbyclass") {
+    // Ashby marks a required question with a CSS-module class on the LABEL,
+    // never with the HTML `required` attribute. Measured live on the robco
+    // posting 2026-09-16:
+    //   required: class="_heading_f7cvd_52 _required_f7cvd_91 _label_1e3gg_42 ..."
+    //   optional: the same classes MINUS the _required_ token
+    // and NOTHING sets required= or aria-required= anywhere on that form.
+    //
+    // That is why every field read as optional: "ungrounded optional" means
+    // leave it blank and carry on, so Location, Mobility & Relocation and
+    // Legal Eligibility to Work were all left empty and the adapter still
+    // clicked submit on an incomplete application.
+    document.querySelector('label[for="q_source"]').className =
+      "_heading_f7cvd_52 _required_f7cvd_91 _label_1e3gg_42 ashby-application-form-question-title";
+  }
+
+  if (variant === "requiredbystar") {
+    // The same fact expressed the way it actually RENDERS: the red asterisk
+    // is CSS ::after pseudo-content, which never appears in inner_text (the
+    // live probe found no "*" in any label's text while the page plainly
+    // showed them). Class hashes churn between Ashby deploys; the rendered
+    // asterisk does not, so this is the more durable of the two signals.
+    var requiredStar = document.createElement("style");
+    requiredStar.textContent = 'label[for="q_source"]::after { content: "*"; }';
+    document.head.appendChild(requiredStar);
+  }
+
   if (variant === "locked") {
     // Required screening field that silently rejects every write: the value
     // is cleared on every input event, so .fill() "succeeds" but the DOM
