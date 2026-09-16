@@ -788,3 +788,30 @@ def test_run_portal_application_handoff_waits_on_predispatch_blocker(monkeypatch
     result = base.run_portal_application(entry, package, {}, {}, dry_run=True, handoff=True)
     assert dispatched.get("yes"), "adapter must be dispatched after the blocker clears"
     assert result.status == "filled"
+
+
+def test_smoke_detect_blockers_ignores_the_invisible_recaptcha_badge():
+    """The invisible reCAPTCHA badge is not a wall.
+
+    Measured live 2026-09-16 on a real Ashby form (Cohere) and a real
+    Greenhouse EU form (saas.group): the only captcha element on either page
+    is the badge inside .grecaptcha-badge, there is no iframe[src*='bframe']
+    challenge, and the Submit button works. Score-based reCAPTCHA resolves on
+    submit without human interaction.
+
+    Treating that badge as a blocker aborted the adapter before it filled a
+    single field and produced both of that day's "captcha" parks -- on forms
+    that were sitting there fillable. A real challenge (blocked_form.html)
+    must still block; this must not.
+    """
+    from playwright.sync_api import sync_playwright
+
+    with serve_fixtures() as base_url, sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        try:
+            page = browser.new_page()
+            page.goto(f"{base_url}/badge_only_form.html", wait_until="load")
+
+            assert detect_blockers(page) is None
+        finally:
+            browser.close()

@@ -1,0 +1,40 @@
+<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>Application Form With reCAPTCHA Badge</title></head>
+<body>
+  <!--
+    An application form carrying the INVISIBLE reCAPTCHA badge and nothing
+    else -- the shape of every real Ashby and Greenhouse application form.
+
+    Measured live 2026-09-16 on jobs.ashbyhq.com/cohere/.../application and
+    job-boards.eu.greenhouse.io/saasgroup/jobs/4973041101: the only
+    captcha-ish element on either page is this badge (inside .grecaptcha-badge,
+    256x60, parked at the page edge, src .../api2/anchor or
+    .../enterprise/anchor). Neither page had a single iframe[src*='bframe'],
+    which is what an actual challenge dialog renders as, and both had a working
+    Submit button.
+
+    Invisible/score-based reCAPTCHA resolves on submit with no human
+    interaction. Treating the badge as a wall aborted the adapter BEFORE it
+    filled a single field, and produced the "captcha" parks for Cohere and
+    saas.group on 2026-09-16 -- both false positives, both on forms that were
+    sitting there fillable.
+
+    The iframe src is a same-scheme about:blank with a marker in the query, so
+    the test never leaves localhost (same trick as blocked_form.html).
+  -->
+  <div class="grecaptcha-badge" style="width:256px;height:60px;position:fixed;right:-186px;bottom:14px">
+    <div class="grecaptcha-logo">
+      <iframe src="about:blank?recaptcha=anchor" title="reCAPTCHA" width="256" height="60"></iframe>
+    </div>
+    <textarea id="g-recaptcha-response" name="g-recaptcha-response"
+              class="g-recaptcha-response" style="display:none"></textarea>
+  </div>
+
+  <form id="application-form">
+    <input type="text" name="full_name" id="full_name" placeholder="Full name">
+    <input type="email" name="email" id="email" placeholder="Email">
+    <button type="submit" id="submit-btn">Submit Application</button>
+  </form>
+</body>
+</html>

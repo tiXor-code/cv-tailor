@@ -88,12 +88,38 @@ def adapter_for(url: str) -> PortalAdapter | None:
 
 # --- blocker detection ------------------------------------------------------
 
+# A captcha blocks only when there is something to SOLVE.
+#
+# The invisible/score-based reCAPTCHA badge is not a wall: it sits on
+# essentially every Ashby and Greenhouse application form and resolves on
+# submit with no human interaction. Measured live 2026-09-16 on a real Ashby
+# form (Cohere) and a real Greenhouse EU form (saas.group): the only
+# captcha-ish element on either page was that badge (inside .grecaptcha-badge,
+# 256x60, parked at the page edge, src .../api2/anchor or
+# .../enterprise/anchor), neither had an iframe[src*='bframe'] challenge, and
+# both had a working Submit button.
+#
+# Matching the badge made detect_blockers return "captcha" on those forms and
+# abort BEFORE filling a single field -- that is what produced both of that
+# day's captcha parks, on forms that were sitting there fillable, and it is
+# very likely behind the older "greenhouse and lever are captcha-walled"
+# belief too.
+#
+# So: the challenge dialog (bframe) blocks, and a widget that is NOT inside
+# the badge container blocks. The badge alone does not. Still selector-only,
+# because that is all detect_blockers may rely on.
 _CAPTCHA_SELECTORS = (
-    "iframe[src*='recaptcha']",
+    # the reCAPTCHA challenge dialog itself -- only rendered when a human
+    # actually has to solve something
+    "iframe[src*='bframe']",
+    # a recaptcha widget that is not the invisible badge (e.g. a v2 checkbox)
+    "iframe[src*='recaptcha']:not(.grecaptcha-badge *)",
+    ".g-recaptcha:not(.grecaptcha-badge)",
+    # hcaptcha and turnstile have no equivalent always-present badge on these
+    # boards, so they are unchanged: Lever's hCaptcha gate still blocks.
     "iframe[src*='hcaptcha']",
     "iframe[src*='turnstile']",
     "iframe[src*='challenges.cloudflare.com']",
-    ".g-recaptcha",
     ".h-captcha",
     ".cf-turnstile",
 )
