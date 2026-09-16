@@ -170,3 +170,64 @@ def test_fallback_hosts_cover_every_registered_adapter_host():
     registered = {h for a in portal_base._REGISTRY for h in a.hosts}
     assert registered, "no adapters registered; this guard needs them importable"
     assert registered <= set(ats_resolve._FALLBACK_HOSTS)
+
+
+# --- aggregator apply-redirect --------------------------------------------------
+#
+# Measured live 2026-09-16 on the real parked queue: an arbeitnow posting page
+# carries no employer ATS link in its HTML (resolve_from_page finds nothing),
+# but <posting-url>/apply 302s straight to the employer's real ATS. Of eight
+# parked aggregator jobs, the redirects landed on: ashby (Mistral.ai),
+# job-boards.eu.greenhouse.io (Yld), personio, recruitee x2 and join.com x2.
+# The first two are hosts adapters already claim, so following one redirect
+# turns those parks into fillable applications.
+
+def test_apply_redirect_resolves_to_the_companys_own_ats(monkeypatch):
+    monkeypatch.setattr(ats_resolve, "_apply_redirect_target",
+                        lambda url: "https://jobs.ashbyhq.com/acmelabs/1111?utm_source=arbeitnow.com")
+
+    hit = ats_resolve.resolve_from_apply_redirect(
+        {"company": "Acme Labs",
+         "apply_target": "https://www.arbeitnow.com/jobs/companies/acmelabs/engineer-123"})
+
+    assert hit == "https://jobs.ashbyhq.com/acmelabs/1111?utm_source=arbeitnow.com"
+
+
+def test_apply_redirect_ignores_a_host_no_adapter_claims(monkeypatch):
+    """Recruitee, Personio and join.com are where most of these redirects
+    land today. Returning one would hand the portal runner a site it cannot
+    fill; the job stays needs_human until an adapter exists."""
+    monkeypatch.setattr(ats_resolve, "_apply_redirect_target",
+                        lambda url: "https://acmelabs.recruitee.com/o/engineer")
+
+    hit = ats_resolve.resolve_from_apply_redirect(
+        {"company": "Acme Labs",
+         "apply_target": "https://www.arbeitnow.com/jobs/companies/acmelabs/engineer-123"})
+
+    assert hit is None
+
+
+def test_apply_redirect_never_returns_another_companys_posting(monkeypatch):
+    """The EnthuZiastic/Cisco cross-listing rule applies to redirects too: an
+    adapter-claimed host is not enough, the posting must be THIS company's."""
+    monkeypatch.setattr(ats_resolve, "_apply_redirect_target",
+                        lambda url: "https://jobs.ashbyhq.com/othercorp/9999")
+
+    hit = ats_resolve.resolve_from_apply_redirect(
+        {"company": "Acme Labs",
+         "apply_target": "https://www.arbeitnow.com/jobs/companies/acmelabs/engineer-123"})
+
+    assert hit is None
+
+
+def test_apply_redirect_is_only_tried_on_known_aggregators(monkeypatch):
+    """An /apply path is an arbeitnow convention, not a universal one. Probing
+    it on an arbitrary feed URL would be an unsolicited request to a stranger's
+    site on every scan."""
+    def boom(url):
+        raise AssertionError("must not probe a non-aggregator host")
+
+    monkeypatch.setattr(ats_resolve, "_apply_redirect_target", boom)
+
+    assert ats_resolve.resolve_from_apply_redirect(
+        {"company": "Acme Labs", "apply_target": "https://example.com/jobs/1"}) is None

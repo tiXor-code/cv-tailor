@@ -197,6 +197,75 @@ def resolve_from_apply_options(entry: dict) -> str | None:
     return None
 
 
+# Aggregator hosts whose posting pages expose <posting-url>/apply as a redirect
+# to the employer's REAL ATS. Measured 2026-09-16 against the live parked
+# queue: the arbeitnow page itself carries no employer ATS link in its HTML
+# (resolve_from_page finds nothing), but that /apply path 302s straight to it.
+# Of eight parked aggregator jobs the redirects landed on ashby (Mistral.ai),
+# job-boards.eu.greenhouse.io (Yld), personio, recruitee x2 and join.com x2.
+#
+# Deliberately a short allowlist: /apply is an arbeitnow convention, not a
+# universal one, and probing it on every feed URL would mean an unsolicited
+# request to a stranger's site on every scan.
+_APPLY_REDIRECT_HOSTS = ("arbeitnow.com", "arbeitnow.co.uk", "arbeitnow.fr")
+
+
+class _Redirected(Exception):
+    """The redirect we asked NOT to follow, carrying its target."""
+
+    def __init__(self, url: str):
+        self.url = url
+        super().__init__(url)
+
+
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """Stops at the first hop: the Location IS the answer, and following it
+    would fetch a third party's application page for no reason."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        raise _Redirected(newurl)
+
+
+def _apply_redirect_target(url: str) -> str:
+    """Where <url>/apply redirects to, or "" on any failure -- a dead
+    aggregator page must leave the job exactly as it was."""
+    opener = urllib.request.build_opener(_NoRedirect)
+    try:
+        opener.open(urllib.request.Request(url.rstrip("/") + "/apply",
+                                           headers={"User-Agent": _UA}), timeout=_TIMEOUT)
+    except _Redirected as hop:
+        return hop.url or ""
+    except Exception as exc:  # noqa: BLE001
+        print(f"[ats-resolve] apply redirect failed: {type(exc).__name__}", file=sys.stderr)
+    return ""
+
+
+def resolve_from_apply_redirect(entry: dict) -> str | None:
+    """Follow a known aggregator's /apply hop to the employer's own ATS.
+
+    The same two guards as every other strategy: an adapter must claim the
+    target's host (otherwise the portal runner gets a site it cannot fill and
+    the job should stay needs_human), and the posting must belong to THIS
+    company -- the EnthuZiastic/Cisco cross-listing rule applies to redirects
+    just as much as to links on a page.
+    """
+    org_norm = _normalize_org(entry.get("company") or "")
+    url = (entry.get("apply_target") or entry.get("url") or "").strip()
+    if not org_norm or not url:
+        return None
+    host = safe_hostname(url)
+    if not any(host_matches(host, allowed) for allowed in _APPLY_REDIRECT_HOSTS):
+        return None
+
+    target = _apply_redirect_target(url)
+    if not target or not _adapter_claimed(target):
+        return None
+    parts = urlsplit(target)
+    if org_norm not in _normalize_org(parts.netloc + parts.path):
+        return None
+    return target
+
+
 def resolve_ats_url(entry: dict) -> str | None:
     """The full resolution for one queue entry. None = leave the job unchanged."""
     company = (entry.get("company") or "").strip()
@@ -215,6 +284,11 @@ def resolve_ats_url(entry: dict) -> str | None:
         if hit:
             print(f"[ats-resolve] page link: {hit}", file=sys.stderr)
             return hit
+    hit = resolve_from_apply_redirect(entry)
+    if hit:
+        print(f"[ats-resolve] apply redirect: {hit}", file=sys.stderr)
+        return hit
+
     hit = resolve_from_boards(company, title)
     if hit:
         print(f"[ats-resolve] board probe: {hit}", file=sys.stderr)
