@@ -172,9 +172,13 @@ def test_apply_resume_missing_cv_path_aborts_to_resume_upload_failed(chromium_pa
     assert not (evidence_dir / "filled.png").exists()
 
 
-def test_apply_resume_input_absent_aborts_to_resume_upload_failed(chromium_page, package):
+def test_apply_resume_input_absent_aborts_to_resume_upload_failed(chromium_page, package, monkeypatch):
     page = chromium_page
     entry = {"id": "job-1"}
+    # This fixture genuinely has no file input, so the form-ready wait can
+    # only ever time out here -- shortened so the abort path stays fast
+    # (same contract as CONFIRMATION_TIMEOUT_MS in the armed tests).
+    monkeypatch.setattr(ashby, "FORM_READY_TIMEOUT_MS", 500)
 
     with serve_fixtures() as base_url:
         _goto(page, base_url, variant="noresume")
@@ -504,3 +508,38 @@ def test_smoke_run_portal_application_dispatches_to_ashby_adapter(package, monke
     evidence_dir = Path(result.evidence_dir)
     state = json.loads((evidence_dir / "form_state.json").read_text())
     assert state["_systemfield_name"] == "Ada Lovelace"
+
+
+# --- late-rendering application route -----------------------------------------
+
+def test_apply_waits_for_late_rendering_form_instead_of_aborting(chromium_page, package):
+    """Ashby's router renders the application form asynchronously: for a
+    window after the route loads the page is blank but for a spinner, with
+    no form and no input[type=file] anywhere.
+
+    Every Ashby park in production landed in exactly that window -- Flip
+    GmbH (2026-09-10), Checkly (09-12) and Sardine (09-16) each aborted
+    with "resume-upload-failed: no file input found", each with an
+    aborted.png showing a blank/spinner page and form_state.json == {}.
+
+    The adapter must wait for the form to exist rather than reading the DOM
+    while it is still rendering. networkidle cannot cover this -- nothing is
+    in flight during a client-side render.
+    """
+    page = chromium_page
+    entry = {"id": "job-late-render"}
+
+    with serve_fixtures() as base_url:
+        page.goto(f"{base_url}/ashby_posting/", wait_until="load")
+        result = AshbyAdapter().apply(page, entry, package, _PROFILE, _ANSWERS, dry_run=True)
+
+        uploaded = page.locator("#_systemfield_resume").evaluate("el => el.files.length")
+        landed = page.url
+
+    assert result.status == "filled", result.reason
+    assert uploaded == 1
+    assert landed.rstrip("/").endswith("/application")
+
+    state = json.loads((Path(result.evidence_dir) / "form_state.json").read_text())
+    assert state["_systemfield_name"] == "Ada Lovelace"
+    assert state["_systemfield_email"] == "ada@example.com"

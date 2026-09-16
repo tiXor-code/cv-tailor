@@ -1,0 +1,43 @@
+<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>Forward Deployed Engineer @ Ashby Route Fixture Co</title></head>
+<body>
+<!--
+  Ashby OVERVIEW-ROUTE fixture -- the half ashby_form.html cannot express.
+
+  ashby_form.html keeps the Overview and Application panels in ONE page and
+  toggles them with a JS click handler. The live site does not: Ashby's client
+  router serves them as two SEPARATE routes, and the job URL a feed hands us
+  (jobs.ashbyhq.com/<org>/<job-id>) renders the overview ONLY -- it carries no
+  form and no input[type=file] at all. The form exists at <job-url>/application.
+
+  Measured live 2026-09-16 against the parked Sardine posting
+  (jobs.ashbyhq.com/sardine/ae38f6b8-91c6-4914-9113-e146813e2b28):
+      file inputs on the job URL        : 0
+      #_systemfield_resume on the job URL: 0
+      after navigating to /application  : 2 file inputs, 1 #_systemfield_resume
+
+  That is the root cause of the resume-upload-failed parks on 2026-09-10
+  (Flip GmbH), 09-12 (Checkly) and 09-16 (Sardine): the adapter was filling
+  the overview route, where the resume input legitimately does not exist.
+
+  This directory mirrors the real URL shape over http.server:
+      /ashby_posting/             -> this overview page (no form)
+      /ashby_posting/application/ -> the application form
+  so a test can prove the adapter reaches the form by ROUTE, not by tab click.
+
+  The Application tab here is a real router <a href> (as on the live site),
+  NOT the preventDefault() toggle ashby_form.html uses.
+-->
+<nav role="tablist">
+  <a id="job-overview" role="tab" aria-selected="true" href="./">Overview</a>
+  <a id="job-application-form" role="tab" aria-selected="false" href="application/">Application</a>
+</nav>
+
+<div id="overview" role="tabpanel">
+  <h1>Forward Deployed Engineer, Integrations</h1>
+  <p>Route Fixture Co is hiring a forward deployed engineer.</p>
+  <p>Location: Remote - United Kingdom</p>
+</div>
+</body>
+</html>

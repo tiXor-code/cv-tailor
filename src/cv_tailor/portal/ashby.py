@@ -54,6 +54,21 @@ from cv_tailor.screening import Question, answer_question
 # literal) so tests can monkeypatch it short instead of waiting 30s.
 CONFIRMATION_TIMEOUT_MS = 30_000
 
+# How long to wait for the application form to actually RENDER after the
+# application route opens, before giving up and letting the normal
+# diagnostic abort fire. A module constant (not a hardcoded literal) so
+# tests can monkeypatch it short, same contract as CONFIRMATION_TIMEOUT_MS.
+#
+# Ashby's router renders the form panel asynchronously: for a window after
+# the route loads, the page is blank but for a centred spinner, carrying no
+# form and no input[type=file] at all. networkidle does NOT cover this --
+# nothing is in flight during a client-side render, so it returns
+# immediately on a still-blank page. Every Ashby park in production landed
+# in exactly that window (Flip GmbH 2026-09-10, Checkly 09-12, Sardine
+# 09-16: all three aborted "no file input found" with form_state.json == {}
+# and an aborted.png showing a blank/spinner page).
+FORM_READY_TIMEOUT_MS = 15_000
+
 _APPLICATION_TAB_SELECTOR = "#job-application-form"
 _RESUME_SELECTOR = "#_systemfield_resume"
 # Ashby's real resume field is a custom drag-drop widget: a hidden
@@ -214,6 +229,21 @@ class AshbyAdapter(PortalAdapter):
                     page.wait_for_load_state("networkidle", timeout=15_000)
                 except PlaywrightError:
                     pass
+        except PlaywrightError:
+            pass
+
+        # Then wait for the form itself to exist. `state="attached"` is
+        # load-bearing: Ashby's real resume input is a visually-hidden
+        # input[type=file] clipped off-screen behind a drag-drop widget, so
+        # the default "visible" wait would time out on a perfectly good
+        # form. A timeout here is not fatal -- fall through and let
+        # _upload_and_verify_resume produce its own diagnostic abort, which
+        # names what was checked and what was observed.
+        try:
+            page.wait_for_selector(
+                f"{_RESUME_SELECTOR}, {_RESUME_FALLBACK_SELECTOR}",
+                state="attached", timeout=FORM_READY_TIMEOUT_MS,
+            )
         except PlaywrightError:
             pass
 
