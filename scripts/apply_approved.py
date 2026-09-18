@@ -505,13 +505,27 @@ def main(argv=None) -> int:
 
     warnings = meta.get("cover_letter_warnings") or []
     if warnings and not args.force:
-        entry = update_entry(args.scan_date, args.job_id,
-                              _status_mut("needs_review", warnings=warnings))
+        # Teodor's decision, 2026-09-17: APPLY ANYWAY and send him the letter.
+        #
+        # Parking here was the last hard human gate in the pipeline. Nothing in
+        # autopilot ever advanced a needs_review entry -- _sweep_expired could
+        # only reject it -- so Cohere (score 8) and Mistral.ai (7) sat in it
+        # indefinitely after clearing every other blocker. A gate nothing can
+        # open is not review, it is a dead end.
+        #
+        # The warning is still surfaced, with the letter itself, so he sees
+        # exactly what went out and can follow up. Notification after the
+        # fact, not a wall in front of the application.
+        letter = ""
+        try:
+            letter = Path(meta["cover_letter_path"]).read_text()
+        except (KeyError, TypeError, OSError):
+            letter = "(cover letter unreadable)"
+        detail = "; ".join(str(w) for w in warnings)[:300]
         send_text(
-            f"{entry.get('company')} / {entry.get('title')}: cover letter needs review "
-            f"({len(warnings)} warning(s)). Open /scout to send anyway."
+            f"{entry.get('company')} / {entry.get('title')}: applying DESPITE "
+            f"{len(warnings)} cover-letter warning(s): {detail}\n\n{letter[:1500]}"
         )
-        return 0
 
     apply_method = entry.get("apply_method")
 

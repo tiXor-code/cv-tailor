@@ -230,7 +230,6 @@ def test_a_park_that_proves_no_submission_is_retried_once(tmp_path):
                error="resume-upload-failed: no file input found"),
         _entry(2, score=8, status="needs_human",
                error="no-confirmation: submission may have succeeded, VERIFY on the portal"),
-        _entry(3, score=8, status="needs_review"),
     ])
     _write_day(tmp_path, TODAY, [])
     ran = []
@@ -247,10 +246,32 @@ def test_a_park_that_proves_no_submission_is_retried_once(tmp_path):
     assert q["job-1"]["status"] == "sent"
     assert q["job-1"].get("revived_at"), "the retry must be stamped, so it happens once"
     assert q["job-2"]["status"] == "needs_human", "ambiguous park must never be retried"
-    # needs_review is the cover-letter human gate and carries no error, so
-    # proves_no_submission("") is False and it is left alone -- a gate Teodor
-    # has not ruled on must never be bypassed by this sweep.
-    assert q["job-3"]["status"] == "needs_review"
+
+
+def test_a_needs_review_park_is_revived_now_that_the_gate_is_gone(tmp_path):
+    """needs_review is set right after assembly, BEFORE any portal
+    interaction, so it provably never submitted.
+
+    It used to be excluded here on the grounds that a human gate Teodor had
+    not ruled on must never be bypassed. He ruled on 2026-09-17 -- apply
+    anyway, and Telegram him the letter -- but Cohere (score 8) and
+    Mistral.ai (7) were already sitting in it, and nothing in autopilot
+    advances that status: _sweep_expired can only reject it. A status nothing
+    can advance is a dead end, not a review."""
+    yesterday = (NOW - timedelta(days=1)).date().isoformat()
+    _write_day(tmp_path, yesterday, [_entry(1, score=8, status="needs_review")])
+    _write_day(tmp_path, TODAY, [])
+    ran = []
+
+    def runner(day, job_id):
+        ran.append(job_id)
+        update_entry(day, job_id, lambda e: e.update(status="sent"), queue_dir=tmp_path)
+        return 0
+
+    run_autopilot(NOW, queue_dir=tmp_path, runner=runner)
+
+    assert ran == ["job-1"]
+    assert _read(tmp_path, yesterday)["job-1"]["status"] == "sent"
 
 
 def test_a_revived_park_is_not_revived_again(tmp_path):

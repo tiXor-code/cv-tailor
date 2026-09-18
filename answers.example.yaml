@@ -30,5 +30,12 @@ years_experience: 5
 languages_spoken:
   - English
 open_to_travel: false
+# Timezones whose business hours you can actually cover. Structured for the
+# same reason as languages_spoken: "yes to GMT" is not "yes to any hours
+# question" -- US Pacific business hours from Europe would be 19:00-04:00, and
+# answering Yes there submits a commitment you cannot keep.
+timezone_overlap_ok:
+  - GMT
+  - CET
 hourly_rate_ask_usd: 25
 hours_per_week_available: 10

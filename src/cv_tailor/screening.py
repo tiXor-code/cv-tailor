@@ -262,6 +262,30 @@ def _language_answer(label: str, q: Question, answers: dict) -> Answer | None:
     return None
 
 
+def _timezone_answer(label: str, q: Question, answers: dict) -> Answer | None:
+    """Yes/No for a working-hours overlap question, grounded in the zones he
+    can actually cover.
+
+    "Yes to GMT" is NOT "yes to any hours question". He is UTC+3, so GMT
+    business hours is roughly 11:00-20:00 local and workable, while US Pacific
+    would be 19:00-04:00. Answering Yes there submits a commitment he cannot
+    keep -- the same class of wrong-value-submitted error as a false language
+    claim.
+
+    A zone must be NAMED: "Are you comfortable with flexible working hours?"
+    names none and falls through rather than being guessed at."""
+    coverable = [str(z) for z in ((answers or {}).get("timezone_overlap_ok") or [])]
+    if not coverable or q.kind not in _OPTION_KINDS:
+        return None
+    for zone in coverable:
+        if re.search(rf"\b{re.escape(zone)}\b", label, re.I):
+            return Answer("Yes", "answers:timezone_overlap_ok")
+    for known in _KNOWN_TIMEZONES:
+        if re.search(rf"\b{re.escape(known)}\b", label, re.I):
+            return Answer("No", "answers:timezone_overlap_ok")
+    return None
+
+
 def _split_contact_name(contact: dict, *, want_last: bool) -> Answer | None:
     """One half of profile.contact.name, for a First/Last question.
 
@@ -348,6 +372,22 @@ _KNOWN_LANGUAGES = frozenset({
     "hindi", "urdu", "bengali", "tamil", "mandarin", "cantonese", "chinese",
     "japanese", "korean", "vietnamese", "thai", "indonesian", "malay",
     "tagalog", "swahili", "afrikaans",
+})
+_TIMEZONE_CTX_RE = re.compile(
+    r"\bbusiness hours\b|\bworking hours\b|\boverlap\b|\btime ?zone\b|\bhours\b", re.I)
+# Same shape as _KNOWN_LANGUAGES, and for the same reason: a zone must be NAMED
+# before this may answer No, or "Are you comfortable with flexible working
+# hours?" would be answered from a fact about timezones.
+#
+# Deliberately excludes the ambiguous short tokens. "ET"/"PT" collide with
+# ordinary words, and "WEST" (Western European Summer Time) would match "West
+# Coast business hours" -- which is US Pacific, the exact thing he cannot
+# cover -- so it is absent from both lists.
+_KNOWN_TIMEZONES = frozenset({
+    "gmt", "utc", "bst", "cet", "cest", "eet", "eest",
+    "pst", "pdt", "est", "edt", "cst", "cdt", "mst", "mdt",
+    "akst", "hst", "jst", "kst", "sgt", "ist",
+    "aest", "aedt", "awst", "nzst", "pacific", "atlantic",
 })
 _NAME_RE = re.compile(r"\bname\b", re.I)
 # Ashby renders First/Last as separate CUSTOM questions, which go through this
@@ -667,6 +707,10 @@ def _deterministic_answer(q: Question, profile: dict, answers: dict) -> Answer |
         spoken = _language_answer(label, q, answers)
         if spoken is not None:
             return spoken
+    if _TIMEZONE_CTX_RE.search(label):
+        overlap = _timezone_answer(label, q, answers)
+        if overlap is not None:
+            return overlap
     # Before the availability rule: a start-date question wants a DATE, and
     # \bavailab would otherwise hand it the part-time day pattern.
     if _START_DATE_RE.search(label):

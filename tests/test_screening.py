@@ -36,6 +36,7 @@ _ANSWERS = {
     "years_experience": 9,
     "languages_spoken": ["Examplish"],
     "open_to_travel": True,
+    "timezone_overlap_ok": ["Exampleton"],
     "work_authorization": "EU citizen, can work anywhere in the EU.",
     "notice_period": "30 calendar days",
     "relocation": "Not open to relocation; remote only.",
@@ -176,6 +177,32 @@ def test_regular_travel_question_is_answered_from_the_flag():
     grounded = answer_question(q, _PROFILE, dict(_ANSWERS, open_to_travel=False))
     assert grounded.value == "No"
     assert grounded.grounded_in == "answers:open_to_travel"
+
+
+def test_a_timezone_overlap_he_can_cover_is_yes():
+    """Blocked Cohere (score 8): "fully remote with team collaboration
+    primarily during GMT business hours". Teodor said yes to GMT -- he is
+    UTC+3, so GMT business hours is about 11:00-20:00 local and workable."""
+    q = _q("This role is fully remote with team collaboration primarily during "
+           "Exampleton business hours. Are you comfortable with that?",
+           kind="radio", options=("Yes", "No"))
+    assert answer_question(q, _PROFILE, _ANSWERS).value == "Yes"
+
+
+def test_a_timezone_overlap_he_cannot_cover_is_no():
+    """The reason this cannot be a blanket Yes. "Yes to GMT" is NOT "yes to any
+    hours question": US Pacific business hours would be 19:00-04:00 in
+    Bucharest. Answering Yes there submits a commitment he cannot keep."""
+    q = _q("This role requires overlap with US Pacific (PST) business hours. "
+           "Are you able to do that?", kind="radio", options=("Yes", "No"))
+    assert answer_question(q, _PROFILE, _ANSWERS).value == "No"
+
+
+def test_an_hours_question_naming_no_timezone_is_left_alone():
+    """Same shape as the language rule: no zone named, no answer guessed."""
+    q = _q("Are you comfortable with flexible working hours?",
+           kind="radio", options=("Yes", "No"))
+    assert answer_question(q, _PROFILE, _ANSWERS) is None
 
 
 def test_number_salary_box_without_currency_fills_the_number_and_notes_the_currency():

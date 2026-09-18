@@ -191,10 +191,18 @@ def _sweep_revivable(now: datetime, *, queue_dir=None) -> list[tuple[str, dict]]
         if scan_date < window_start:
             continue
         for entry in _read_day(day_dir):
-            if entry.get("status") != "needs_human":
+            status = entry.get("status")
+            if status not in ("needs_human", "needs_review"):
                 continue
             reason = entry.get("error")
-            if not proves_no_submission(reason):
+            # needs_review carries an EMPTY error, so proves_no_submission()
+            # rejects it -- but it is set right after assembly, before any
+            # portal interaction, so it provably never submitted. It used to be
+            # excluded on the grounds that a human gate Teodor had not ruled on
+            # must never be bypassed; he ruled on 2026-09-17 (apply anyway,
+            # Telegram the letter), and nothing else in autopilot can advance
+            # that status -- _sweep_expired only rejects it.
+            if status == "needs_human" and not proves_no_submission(reason):
                 continue
             if entry.get("revived_at"):
                 previous = entry.get("revived_for")
@@ -224,7 +232,7 @@ def _sweep_revivable(now: datetime, *, queue_dir=None) -> list[tuple[str, dict]]
 
             try:
                 fresh = update_entry(scan_date, entry["id"], _mut,
-                                      queue_dir=queue_dir, expect_status="needs_human")
+                                      queue_dir=queue_dir, expect_status=status)
             except (StatusConflict, KeyError):
                 continue  # lost the race to a manual tap; leave it alone
             _ledger_forget(entry["id"])

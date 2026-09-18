@@ -42,23 +42,40 @@ def _read(root):
     return json.loads((root / "2026-07-23" / "jobs.json").read_text())[0]
 
 
-def test_residual_warnings_park_at_needs_review_and_never_send(queue, monkeypatch):
+def test_residual_warnings_no_longer_park_and_the_letter_is_telegrammed(queue, monkeypatch):
+    """CHANGED 2026-09-17 by Teodor's decision: apply anyway, and send him the
+    letter.
+
+    Parking here was the LAST hard human gate in the pipeline -- nothing in
+    autopilot ever advanced a needs_review entry, so Cohere (score 8) and
+    Mistral.ai (7) sat in it after clearing every other blocker. Twin of the
+    test in tests/test_apply_approved.py."""
     mod = _load_module()
     mod.assemble_package = lambda entry, scan_date: {
         "package_dir": "/tmp/pkg", "cv_path": "/tmp/pkg/cv.pdf",
         "cover_letter_path": "/tmp/pkg/cover.txt",
         "cover_letter_warnings": ["banned phrase: 'passionate'"],
     }
+
+    class R:
+        status = "preview_sent"
+
+    mod.load_profile = lambda *a, **k: {"name": "Fake"}
+    mod.connect = lambda *a, **k: None
     sends = []
-    mod.send_application = lambda *a, **k: sends.append(1)
-    mod.send_text = lambda *a, **k: True
+    mod.send_application = lambda *a, **k: sends.append(1) or R()
+    texts = []
+    mod.send_text = lambda *a, **k: texts.append(a) or True
+
     rc = mod.main(["2026-07-23", "job-1"])
+
     assert rc == 0
     entry = _read(queue)
-    assert entry["status"] == "needs_review"
-    assert entry["warnings"] == ["banned phrase: 'passionate'"]
+    assert entry["status"] != "needs_review", "the gate must no longer park the job"
     assert entry["approved_by"] == "autopilot"   # tag survives the trail
-    assert sends == []
+    assert sends, "the application must actually go out"
+    assert "passionate" in " ".join(str(t) for t in texts), (
+        "the warning must still be surfaced to Teodor")
 
 
 def test_clean_letter_proceeds_to_send(queue, monkeypatch):

@@ -205,7 +205,21 @@ def test_send_blocked_marks_failed_with_reason(mod, monkeypatch, tmp_path):
     assert entry["error"] == "duplicate"
 
 
-def test_warnings_stop_at_needs_review_no_send(mod, monkeypatch, tmp_path):
+def test_cover_letter_warnings_no_longer_park_and_the_letter_is_telegrammed(
+        mod, monkeypatch, tmp_path):
+    """Teodor's decision, 2026-09-17: apply anyway, and send him the letter.
+
+    Parking here was the LAST hard human gate in the pipeline. Nothing in
+    autopilot ever advanced a needs_review entry -- it could only expire -- so
+    Cohere (score 8) and Mistral.ai (7) sat in it indefinitely after clearing
+    every other blocker. The warning is still surfaced, but as a notification
+    after the fact rather than a wall in front of the application.
+
+    CHANGED BEHAVIOUR: this test previously asserted the opposite
+    (test_warnings_stop_at_needs_review_no_send). The requirement changed by
+    explicit decision, not because the assertion was inconvenient."""
+    from cv_tailor.sender import SendResult
+
     _write_queue(tmp_path, "2026-07-10", _entry())
     trail = _spy_update_entry(mod, monkeypatch)
 
@@ -213,8 +227,13 @@ def test_warnings_stop_at_needs_review_no_send(mod, monkeypatch, tmp_path):
         mod, "assemble_package",
         _fake_assemble(package_dir=tmp_path / "pkg", warnings=["banned phrase: 'leverage'"]),
     )
-    monkeypatch.setattr(mod, "send_application", lambda *a, **kw: pytest.fail("must not send"))
-    monkeypatch.setattr(mod, "crm_mark_applied", lambda *a, **kw: pytest.fail("must not be called"))
+    sent = []
+    monkeypatch.setattr(
+        mod, "send_application",
+        lambda *a, **kw: sent.append(1) or SendResult(
+            status="sent", recipient="jobs@acme.example", reason=""),
+    )
+    monkeypatch.setattr(mod, "crm_mark_applied", lambda *a, **kw: True)
     texts = []
     monkeypatch.setattr(mod, "send_text", lambda *a, **kw: texts.append(a) or True)
     monkeypatch.setattr(mod, "send_document", lambda *a, **kw: True)
@@ -222,11 +241,10 @@ def test_warnings_stop_at_needs_review_no_send(mod, monkeypatch, tmp_path):
     rc = mod.main(["2026-07-10", "job-1"])
 
     assert rc == 0
-    assert trail == ["assembling", "needs_review"]
-    entry = _read_entry(tmp_path, "2026-07-10", "job-1")
-    assert entry["status"] == "needs_review"
-    assert entry["warnings"] == ["banned phrase: 'leverage'"]
-    assert len(texts) == 1
+    assert "needs_review" not in trail, "the gate must no longer park the job"
+    assert sent, "the application must actually go out"
+    blob = " ".join(str(t) for t in texts)
+    assert "leverage" in blob, "the warning must still be surfaced to Teodor"
 
 
 def test_force_from_needs_review_skips_warnings_stop_and_sends(mod, monkeypatch, tmp_path):
