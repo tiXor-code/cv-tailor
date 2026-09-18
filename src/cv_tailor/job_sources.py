@@ -10,6 +10,7 @@ from __future__ import annotations
 import html
 import os
 import re
+import sys
 import urllib.error
 import urllib.request
 import json
@@ -1061,7 +1062,8 @@ def fetch_linkedin(query: str, country: str = "gb", api_key=None, api_url=None,
     return out
 
 
-def fetch_all(sources: list[dict], serp_budget=None, jsearch_budget=None) -> list[JobPosting]:
+def fetch_all(sources: list[dict], serp_budget=None, jsearch_budget=None,
+              apify_budget=None) -> list[JobPosting]:
     """sources = [{'kind': 'ashby'|'greenhouse'|'lever', 'slug': '...', 'name': '...'}, ...]
 
     `serp_budget`, when given (a budget.SerpBudget), is the ONE shared
@@ -1074,7 +1076,14 @@ def fetch_all(sources: list[dict], serp_budget=None, jsearch_budget=None) -> lis
     `jsearch_budget` (a budget.JSearchBudget) is the same arrangement for the
     jsearch sources: one shared instance for the whole scan, because a
     per-source instance re-reads a stale count and the 1,200/mo pool cap never
-    actually binds."""
+    actually binds.
+
+    `apify_budget` (a budget.ApifyResultBudget) is the same arrangement for the
+    apify_linkedin sources, with ONE deliberate inversion: `apify_budget=None`
+    means SKIP, not unbudgeted. serpapi and jsearch price per REQUEST and so
+    default to firing; this actor prices per RESULT on a $5/month tier, so a
+    caller that forgets to thread a budget must get nothing rather than an
+    uncapped bill."""
     dispatch = {
         "ashby": fetch_ashby_org,
         "greenhouse": fetch_greenhouse_org,
@@ -1103,7 +1112,29 @@ def fetch_all(sources: list[dict], serp_budget=None, jsearch_budget=None) -> lis
         # (SEC020). Endpoint, header and key are env only.
         "linkedin": lambda s: fetch_linkedin(
             s["query"], country=s.get("country", "gb")),
+        # Same rule as the entry above: NO credential is ever read from `s`.
+        # Token, endpoint and header are env-only (SEC020); a tracked
+        # sources.yaml must never be somewhere a live value could be put.
+        #
+        # Every knob is forwarded EXPLICITLY, because anything a dispatch
+        # lambda does not name is silently ignored -- which is exactly how the
+        # linkedin entry above quietly dropped its own options.
+        "apify_linkedin": lambda s: fetch_apify_linkedin(
+            s.get("keywords") or [], s.get("locations") or [],
+            work_type=s.get("work_type") or ["remote"],
+            published_at=s.get("published_at", "r86400"),
+            experience_level=s.get("experience_level"),
+            job_title_exclude=s.get("job_title_exclude"),
+            max_items=s.get("max_items"),
+            cadence=s.get("cadence", "daily"),
+            weekday=s.get("weekday", 1),
+            label=s.get("label", ""),
+            budget=apify_budget),
     }
+    # Per-scan run guard, reset here so it cannot leak across runs in one
+    # process (a test, a REPL, or two scans in the same interpreter).
+    reset_apify_state()
+
     out: list[JobPosting] = []
     for s in sources:
         kind = s["kind"]
@@ -1128,3 +1159,213 @@ def fetch_all(sources: list[dict], serp_budget=None, jsearch_budget=None) -> lis
         except Exception as e:
             print(f"warning: fetch failed for {s.get('name', s['slug'])}: {e}")
     return out
+
+
+# ---------------------------------------------------------------------------
+# Apify LinkedIn source (kind: apify_linkedin)
+#
+# A SIBLING of fetch_linkedin, not a replacement. fetch_linkedin is GET-only and
+# exists to GUESS across reseller field spellings; this actor is POSTed a JSON
+# input and its schema is known, so a missing key should surface as a bug rather
+# than be silently guessed into "". Leaving fetch_linkedin untouched keeps its
+# existing tests byte-identical.
+#
+# kind = "apify_linkedin" (the provider) but JobPosting.source = "linkedin" (the
+# marketplace). `source` is half the seen_jobs primary key and half the queue-id
+# basis, and raw_id is LinkedIn's own job id -- so a future direct LinkedIn feed
+# carrying the same id must collapse onto the same row. Do not "fix" this to
+# "apify".
+#
+# PAY PER RESULT on a FREE $5/month tier: every gate that can avoid a network
+# call is checked BEFORE the socket opens.
+_APIFY_ACTOR = "cheap_scraper~linkedin-job-scraper"
+_APIFY_ENDPOINT = f"https://api.apify.com/v2/acts/{_APIFY_ACTOR}/run-sync-get-dataset-items"
+# NOT _JSEARCH_TIMEOUT_S: a 60s client timeout on a multi-minute actor means the
+# client gives up while Apify keeps running and still bills.
+_APIFY_TIMEOUT_S = 240
+_APIFY_MAX_ITEMS = 12
+_APIFY_MAX_ITEMS_CEILING = 50
+_APIFY_STATE = {"runs": 0}
+
+
+def reset_apify_state() -> None:
+    """Twin of reset_linkedin_state, called at the top of fetch_all so the
+    per-scan run guard cannot leak across runs in one process."""
+    _APIFY_STATE["runs"] = 0
+
+
+def _apify_max_runs() -> int:
+    try:
+        return max(1, int(os.environ.get("APIFY_MAX_RUNS_PER_SCAN", "2")))
+    except (TypeError, ValueError):
+        return 2
+
+
+def _apify_first(row: dict, *names):
+    for name in names:
+        value = row.get(name)
+        if value not in (None, ""):
+            return value
+    return ""
+
+
+def _canonical_job_url(url) -> str:
+    """Drop query and fragment so ?utm_source= variants of one posting collapse.
+    Deliberately string-only -- no new imports into this module."""
+    return str(url or "").split("?")[0].split("#")[0].rstrip("/")
+
+
+def fetch_apify_linkedin(keywords, locations, *, work_type=None,
+                         published_at="r86400", experience_level=None,
+                         job_title_exclude=None, max_items=None,
+                         cadence="daily", weekday=1, label="",
+                         budget=None) -> list[JobPosting]:
+    """LinkedIn jobs via the Apify actor, metered by RESULT.
+
+    Gate order matters and is contractual: token, then enabled, then budget,
+    then the run guard -- all BEFORE any network call, because a misconfigured
+    credential or a disabled source must never burn a paid slot.
+
+    `budget=None` SKIPS rather than running unbudgeted. That inverts the
+    serp/jsearch default deliberately: this source costs money per row, so a
+    caller that forgets to thread a budget must get nothing.
+    """
+    tag = label or ", ".join(list(keywords or [])[:2]) or "apify"
+
+    token = os.environ.get("APIFY_TOKEN", "").strip()
+    if not token:
+        print("warning: APIFY_TOKEN not set; skipping apify linkedin source", file=sys.stderr)
+        return []
+    if os.environ.get("APIFY_ENABLED") != "1":
+        print(f"apify disabled (APIFY_ENABLED != 1); skipped {tag!r}", file=sys.stderr)
+        return []
+    if budget is None:
+        print(f"warning: apify source {tag!r} got no budget; SKIPPED rather than "
+              "run unbudgeted (this source bills per result)", file=sys.stderr)
+        return []
+    if _APIFY_STATE.get("runs", 0) >= _apify_max_runs():
+        print(f"apify run cap reached for this scan; dropped {tag!r}", file=sys.stderr)
+        return []
+
+    want = _APIFY_MAX_ITEMS if max_items is None else int(max_items)
+    want = max(1, min(want, _APIFY_MAX_ITEMS_CEILING))
+
+    granted = budget.reserve(want)
+    if granted <= 0:
+        print(f"apify budget exhausted; dropped {tag!r}", file=sys.stderr)
+        return []
+
+    payload = {
+        "keyword": list(keywords or []),
+        "locations": list(locations or []),
+        "publishedAt": published_at or "",
+        "workType": list(work_type or ["remote"]),
+        "maxItems": granted,
+        # Dedup BEFORE billing, and never pay for company enrichment the funnel
+        # does not read.
+        "saveOnlyUniqueItems": True,
+        "enrichCompanyData": False,
+    }
+    if experience_level:
+        payload["experienceLevel"] = list(experience_level)
+    if job_title_exclude:
+        payload["jobTitleExclude"] = list(job_title_exclude)
+
+    # maxItems in the URL is Apify's own billing ceiling; the body's is the
+    # actor's. Both, so a misbehaving actor still cannot overspend.
+    url = (f"{_APIFY_ENDPOINT}?maxItems={granted}&timeout=180"
+           f"&memory=1024&format=json&clean=true")
+
+    rows: list = []
+    try:
+        _APIFY_STATE["runs"] = _APIFY_STATE.get("runs", 0) + 1
+        req = urllib.request.Request(
+            url,
+            data=json.dumps(payload).encode("utf-8"),
+            headers={
+                # Header, never ?token= -- a URL lands in logs, proxies and
+                # redirect chains.
+                "Authorization": f"Bearer {token}",
+                "Content-Type": "application/json",
+                "Accept": "application/json",
+                "User-Agent": _BOARD_UA,
+            },
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=_APIFY_TIMEOUT_S) as resp:
+            data = json.loads(resp.read().decode("utf-8", "replace"))
+        rows = data if isinstance(data, list) else list((data or {}).get("items") or [])
+    except Exception as exc:  # noqa: BLE001 -- one dead feed never kills the scan
+        status = getattr(exc, "code", None)
+        prefix = f"HTTP {status}: " if status else ""
+        print(f"warning: apify fetch failed for {tag!r}: {prefix}{_redact(exc, token)}",
+              file=sys.stderr)
+        rows = []
+    finally:
+        # Refund the unused grant. In a finally, or a transient failure
+        # permanently eats the whole reservation.
+        budget.settle(granted, len(rows))
+
+    if not rows:
+        print(f"warning: apify returned 0 rows for {tag!r}; a metered run produced "
+              "nothing -- an empty result is not evidence of an empty market",
+              file=sys.stderr)
+        return []
+
+    postings: list[JobPosting] = []
+    seen_ids: set = set()
+    seen_urls: set = set()
+    unmapped: set = set()
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        raw_id = str(_apify_first(row, "jobId", "id", "jobPostingId")).strip()
+        title = str(_apify_first(row, "jobTitle", "title")).strip()
+        org = str(_apify_first(row, "companyName", "company", "companyTitle")).strip()
+        link = str(_apify_first(row, "jobUrl", "url", "link", "jobPostingUrl")).strip()
+        if not raw_id or not title or not org:
+            unmapped.update(row.keys())
+            continue
+
+        canon = _canonical_job_url(link)
+        if raw_id in seen_ids or (canon and canon in seen_urls):
+            continue
+        seen_ids.add(raw_id)
+        if canon:
+            seen_urls.add(canon)
+
+        apply_url = str(_apify_first(row, "applyUrl", "applicationUrl",
+                                     "externalApplyUrl")).strip()
+        options = [{"label": "apply", "url": apply_url}] if apply_url else []
+        # _best_company_url only promotes a link that provably belongs to the
+        # org, else falls back to the LinkedIn URL -- the guard that exists
+        # because of the EnthuZiastic/Cisco cross-listing incident. This is what
+        # lets a LinkedIn row reach adapter_for() and actually be applied to.
+        chosen = _best_company_url(org, options, link) if options else link
+
+        location = str(_apify_first(row, "location", "jobLocation")).strip()
+        work = str(_apify_first(row, "workType", "workplaceType")).strip().lower()
+        if work == "remote" and "remote" not in location.lower():
+            location = f"Remote - {location}" if location else "Remote"
+
+        description = _strip_html(str(_apify_first(
+            row, "jobDescription", "description", "descriptionText", "descriptionHtml")))
+
+        postings.append(JobPosting(
+            source="linkedin",
+            org=org,
+            title=title,
+            location=location,
+            url=chosen or link,
+            description=description,
+            raw_id=raw_id,
+            apply_options=options,
+        ))
+
+    if not postings:
+        # Billed rows that map to nothing must SCREAM and name the keys seen:
+        # the actor's output spelling is an assumption until a probe run
+        # verifies it, and a silent [] would read as "no jobs today".
+        print(f"warning: apify billed {len(rows)} row(s) for {tag!r} but none mapped; "
+              f"keys seen: {sorted(unmapped)[:12]}", file=sys.stderr)
+    return postings

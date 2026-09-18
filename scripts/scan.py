@@ -14,6 +14,7 @@ Usage: python scripts/scan.py [--min-score 6] [--max-results 10] [--dry-run]
 import argparse
 import json
 import re
+import os
 import sys
 from datetime import date
 from pathlib import Path
@@ -30,7 +31,7 @@ from cv_tailor.match import score_job
 from cv_tailor.digest import format_digest
 from cv_tailor.telegram import format_digest_for_telegram, send_text
 from cv_tailor.scout_queue import write_jobs_queue
-from cv_tailor.budget import JSearchBudget, SerpBudget
+from cv_tailor.budget import ApifyResultBudget, JSearchBudget, SerpBudget
 from cv_tailor.harvest import load_harvested_sources
 
 # Generated registry of auto-enrolled Ashby boards, relative to the repo root.
@@ -75,6 +76,10 @@ BUDGET_PATH = ROOT / "data" / "serpapi_budget.json"
 # that nothing enforced before. A shared file would let one source spend
 # the other's allowance.
 JSEARCH_BUDGET_PATH = ROOT / "data" / "jsearch_budget.json"
+# Apify gets its own counter too, and for a stronger reason: it is metered by
+# RESULT, not by request, on a FREE $5/month tier. A shared file would let one
+# source spend another's rows.
+APIFY_BUDGET_PATH = ROOT / "data" / "apify_result_budget.json"
 
 
 # Gate rejection buckets. GATE1_ROLE vs GATE1_GEO splits the one gate that does
@@ -268,15 +273,36 @@ def main(argv=None):
         tmp = Path(tempfile.mkdtemp())
         budget_path = tmp / "serpapi_budget.json"
         jsearch_budget_path = tmp / "jsearch_budget.json"
+        apify_budget_path = tmp / "apify_result_budget.json"
     else:
         budget_path = BUDGET_PATH
         jsearch_budget_path = JSEARCH_BUDGET_PATH
+        apify_budget_path = APIFY_BUDGET_PATH
     serp_budget = SerpBudget(path=budget_path)
     jsearch_budget = JSearchBudget(path=jsearch_budget_path)
 
+    # A dry run must be free BY CONSTRUCTION: monthly_cap=0 makes every
+    # reserve() return 0, so no apify source can open a socket even if someone
+    # later forgets a guard.
+    apify_budget = ApifyResultBudget(
+        path=apify_budget_path, monthly_cap=0 if args.dry_run else None)
+    if args.dry_run:
+        # Belt and braces. Redirecting a COUNTER FILE does not stop an HTTP
+        # call, so also hard-disable the env and drop the paid sources.
+        os.environ["APIFY_ENABLED"] = "0"
+        paid = [s for s in sources if str(s.get("kind", "")).startswith("apify")]
+        if paid:
+            sources = [s for s in sources
+                       if not str(s.get("kind", "")).startswith("apify")]
+            print(f"  dry-run: dropped {len(paid)} paid apify source(s)",
+                  file=sys.stderr)
+
     print(f"fetching {len(sources)} sources...", file=sys.stderr)
-    jobs = fetch_all(sources, serp_budget=serp_budget, jsearch_budget=jsearch_budget)
+    jobs = fetch_all(sources, serp_budget=serp_budget, jsearch_budget=jsearch_budget,
+                     apify_budget=apify_budget)
     print(f"  {len(jobs)} postings", file=sys.stderr)
+    print(f"  apify results: {apify_budget.used()}/{apify_budget.monthly_cap} this month "
+          f"(daily cap {apify_budget.daily_cap})", file=sys.stderr)
     print(f"  serpapi budget: {serp_budget.used()}/{serp_budget.monthly_cap} used this month",
           file=sys.stderr)
     print(f"  jsearch budget: {jsearch_budget.used()}/{jsearch_budget.monthly_cap} used this month",
