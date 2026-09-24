@@ -212,3 +212,10 @@ def test_signals_lift_a_decent_ai_fit_above_plain_ai_roles():
 def test_a_weak_fit_is_not_boosted_by_a_tool_mention():
     """A Java/React role that mentions Copilot is still a Java/React role."""
     assert rank_ai_native(3, "Java and React developer. Copilot licences provided.") == 3
+
+
+def test_product_and_analyst_roles_are_out():
+    """Asked about Constructor's Staff PM and Data Analyst (both his Yes on the
+    rating page), Teodor said pass (2026-09-24)."""
+    low = SCORER_SYSTEM_PROMPT.lower()
+    assert "product manager, program manager, producer and data analyst roles score 4 or" in low

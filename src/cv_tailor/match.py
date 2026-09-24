@@ -28,10 +28,8 @@ What he wants (calibrated 2026-09-24 against 40 postings he rated himself):
   applied AI, LLM/agent engineer, forward deployed engineer, AI solutions/
   automation/implementation roles, AI enablement or AI coaching roles that teach
   teams agentic/AI-assisted engineering, and any technical role with "agentic" or
-  "AI" in the title. Product manager, technical program manager and producer roles
-  on AI or technical products also count (his background is production at EA).
-  Backend or data roles at a company whose core product IS AI or AI-powered
-  search/recommendations count too.
+  "AI" in the title. Backend roles at a company whose core product IS AI or
+  AI-powered search/recommendations count too.
 - Do not penalize seniority: Senior, Staff, Lead and engineering-manager titles
   and stated years of experience are fine -- he applies to them.
 - The tech stack is NEVER a gap. He builds with AI tools, so a required
@@ -44,6 +42,8 @@ What he wants (calibrated 2026-09-24 against 40 postings he rated himself):
   pure traditional stacks with no AI component (e.g. a Java/React developer role).
 - Non-technical roles (sales, account executive, customer success, marketing/GTM,
   recruiting, design) score 2 or lower.
+- Product manager, program manager, producer and data analyst roles score 4 or
+  lower: he passed on them when asked (2026-09-24), even on AI products.
 - Startups win ties: seed to Series B, small teams, founding roles -- score a
   startup 1 point above an otherwise equal larger company.
 - Any industry is fine, including iGaming, gambling, forex and fintech. The one
