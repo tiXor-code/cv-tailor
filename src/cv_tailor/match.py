@@ -145,7 +145,10 @@ def score_job(profile: dict, job_title: str, job_location: str, job_description:
 _AI_NATIVE_PATTERNS = {
     "claude code": r"\bclaude\s+code\b",
     "cursor": r"\bcursor\b(?!\s+(?:position|pagination|based))",
-    "copilot": r"\bcopilot\b",
+    # Copilot is also a Microsoft product name ("ChatGPT, Gemini and Copilot
+    # results"): only GitHub Copilot, or Copilot next to coding words, counts.
+    "copilot": r"github\s+copilot|(?:cod(?:e|ing)|program\w*|develop\w*)\s+(?:\w+\s+){0,3}copilot|"
+               r"copilot\s+(?:\w+\s+){0,3}(?:cod(?:e|ing)|pair|ide|autocomplete)",
     "codex": r"\bcodex\b",
     "windsurf": r"\bwindsurf\b",
     "ai-assisted development": r"\bai[- ]assisted\s+(?:development|coding|engineering|programming)",

@@ -219,3 +219,12 @@ def test_product_and_analyst_roles_are_out():
     rating page), Teodor said pass (2026-09-24)."""
     low = SCORER_SYSTEM_PROMPT.lower()
     assert "product manager, program manager, producer and data analyst roles score 4 or" in low
+
+
+def test_copilot_as_a_product_name_is_not_an_ai_native_signal():
+    """cloro (HN, 2026-09-24) lists 'ChatGPT, Perplexity, Gemini, Grok and
+    Copilot results' as its API's output -- Microsoft Copilot the product, not
+    a coding tool. Only GitHub Copilot or Copilot used for coding counts."""
+    assert "copilot" not in ai_native_signals("We return ChatGPT, Gemini and Copilot results as JSON.")
+    assert "copilot" in ai_native_signals("Engineers use GitHub Copilot every day.")
+    assert "copilot" in ai_native_signals("You code with Copilot and Cursor.")
