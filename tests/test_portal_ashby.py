@@ -33,6 +33,9 @@ _PROFILE = {
 }
 _ANSWERS = {
     "notice_period": "30 calendar days",
+    # Fictional and deliberately LOWERCASE, so the radio test also pins the
+    # case-insensitive match against the "Careers Page" option.
+    "how_heard": "careers page",
     # Fictional, like every value here -- this file is tracked in a PUBLIC
     # repo (see the work_authorization note below for the near-miss that
     # established the rule). Deliberately not a round, plausible figure.
@@ -297,7 +300,7 @@ def test_apply_contact_email_unwritable_aborts_to_contact_fill_failed(chromium_p
         result = AshbyAdapter().apply(page, entry, package, _PROFILE, _ANSWERS, dry_run=True)
 
     assert result.status == "needs_human"
-    assert result.reason == "contact-fill-failed"
+    assert result.reason == "contact-fill-failed:email"
     assert not (Path(result.evidence_dir) / "filled.png").exists()
 
 
@@ -839,6 +842,34 @@ def test_a_question_required_by_rendered_asterisk_is_not_treated_as_optional(chr
 #     before  Yes:aria-pressed=false  No:aria-pressed=false  checkbox=False
 #     after   Yes:aria-pressed=true   No:aria-pressed=false  checkbox=True
 
+def test_a_yes_no_toggle_answered_no_is_written_and_verified(chromium_page, package):
+    """"No" is a real answer, not a failed write. andercore (2026-09-17) parked
+    unwritable-required on "Will you now or in the future require visa
+    sponsorship to work legally in Germany?" while its own widget showed
+    No:aria-pressed="true" -- the click had worked. _toggle demanded the backing
+    checkbox be checked, and that checkbox tracks YES, so every No failed.
+
+    Three of the five unwritable-required parks on 2026-09-24 were visa
+    questions, whose truthful answer for him is always No."""
+    page = chromium_page
+    client = _factual_client("No")
+
+    with serve_fixtures() as base_url:
+        _goto(page, base_url, variant="yesno")
+        result = AshbyAdapter().apply(page, {"id": "job-yesno-no"}, package, _PROFILE,
+                                      _ANSWERS, dry_run=True, client=client)
+
+        wrapper = page.locator('[data-field-path="q_source"]')
+        yes_pressed = wrapper.locator("button", has_text="Yes").first.get_attribute("aria-pressed")
+        no_pressed = wrapper.locator("button", has_text="No").first.get_attribute("aria-pressed")
+        backing_checked = wrapper.locator("input[type=checkbox]").first.is_checked()
+
+    assert result.status == "filled", result.reason
+    assert no_pressed == "true"
+    assert yes_pressed == "false"
+    assert backing_checked is False, "the checkbox tracks Yes, so No leaves it unchecked"
+
+
 def test_a_yes_no_toggle_is_answered_and_verified(chromium_page, package):
     page = chromium_page
     # RobCo's real label names no jurisdiction, so the deterministic
@@ -906,6 +937,69 @@ def test_location_combobox_value_survives_moving_to_the_next_field(chromium_page
     assert landed == _PROFILE["contact"]["location"]
 
 
+def test_location_combobox_waits_through_a_slow_loading_list(chromium_page, package):
+    """Live oyster 2026-09-19 (portal/aborted.png) and Cohere 2026-09-18 both
+    parked contact-fill-failed, and the screenshot caught the location dropdown
+    frozen on "Loading...". The same Cohere form committed the location in
+    0.5s when re-run on 2026-09-24, so this is LATENCY, not a broken widget.
+
+    The placeholder is itself a role=option row, so waiting for "any option"
+    was satisfied instantly by a row that can never match, and the exact-match
+    scan then gave up and cleared the box. A slow list must be waited out."""
+    page = chromium_page
+
+    with serve_fixtures() as base_url:
+        _goto(page, base_url, variant="locationcombo&slow=1")
+        result = AshbyAdapter().apply(page, {"id": "job-loc-slow"}, package, _PROFILE,
+                                      _ANSWERS, dry_run=True)
+        landed = page.locator("#_systemfield_location").input_value()
+
+    assert result.status == "filled", result.reason
+    assert landed == _PROFILE["contact"]["location"]
+
+
+def test_a_real_radio_group_question_is_answered(chromium_page, package):
+    """Live Sardine (score 8, 2026-09-24): "How did you hear about Sardine?" is a
+    genuine radio group -- options Linkedin / Job Board / In-person event /
+    Referral / ... -- and it parked unwritable-required with the right answer
+    in hand. Only Ashby's Yes/No BUTTON widget was ever recognised as a choice
+    question; a real radio group fell to the text branch and targeted an id no
+    element carries."""
+    page = chromium_page
+
+    with serve_fixtures() as base_url:
+        _goto(page, base_url, variant="radiogroup")
+        result = AshbyAdapter().apply(page, {"id": "job-radio"}, package, _PROFILE,
+                                      _ANSWERS, dry_run=True)
+        wrap = page.locator('[data-field-path="q_heard"]')
+        picked = [wrap.locator("label", has_text=o).first.get_attribute("for")
+                  for o in ("Careers Page", "Linkedin")]
+        careers_checked = page.locator(f'[id="{picked[0]}"]').is_checked()
+        linkedin_checked = page.locator(f'[id="{picked[1]}"]').is_checked()
+
+    assert result.status == "filled", result.reason
+    assert careers_checked is True, "'careers page' must select the 'Careers Page' option"
+    assert linkedin_checked is False
+
+
+def test_a_custom_location_combobox_question_is_committed(chromium_page, package):
+    """Live ElevenLabs (score 8, 2026-09-20) parked unwritable-required:Location.
+    Its Location is a CUSTOM question (uuid field path) rendered as a combobox,
+    so the contact path's combobox handling never saw it and the screening path
+    plain-filled it -- a value Ashby discards on blur unless an option is
+    picked."""
+    page = chromium_page
+
+    with serve_fixtures() as base_url:
+        _goto(page, base_url, variant="customlocation")
+        result = AshbyAdapter().apply(page, {"id": "job-custom-loc"}, package, _PROFILE,
+                                      _ANSWERS, dry_run=True)
+        landed = page.locator('[data-field-path="q_custom_location"] input').input_value()
+
+    assert result.status == "filled", result.reason
+    assert landed == _PROFILE["contact"]["location"]
+
+
 def test_location_combobox_that_offers_no_match_aborts_rather_than_submitting_blank(
         chromium_page, package):
     """A required field we cannot commit must abort, never sail on as "filled".
@@ -920,4 +1014,7 @@ def test_location_combobox_that_offers_no_match_aborts_rather_than_submitting_bl
                                       profile, _ANSWERS, dry_run=True)
 
     assert result.status == "needs_human", result.reason
-    assert result.reason == "contact-fill-failed"
+    # The reason NAMES the field. A bare "contact-fill-failed" on Cohere and
+    # oyster took a screenshot read to discover it was the location, not name
+    # or email.
+    assert result.reason == "contact-fill-failed:location"

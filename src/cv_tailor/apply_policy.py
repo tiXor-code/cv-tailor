@@ -70,8 +70,16 @@ NO_SUBMIT_REASONS = frozenset({
 # salary box with only name/email/resume filled (aborted.png shows every
 # question below it untouched), and the row survived -- blocking every
 # everfield role for an application that never left the machine.
+#
+# contact-fill-failed: name, email or location did not land, and every adapter
+# aborts on it BEFORE any submit (ashby 230 vs 254, greenhouse 350 vs 474, lever
+# 387 vs 421, micro1 273 vs its first Next click at 410). Outside this family,
+# Cohere (score 8, 2026-09-18) and oyster (7, 2026-09-19) each kept a ledger
+# row and norm_key blocked both companies for applications never sent. Ashby
+# now appends the field (":location"), so it is a prefix, not an exact member.
 NO_SUBMIT_REASON_PREFIXES = ("resume-upload-failed", "unanswerable-required",
-                             "submit-rejected", "unwritable-required")
+                             "submit-rejected", "unwritable-required",
+                             "contact-fill-failed")
 
 
 def proves_no_submission(reason: str) -> bool:

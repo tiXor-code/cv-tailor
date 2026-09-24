@@ -47,3 +47,14 @@ def test_ambiguous_reasons_must_keep_their_ledger_row():
     assert not proves_no_submission("handoff-manual: no adapter")
     assert not proves_no_submission("")
     assert not proves_no_submission("submit-click:Locator.click: Timeout 119422ms exceeded")
+
+
+def test_contact_fill_failed_proves_no_submission():
+    """Every adapter aborts on it BEFORE any submit: ashby 230 vs 254,
+    greenhouse 350 vs 474, lever 387 vs 421, micro1 273 vs its first Next
+    click at 410. It was outside the roll-back family, so Cohere (score 8,
+    2026-09-18) and oyster (7, 2026-09-19) each kept a ledger row, and
+    norm_key blocked every sibling role at both companies for applications
+    that never left the machine. Both the bare and field-named forms count."""
+    assert proves_no_submission("contact-fill-failed")
+    assert proves_no_submission("contact-fill-failed:location")

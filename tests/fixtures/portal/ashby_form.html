@@ -184,6 +184,75 @@
   // textarea is the hidden, unlabelled g-recaptcha-response, and its "Cover
   // letter" is a file upload -- so that variant must PARK rather than submit
   // a bare figure a non-euro employer reads roughly 4x wrong.
+  // customlocation: a CUSTOM question that is a location combobox. Live
+  // ElevenLabs (2026-09-20) parked unwritable-required:Location on exactly
+  // this: data-field-path is a uuid, not _systemfield_location, so the contact
+  // path's combobox handling never saw it and the screening path plain-filled
+  // it -- and Ashby discards typed text on blur unless an option is picked.
+  if (variant === "customlocation") {
+    var clAnchor = document.getElementById("q_required_text")
+      .closest(".ashby-application-form-field-entry");
+    var clWrap = document.createElement("div");
+    clWrap.className = "ashby-application-form-field-entry";
+    clWrap.setAttribute("data-field-path", "q_custom_location");
+    clWrap.innerHTML =
+      // Live ElevenLabs shape: the input has NO id and NO name, and the
+      // label's for= points at an id nothing on the page has. The first
+      // version of this fixture gave the input id="q_custom_location", which
+      // is exactly why its test passed while the live form still failed.
+      '<label for="q_custom_location">Location</label>' +
+      '<input role="combobox" aria-autocomplete="list" ' +
+      'placeholder="Start typing..." required>';
+    clAnchor.parentNode.insertBefore(clWrap, clAnchor);
+    var clBox = clWrap.querySelector("input");
+    var clCommitted = false;
+    var clList = document.createElement("div");
+    clList.setAttribute("role", "listbox");
+    clList.style.display = "none";
+    clWrap.appendChild(clList);
+    clBox.addEventListener("input", function () {
+      clCommitted = false;
+      clList.innerHTML = "";
+      if (!clBox.value) { clList.style.display = "none"; return; }
+      ["Zzz Decoy County", clBox.value, clBox.value].forEach(function (text) {
+        var opt = document.createElement("div");
+        opt.setAttribute("role", "option");
+        opt.textContent = text;
+        opt.addEventListener("click", function () {
+          clBox.value = text; clCommitted = true; clList.style.display = "none";
+        });
+        clList.appendChild(opt);
+      });
+      clList.style.display = "block";
+    });
+    clBox.addEventListener("blur", function () {
+      if (!clCommitted) { clBox.value = ""; }
+    });
+  }
+
+  // radiogroup: a REAL radio group, not Ashby's Yes/No buttons. Live Sardine
+  // (score 8) parked unwritable-required on "How did you hear about
+  // Sardine?": _question_for_wrapper only knew the Yes/No widget, so this fell
+  // to the text branch and targeted [id="<field uuid>"] -- but each radio's id
+  // is "<field>_<option>-labeled-radio-N", so the selector matched nothing.
+  // The answer was right all along ("Job board" matches "Job Board").
+  if (variant === "radiogroup") {
+    var rgAnchor = document.getElementById("q_required_text")
+      .closest(".ashby-application-form-field-entry");
+    var rgWrap = document.createElement("div");
+    rgWrap.className = "ashby-application-form-field-entry";
+    rgWrap.setAttribute("data-field-path", "q_heard");
+    var rgHtml = '<label class="_heading_f7cvd_52 _required_f7cvd_91 ' +
+      'ashby-application-form-question-title">How did you hear about Fixture Co?</label>';
+    ["Linkedin", "Careers Page", "In-person event", "Referral", "Other"].forEach(function (o, i) {
+      var rid = "q_heard_opt" + i + "-labeled-radio-" + i;
+      rgHtml += '<div><input type="radio" name="q_heard_opts" id="' + rid + '">' +
+        '<label for="' + rid + '">' + o + '</label></div>';
+    });
+    rgWrap.innerHTML = rgHtml;
+    rgAnchor.parentNode.insertBefore(rgWrap, rgAnchor);
+  }
+
   if (variant === "salarynumber" || variant === "salarynumbernonote") {
     var anchorEl = document.getElementById("q_required_text")
       .closest(".ashby-application-form-field-entry");
@@ -284,20 +353,36 @@
       var rows = params.get("nomatch") === "1"
         ? ["Zzz Decoy County", "Elsewhere-On-Thames, Nowhere"]
         : ["Zzz Decoy County", loc.value, loc.value];
-      rows.forEach(function (text) {
-        var opt = document.createElement("div");
-        opt.setAttribute("role", "option");
-        opt.textContent = text;
-        opt.addEventListener("click", function () {
-          loc.value = text;
-          committed = true;
-          listbox.style.display = "none";
-          loc.setAttribute("aria-expanded", "false");
+      var render = function (texts) {
+        listbox.innerHTML = "";
+        texts.forEach(function (text) {
+          var opt = document.createElement("div");
+          opt.setAttribute("role", "option");
+          opt.textContent = text;
+          opt.addEventListener("click", function () {
+            loc.value = text;
+            committed = true;
+            listbox.style.display = "none";
+            loc.setAttribute("aria-expanded", "false");
+          });
+          listbox.appendChild(opt);
         });
-        listbox.appendChild(opt);
-      });
-      listbox.style.display = "block";
-      loc.setAttribute("aria-expanded", "true");
+        listbox.style.display = "block";
+        loc.setAttribute("aria-expanded", "true");
+      };
+      // ?slow=1 models the live oyster failure (2026-09-19 aborted.png): the
+      // dropdown opened on a "Loading..." row and the real options had not
+      // arrived when the adapter gave up. The placeholder is itself a
+      // role=option row, so "wait for any option" is satisfied instantly by a
+      // row that can never match. The real rows arrive after 4s -- past the
+      // old 3s ceiling -- which is well inside what a loaded board can take.
+      if (params.get("slow") === "1") {
+        render(["Loading..."]);
+        var later = rows.slice();
+        setTimeout(function () { render(later); }, 4000);
+      } else {
+        render(rows);
+      }
     });
 
     loc.addEventListener("blur", function () {
@@ -342,7 +427,15 @@
           o.setAttribute("aria-pressed", "false");
         });
         btn.setAttribute("aria-pressed", "true");
-        hidden.checked = true;
+        // The backing checkbox tracks YES, not "answered". Measured live on
+        // the andercore posting 2026-09-24:
+        //   after No   Yes:false No:true   checkbox=False
+        //   after Yes  Yes:true  No:false  checkbox=True
+        // This line used to set it true for BOTH buttons, which agreed with
+        // the adapter's identical wrong belief -- so every "No" answer (every
+        // visa-sponsorship question, for him) parked unwritable-required live
+        // while the suite stayed green.
+        hidden.checked = (text === "Yes");
       });
       yn.appendChild(btn);
     });

@@ -84,7 +84,20 @@ FORM_READY_TIMEOUT_MS = 15_000
 # on that path before the plain-write fallback. An over-long value is not
 # harmlessly cautious -- it stalls the whole fill, which in handoff mode hands
 # the page a wide window to change underneath the adapter.
-COMBOBOX_OPTION_TIMEOUT_MS = 3_000
+# How long to wait for a combobox's REAL options. Was 3s. Live oyster
+# (2026-09-19) and Cohere (2026-09-18) both parked contact-fill-failed with the
+# dropdown caught on "Loading..."; the same Cohere form committed in 0.5s when
+# re-run on 2026-09-24. So this is latency under load, and the ceiling only
+# costs time on a failure path.
+COMBOBOX_OPTION_TIMEOUT_MS = 10_000
+# ...but ONLY once the list has shown signs of life. A field that shows no row
+# at all within this window is treated as never-suggesting, the old fast path:
+# without it every such field paid the full 10s, which also broke the handoff
+# fixture whose stand-in human stops clicking after ~4s.
+COMBOBOX_FIRST_OPTION_MS = 3_000
+# A placeholder row is itself role=option on these widgets, so "any option is
+# visible" is satisfied instantly by a row that can never match.
+_LOADING_OPTION_RE = re.compile(r"^\s*(loading|searching)\b", re.I)
 
 _APPLICATION_TAB_SELECTOR = "#job-application-form"
 _RESUME_SELECTOR = "#_systemfield_resume"
@@ -227,7 +240,10 @@ class AshbyAdapter(PortalAdapter):
         unwritten_contact = self._verify_contact(page, contact)
         if unwritten_contact is not None:
             capture_evidence(page, evidence_dir, "aborted")
-            return PortalResult(status="needs_human", reason="contact-fill-failed",
+            # The reason NAMES the field: a bare "contact-fill-failed" on
+            # Cohere and oyster took a screenshot read to learn it was location.
+            return PortalResult(status="needs_human",
+                                 reason=f"contact-fill-failed:{unwritten_contact}",
                                  evidence_dir=str(evidence_dir))
 
         self._fill_cover_letter(page, package.get("cover_letter_path"))
@@ -575,7 +591,10 @@ class AshbyAdapter(PortalAdapter):
                     if question.required:
                         return f"unanswerable-required:{question.label}"
                     continue
-                written = self._toggle(wrapper, answer.value)
+                if wrapper.locator(".ashby-application-form-input-yesno").count() > 0:
+                    written = self._toggle(wrapper, answer.value)
+                else:
+                    written = self._radio(wrapper, answer.value)
             elif question.kind == "select":
                 if answer.value not in options:
                     # Deterministic tier isn't options-aware; a value that
@@ -585,6 +604,16 @@ class AshbyAdapter(PortalAdapter):
                         return f"unanswerable-required:{question.label}"
                     continue
                 written = self._select(page, selector, answer.value)
+            elif self._is_combobox(page, selector):
+                # A CUSTOM question rendered as a combobox. Live ElevenLabs
+                # (score 8, 2026-09-20) parked unwritable-required:Location on
+                # one: the contact path's combobox handling only covers
+                # _systemfield_location, so this was plain-filled. Worse, a
+                # plain fill PASSES verify_filled -- it reads the typed text
+                # before focus leaves, and Ashby discards it on blur -- so the
+                # fixture showed a required Location reported "filled" and
+                # left empty.
+                written = self._combobox(page, selector, answer.value)
             else:
                 written = fill_field(page, selector, answer.value) and \
                     verify_filled(page, selector, answer.value)
@@ -681,16 +710,33 @@ class AshbyAdapter(PortalAdapter):
             # left 'Lo' behind in the box.
             box.fill(value)
 
-            try:
-                page.wait_for_selector("[role=option]", state="visible",
-                                       timeout=COMBOBOX_OPTION_TIMEOUT_MS)
-            except PlaywrightError:
+            options = page.locator("[role=option]")
+            start = time.monotonic()
+            saw_any = False
+            while True:
+                try:
+                    texts = [(options.nth(i).inner_text() or "").strip()
+                             for i in range(options.count())]
+                except PlaywrightError:
+                    texts = []
+                if texts:
+                    saw_any = True
+                    # Settled only once a row that is NOT a loading placeholder
+                    # is present -- see _LOADING_OPTION_RE.
+                    if any(tx and not _LOADING_OPTION_RE.search(tx) for tx in texts):
+                        break
+                elapsed = time.monotonic() - start
+                if not saw_any and elapsed >= COMBOBOX_FIRST_OPTION_MS / 1000:
+                    break       # no sign of a list at all: never suggests
+                if elapsed >= COMBOBOX_OPTION_TIMEOUT_MS / 1000:
+                    break
+                page.wait_for_timeout(200)
+
+            if not saw_any:
                 # Advertises role="combobox" but never suggests -- some boards
                 # mark a plain input that way. The value is already written, so
                 # simply confirm it survives losing focus.
                 return AshbyAdapter._value_survives_blur(page, box, value)
-
-            options = page.locator("[role=option]")
             for i in range(options.count()):
                 if (options.nth(i).inner_text() or "").strip() == value:
                     options.nth(i).click()
@@ -734,7 +780,8 @@ class AshbyAdapter(PortalAdapter):
         does nothing is exactly how an incomplete application reached the
         submit button on 2026-09-16: the pressed button must report
         aria-pressed="true", AND the widget's backing hidden checkbox must
-        report checked. Measured live on the robco posting:
+        AGREE with the answer -- checked for Yes, unchecked for No (it tracks
+        Yes; see the return). Measured live on the robco posting:
 
             before  Yes:aria-pressed=false  No:aria-pressed=false  checkbox=False
             after   Yes:aria-pressed=true   No:aria-pressed=false  checkbox=True
@@ -758,7 +805,46 @@ class AshbyAdapter(PortalAdapter):
             backing = yesno.locator("input[type=checkbox]")
             if backing.count() == 0:
                 return False
-            return backing.first.is_checked()
+            # The backing checkbox tracks YES, not "answered". Measured live
+            # on andercore 2026-09-24: after No -> checkbox=False, after Yes ->
+            # checkbox=True. Requiring it CHECKED failed every "No" -- every
+            # visa-sponsorship question, for him -- while the click had
+            # worked (No:aria-pressed="true"). aria-pressed above is what
+            # proves the click; this proves the widget agrees on WHICH answer.
+            return backing.first.is_checked() == (value.strip().lower() == "yes")
+        except PlaywrightError:
+            return False
+
+    @staticmethod
+    def _radio_label(wrapper, radio) -> str:
+        """The visible text of one radio option, via its <label for>."""
+        try:
+            rid = radio.get_attribute("id") or ""
+            if not rid:
+                return ""
+            lab = wrapper.locator(f'label[for="{rid}"]')
+            return (lab.first.inner_text() or "").strip() if lab.count() else ""
+        except PlaywrightError:
+            return ""
+
+    @staticmethod
+    def _radio(wrapper, value: str) -> bool:
+        """Select the radio option labelled `value`, then read it back.
+
+        Clicks the LABEL, the way a person does: Ashby styles its radios, so
+        the input itself is often not actionable. Verified by is_checked() on
+        the input, so a click that silently misses parks the question rather
+        than leaving it unanswered on submit. Returns False on any error."""
+        try:
+            radios = wrapper.locator("input[type=radio]")
+            for i in range(radios.count()):
+                radio = radios.nth(i)
+                if AshbyAdapter._radio_label(wrapper, radio) != value:
+                    continue
+                rid = radio.get_attribute("id") or ""
+                wrapper.locator(f'label[for="{rid}"]').first.click()
+                return radio.is_checked()
+            return False
         except PlaywrightError:
             return False
 
@@ -861,10 +947,36 @@ class AshbyAdapter(PortalAdapter):
                     return (Question(label=label, kind="radio", required=required,
                                      options=options), selector, options)
 
+            # A GENUINE radio group (input[type=radio] + one <label for> per
+            # option), as opposed to the Yes/No button widget above. Live
+            # Sardine (score 8) parked unwritable-required on "How did you hear
+            # about Sardine?" with the right answer in hand: this shape used to
+            # fall through to the text branch and target [id="<field uuid>"],
+            # while each radio's id is "<field>_<option>-labeled-radio-N".
+            radios = wrapper.locator("input[type=radio]")
+            if radios.count() > 0:
+                options = tuple(o for o in (self._radio_label(wrapper, radios.nth(i))
+                                            for i in range(radios.count())) if o)
+                if options:
+                    required = self._is_required(label_el, radios.first)
+                    return (Question(label=label, kind="radio", required=required,
+                                     options=options), selector, options)
+
+            # No element carries the question's id -- live ElevenLabs'
+            # "Location" input had no id and no name, and its <label for>
+            # pointed at an id nothing on the page has, so every write went to
+            # an empty selector. Fall back to the control inside the wrapper,
+            # the same remedy _contact_selector applies to _systemfield_location.
+            def _scoped(tag: str) -> str:
+                if wrapper.locator(selector).count() > 0:
+                    return selector
+                return f'[data-field-path="{field_id}"] {tag}'
+
             textarea_el = wrapper.locator("textarea")
             if textarea_el.count() > 0:
                 required = self._is_required(label_el, textarea_el.first)
-                return Question(label=label, kind="textarea", required=required), selector, ()
+                return (Question(label=label, kind="textarea", required=required),
+                        _scoped("textarea"), ())
 
             input_el = wrapper.locator("input")
             if input_el.count() > 0:
@@ -879,7 +991,7 @@ class AshbyAdapter(PortalAdapter):
                 # detection was missing.
                 input_type = (input_el.first.get_attribute("type") or "").strip().lower()
                 kind = "number" if input_type == "number" else "text"
-                return Question(label=label, kind=kind, required=required), selector, ()
+                return Question(label=label, kind=kind, required=required), _scoped("input"), ()
         except PlaywrightError:
             pass
         return None, None, None
