@@ -105,9 +105,18 @@ _RESIDENCY_RE = re.compile(
     rf"must\s+(?:be\s+)?(?:located|based|resid(?:e|ing)|live|living)\s+in\s+{_NON_EU_PLACES}\b|"
     rf"(?:authori[sz]ed|eligible|authori[sz]ation)\s+to\s+work\s+in\s+{_NON_EU_PLACES}\b|"
     rf"{_NON_EU_PLACES}\s+work\s+authori[sz]ation|"
-    rf"(?:must|need\s+to)\s+(?:reside|live)\s+in\s+{_NON_EU_PLACES}\b",
+    rf"(?:must|need\s+to)\s+(?:reside|live)\s+in\s+{_NON_EU_PLACES}\b|"
+    # "work outside Canada for up to 90 days a year" = you live in Canada
+    rf"work(?:ing)?\s+(?:from\s+)?outside\s+(?:of\s+)?{_NON_EU_PLACES}\s+for\s+up\s+to",
     re.I)
 _ONSITE_LOCATION_RE = re.compile(r"\bhybrid\b|\bon-?site\b|\bin[- ]office\b", re.I)
+# Hybrid WORK, however phrased -- LinkedIn labels these "Remote" when the
+# search asked for remote (his marks: Redeploy, PwC). Never bare "hybrid":
+# "hybrid retrieval"/"hybrid search" are RAG terms.
+_HYBRID_WORK_RE = re.compile(
+    r"hybrid\s+(?:work(?:ing)?|model|role|position|setup|set-up|schedule|arrangement|"
+    r"environment|policy|office|mode)|\bhybride\b|\bhybrid\s*\(|"
+    r"(?:work|role|position)\s+is\s+hybrid|this\s+is\s+a\s+hybrid", re.I)
 _ONSITE_DAYS_RE = re.compile(
     r"\d+\s*days?\s*(?:per|a)\s*week\s*(?:in|at|on-?site|in[- ]office)", re.I)
 
@@ -125,45 +134,59 @@ def is_scout_geo_eligible(location: str, description: str) -> bool:
         return False
     if _ONSITE_DAYS_RE.search(_blob("", description)) and not remote_loc:
         return False
+    # Hybrid work anywhere in the text is a hard pass (Teodor: "Hybrid, hard
+    # pass"), even under a remote location label.
+    if _HYBRID_WORK_RE.search(_blob("", description, cap=8000)):
+        return False
     return True
 
 
-_LANG_WORD = r"(?:german|deutsch|french|fran[cç]ais)\b"
+# Every language but English and Romanian (the two he works in). Started as
+# German/French (his words); widened after his 40 rated postings marked a
+# Greek requirement and Dutch-language postings "not English friendly".
+_LANG_WORD = (r"(?:german|deutsch|french|fran[cç]ais|dutch|nederlands|greek|swedish|danish|"
+              r"norwegian|finnish|polish|czech|slovak|hungarian|italian|spanish|portuguese|"
+              r"bulgarian|serbian|croatian|ukrainian|russian|turkish|hebrew|arabic|japanese|"
+              r"mandarin|chinese|cantonese|korean|hindi)\b")
 _LANG_REQUIRED_RE = re.compile(
     rf"(?:fluen(?:t|cy)|native|business[- ]level|professional|proficien(?:t|cy)|excellent|"
     rf"strong|advanced|(?:c1|c2|b2)(?:\s+level)?)\W+"
     # only connective words between the adjective and the language, so
     # "excellent benefits for our French offices" is not a requirement
-    rf"(?:(?:in|of|command|knowledge|skills|written|spoken|verbal|and|level|the)\W+){{0,3}}{_LANG_WORD}|"
+    rf"(?:(?:in|of|command|knowledge|skills|written|spoken|verbal|and|level|the|communication|language)\W+){{0,4}}{_LANG_WORD}|"
     rf"{_LANG_WORD}\W+(?:\w+\W+){{0,4}}(?:required|mandatory|a\s+must|must[- ]have|essential|"
     rf"at\s+(?:c1|c2|b2)|(?:c1|c2|b2))|"
     rf"(?:speak|write)\s+{_LANG_WORD}|{_LANG_WORD}[- ]speaking",
     re.I)
 _LANG_OPTIONAL_RE = re.compile(
-    r"\bplus\b|nice\s+to\s+have|advantage|bonus|preferred|desirable|beneficial|asset", re.I)
+    r"\bplus\b|nice\s+to\s+have|advantage|bonus|preferred|desirable|beneficial|asset|merit", re.I)
 _SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?;\n])\s+")
-_WORD_RE = re.compile(r"[a-zà-ÿß]+", re.I)
+_WORD_RE = re.compile(r"[a-zà-ÿßăâîșțş]+", re.I)
 _EN_STOP = frozenset("the and with you we our for are will your of to in is this".split())
-_DE_STOP = frozenset("und der die das mit für wir sie du dein deine ihre bei einen eine ist zu".split())
-_FR_STOP = frozenset("et les des vous nous avec pour une est dans votre sur au du le la".split())
+_RO_STOP = frozenset("și si de la în pentru cu care este sau să sa din pe".split())
+# Share of common English words below which a posting is not written in
+# English. Measured 2026-09-24 on 190 real postings: every non-English one
+# (Spanish, Dutch, German, French, Italian) sat under 0.06, every English one
+# at 0.08 or above.
+_ENGLISH_SHARE_MIN = 0.06
 
 
-def _written_in_german_or_french(description: str) -> bool:
+def _not_written_in_english_or_romanian(description: str) -> bool:
     words = [w.lower() for w in _WORD_RE.findall((description or "")[:3000])]
     if len(words) < 20:
         return False
-    en = sum(w in _EN_STOP for w in words)
-    return max(sum(w in _DE_STOP for w in words), sum(w in _FR_STOP for w in words)) > en
+    share = lambda stop: sum(w in stop for w in words) / len(words)  # noqa: E731
+    return share(_EN_STOP) < _ENGLISH_SHARE_MIN and share(_RO_STOP) < _ENGLISH_SHARE_MIN
 
 
 def requires_excluded_language(title: str, description: str) -> bool:
-    """True when the job needs German or French (Teodor speaks neither): a
+    """True when the job needs a language other than English or Romanian: a
     requirement sentence that is not framed as optional, a "German-speaking"
-    title, or a posting written in German or French. "German is a plus" and
-    a mere mention of Germany/France are kept."""
+    title, or a posting not written in English or Romanian. "German is a
+    plus" and a mere mention of Germany/France are kept."""
     if re.search(rf"{_LANG_WORD}[- ]speaking|{_LANG_WORD}\s+required", title or "", re.I):
         return True
-    if _written_in_german_or_french(description):
+    if _not_written_in_english_or_romanian(description):
         return True
     for sentence in _SENTENCE_SPLIT_RE.split(description or ""):
         if _LANG_REQUIRED_RE.search(sentence) and not _LANG_OPTIONAL_RE.search(sentence):

@@ -1,6 +1,7 @@
 """LLM-driven fit scoring: rate a JobPosting against the candidate profile."""
 import json
 import os
+import re
 import yaml
 from typing import Any
 
@@ -15,26 +16,43 @@ Score the fit 0-10 where:
 - 5-6 = workable match: some alignment but real gaps
 - 0-4 = poor match: skip
 
-What he wants (his own calibration, 2026-09-24):
-- AI-related roles ONLY. A role with no AI component in the actual work (no LLMs,
-  agents, AI automation, ML, or AI integration) scores 4 or lower, however good
-  the company.
-- Best fit: forward deployed engineer, AI automation / implementation / solutions
-  roles where he builds automations and agentic workflows, integrates AI into a
-  business, and deploys fast -- customer-facing or internal-tooling. n8n, RAG, MCP,
-  eval frameworks and agentic workflows in the JD are strong signals.
-- Senior titles are fine WHEN the role is shaped like that (build, integrate,
-  deploy fast). They are NOT fine when the posting demands many years of hands-on
-  professional software engineering (5+ years of hands-on coding, deep CS or
-  algorithms, low-level/distributed systems, staff/principal scope): score those
-  4 or lower. He directs AI to build; he is not a career backend engineer.
+What he wants (calibrated 2026-09-24 against 40 postings he rated himself):
+- TOP PRIORITY, 9-10: AI-native development roles, where the job itself is
+  shipping fast WITH AI tools. Signals: the posting names Claude Code, Cursor,
+  Copilot, Codex or similar; asks for AI-assisted or AI-first development,
+  "vibe coding", or "think how can AI build this"; says it is "not a traditional
+  coding role"; or rewards speed and ownership over hand-written code. Real example he
+  loved: a product engineer role that "uses Claude Code and other AI tools to ship
+  fast". Two or more such signals = 9-10; one clear signal = 8-9.
+- Good, but at most 7 when the posting shows NO AI-native signal: AI engineer,
+  applied AI, LLM/agent engineer, forward deployed engineer, AI solutions/
+  automation/implementation roles, AI enablement or AI coaching roles that teach
+  teams agentic/AI-assisted engineering, and any technical role with "agentic" or
+  "AI" in the title. Product manager, technical program manager and producer roles
+  on AI or technical products also count (his background is production at EA).
+  Backend or data roles at a company whose core product IS AI or AI-powered
+  search/recommendations count too.
+- Do not penalize seniority: Senior, Staff, Lead and engineering-manager titles
+  and stated years of experience are fine -- he applies to them.
+- The tech stack is NEVER a gap. He builds with AI tools, so a required
+  programming language, framework or database (Go, Golang, GraphQL, Rust, Java,
+  TypeScript, Kubernetes, ...) must not lower the score and must not be named as a
+  gap in the reason.
+- Specialisms outside his world score 4 or lower even when AI is mentioned:
+  security engineering/research, medical or biosignal/scientific algorithms,
+  data engineering and data pipelines, MLOps infrastructure/versioning, embedded, and
+  pure traditional stacks with no AI component (e.g. a Java/React developer role).
+- Non-technical roles (sales, account executive, customer success, marketing/GTM,
+  recruiting, design) score 2 or lower.
 - Startups win ties: seed to Series B, small teams, founding roles -- score a
   startup 1 point above an otherwise equal larger company.
 - Any industry is fine, including iGaming, gambling, forex and fintech. The one
   exception: games-industry development roles (he is leaving games) score 3 or lower.
 - Pure ML research roles needing a PhD or model training from scratch score 3 or lower.
-- Sales, marketing, recruiting and design roles score 2 or lower.
-- A role that requires German or French scores 2 or lower (he speaks neither).
+- A role that requires any language other than English or Romanian (German,
+  French, Dutch, Greek, Spanish, ...), or a posting aimed at a local-language
+  market, scores 2 or lower. Another language listed only as a plus is fine.
+- A role with frequent travel scores 4 or lower.
 
 Where and when he works: fully remote only, from Bucharest (EU citizen), for a
 company in ANY country -- US, EU, Asia, Cyprus, anywhere that will hire him, as an
@@ -43,11 +61,16 @@ hours; US-hours overlap is acceptable, so only a posting that requires working
 fully on US or Asian hours loses 1 point.
 
 Remote reality check: a "Remote" label on the posting is not enough. Read the
-description. Score the role 3 or lower, regardless of the "Remote" label, if it:
-- anchors the work to an office (hybrid schedules, "N days per week onsite/in
-  office", relocation required), or
+whole description, perks included. Hybrid is a hard no: any hybrid work model,
+office days or office-based setup -- even one mentioned only in the benefits list,
+e.g. "hybrid work and flexible hours" -- scores 2 or lower. Score the role 3 or
+lower, regardless of the "Remote" label, if it:
+- anchors the work to an office ("N days per week onsite/in office", relocation
+  required), or
 - requires residency or work authorization in a specific country outside the EU
-  (US, Canada, UK, Australia, ...), US-only hiring, or a security clearance,
+  (US, Canada, UK, Australia, ...), US-only hiring, or a security clearance --
+  including indirectly, e.g. a perk like "work outside Canada for up to 90 days
+  a year" means he would have to live in Canada,
 UNLESS the text explicitly affirms remote eligibility for him (e.g. "remote from
 anywhere", "worldwide", "EMEA", "EU-based candidates welcome", "contractors
 worldwide"). A job listed as "Remote - <country>" with no stated restriction is
@@ -112,3 +135,43 @@ def score_job(profile: dict, job_title: str, job_location: str, job_description:
         response_format={"type": "json_object"},
     )
     return json.loads(response.choices[0].message.content)
+
+
+# --- AI-native ranking (Teodor, 2026-09-24: "focus more on jobs like the Ygo
+# one where the focus is on claude code and ai fast development") ------------
+# Enforced in code because the scorer model did not follow it from the prompt:
+# on his 40 rated postings it scored postings naming no AI tool at 8 and his
+# favourite (two strong signals) at the same 8.
+_AI_NATIVE_PATTERNS = {
+    "claude code": r"\bclaude\s+code\b",
+    "cursor": r"\bcursor\b(?!\s+(?:position|pagination|based))",
+    "copilot": r"\bcopilot\b",
+    "codex": r"\bcodex\b",
+    "windsurf": r"\bwindsurf\b",
+    "ai-assisted development": r"\bai[- ]assisted\s+(?:development|coding|engineering|programming)",
+    "ai-first development": r"\bai[- ]first\s+(?:development|engineering|engineer|coding|builder)",
+    "ai-native engineering": r"\bai[- ]native\s+(?:development|engineering|engineer|builder|workflow)",
+    "vibe coding": r"\bvibe[- ]cod",
+    "not a traditional coding role": r"not\s+a\s+traditional\s+(?:coding|engineering|developer)",
+    "how can ai build this": r"how\s+can\s+ai\s+build",
+}
+_AI_NATIVE_RES = {k: re.compile(v, re.I) for k, v in _AI_NATIVE_PATTERNS.items()}
+AI_NATIVE_CAP_WITHOUT_SIGNAL = 7
+AI_NATIVE_MIN_FIT = 5  # below this the LLM judged it a poor AI fit: no boost
+
+
+def ai_native_signals(description: str) -> list[str]:
+    """Distinct AI-native development markers in a posting."""
+    text = description or ""
+    return [name for name, rx in _AI_NATIVE_RES.items() if rx.search(text)]
+
+
+def rank_ai_native(score: int, description: str) -> int:
+    """Final score: postings with no AI-native signal cap at 7; a decent AI
+    fit (>= 5) gains +1 for one signal, +2 for two or more, up to 10."""
+    n = len(ai_native_signals(description))
+    if n == 0:
+        return min(score, AI_NATIVE_CAP_WITHOUT_SIGNAL)
+    if score < AI_NATIVE_MIN_FIT:
+        return score
+    return min(10, score + min(n, 2))

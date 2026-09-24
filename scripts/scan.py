@@ -27,7 +27,7 @@ import yaml
 from cv_tailor.profile import load_profile
 from cv_tailor.tailor_llm import build_azure_client
 from cv_tailor.job_sources import fetch_all
-from cv_tailor.match import score_job
+from cv_tailor.match import rank_ai_native, score_job
 from cv_tailor.digest import format_digest
 from cv_tailor.telegram import format_digest_for_telegram, send_text
 from cv_tailor.scout_queue import write_jobs_queue
@@ -355,6 +355,8 @@ def main(argv=None):
             r = score_job(profile, j.title, f"{j.location} [{hint}]", j.description,
                           client=client, track=track, min_monthly_eur=min_pay)
             s = _score_from(r)
+            if s is not None:
+                s = rank_ai_native(s, j.description)
             mark_seen(conn, j, score=s)
             if s is None:
                 unscored += 1

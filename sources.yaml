@@ -32,6 +32,17 @@ sources:
     category: software-dev
   - kind: remoteok
     tag: ai
+  # Teodor 2026-09-24: "check this website more (remoteok)". Measured the same
+  # day, new postings passing Gate 1 per tag beyond `ai`: engineer +18,
+  # python +7, dev +5, machine-learning +3 (llm returns nothing, backend +1).
+  - kind: remoteok
+    tag: engineer
+  - kind: remoteok
+    tag: python
+  - kind: remoteok
+    tag: dev
+  - kind: remoteok
+    tag: machine-learning
   - kind: jobicy
     count: 30
     tag: software
@@ -237,6 +248,20 @@ sources:
     locations: ["Cyprus"]
     cadence: "weekly"
     weekday: 5
+    published_at: "r604800"
+    work_type: ["remote"]
+    max_items: 150
+    job_title_exclude: ["Sales", "Recruiter", "Account Executive", "Intern"]
+  # AI-native builders (Teodor, 2026-09-24: "focus more on jobs like the Ygo
+  # one where the focus is on claude code and ai fast development"). LinkedIn
+  # keyword search covers the description, so "Claude Code" finds postings that
+  # name the tool. Sunday slot: +~$0.44/month.
+  - kind: apify_linkedin
+    label: "sun-ai-native-builders"
+    keywords: ["Claude Code", "AI Product Engineer", "AI-native Engineer"]
+    locations: ["European Union"]
+    cadence: "weekly"
+    weekday: 6
     published_at: "r604800"
     work_type: ["remote"]
     max_items: 150

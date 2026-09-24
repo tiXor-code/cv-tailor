@@ -111,8 +111,11 @@ def test_scorer_system_prompt_has_remote_reality_check():
 
 def test_scorer_prompt_carries_the_2026_09_24_calibration():
     low = SCORER_SYSTEM_PROMPT.lower()
-    assert "forward deployed" in low          # senior is fine when FDE/automation-shaped
-    assert "years of hands-on" in low          # ...but not when it demands deep coding tenure
+    assert "forward deployed" in low
+    # Round 2 (his 40 marks): he said Yes to Senior, Staff and Lead AI roles.
+    # Seniority and stated years are not penalized.
+    assert "do not penalize seniority" in low
+    assert "claude code" in low                # AI-native builder roles are the ideal
     assert "startup" in low                    # startups win ties
     assert "german" in low and "french" in low
     assert "gambling" in low                   # explicitly fine
@@ -151,3 +154,61 @@ def test_score_job_content_track_prompt_has_availability_constraint():
     assert "weekends" in system
     assert "content-producer" in system
     assert "4" in system  # full-time content roles capped at <= 4
+
+
+def test_scorer_prompt_carries_round_two_hard_nos():
+    """From his notes: hybrid is a hard pass, non-English-friendly is a no,
+    frequent travel and specialisms he lacks (security, medical, data
+    engineering, MLOps infrastructure) are no's, non-technical roles are out."""
+    low = SCORER_SYSTEM_PROMPT.lower()
+    assert "hybrid" in low and "2 or lower" in low
+    assert "other than english or romanian" in low
+    assert "frequent travel" in low
+    for word in ("security", "medical", "data engineering", "mlops"):
+        assert word in low, word
+    assert "account executive" in low or "sales" in low
+
+
+def test_ai_native_development_is_the_top_priority():
+    """Teodor, 2026-09-24, after rating Ygo: "focus more on jobs like the Ygo
+    one where the focus is on claude code and ai fast development". AI-native
+    signals must rank above plain AI engineering, which is capped below them."""
+    low = SCORER_SYSTEM_PROMPT.lower()
+    assert "top priority" in low
+    for signal in ("claude code", "cursor", "ai-assisted", "ai-first", "vibe coding"):
+        assert signal in low, signal
+    assert "at most 7" in low
+
+
+# --- AI-native ranking, enforced in code (2026-09-24). Measured on his 40
+# marks: gpt-4o-mini ignored the prompt's "at most 7 without a signal" cap
+# (8s for postings naming no AI tool) and gave Ygo -- two strong signals,
+# his favourite -- the same 8. The ordering he asked for is applied here.
+
+from cv_tailor.match import ai_native_signals, rank_ai_native
+
+
+def test_signals_are_the_distinct_ai_native_markers():
+    desc = ("You'll use Claude Code and Cursor to ship fast. This is not a traditional "
+            "coding role. AI-assisted development all day.")
+    assert set(ai_native_signals(desc)) == {"claude code", "cursor", "not a traditional coding role",
+                                            "ai-assisted development"}
+    assert ai_native_signals("A precursor to our platform. Plain Python backend.") == []
+
+
+def test_no_signal_caps_at_seven():
+    assert rank_ai_native(9, "Senior AI engineer, LLM agents, Python.") == 7
+    assert rank_ai_native(5, "Senior AI engineer, LLM agents, Python.") == 5
+
+
+def test_signals_lift_a_decent_ai_fit_above_plain_ai_roles():
+    one = "Build agents. We use Cursor daily."
+    two = "Build agents with Claude Code. Not a traditional coding role."
+    assert rank_ai_native(8, one) == 9
+    assert rank_ai_native(8, two) == 10
+    assert rank_ai_native(9, two) == 10
+
+
+def test_a_weak_fit_is_not_boosted_by_a_tool_mention():
+    """A Java/React role that mentions Copilot is still a Java/React role."""
+    assert rank_ai_native(3, "Java and React developer. Copilot licences provided.") == 3

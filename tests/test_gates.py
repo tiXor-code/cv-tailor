@@ -207,3 +207,60 @@ def test_requires_excluded_language_is_the_attributable_reason():
     from cv_tailor.gates import requires_excluded_language
     assert requires_excluded_language("AI Engineer", "Fluent German is required.")
     assert not requires_excluded_language("AI Engineer", "German is a plus.")
+
+
+# --- Calibration round 2, from Teodor's 40 rated postings (2026-09-24) -----
+# He marked Dutch-language postings "not English friendly", a Greek
+# requirement a no, and "hybrid, hard pass" -- including hybrid mentioned only
+# in a perks list under a LinkedIn "Remote" label.
+
+_DUTCH = ("Vanuit Utrecht wordt op dit moment een nieuwe Nederlandse Data & AI-practice "
+          "opgebouwd. Je stapt in op een moment waarop het team groeit en je combineert "
+          "daarmee de ondernemingsruimte van een startup met de zekerheid van een groot "
+          "bedrijf. Wij bieden een dienstverband voor 32 tot 40 uur en werken met LLM agents.")
+_ROMANIAN = ("Căutăm un AI Engineer care să construiască agenți și automatizări cu LLM pentru "
+             "clienții noștri. Vei lucra remote, cu o echipă mică, și vei livra rapid soluții "
+             "de automatizare. Este un rol pentru cineva care vrea să construiască produse.")
+
+
+def test_a_posting_written_in_any_language_but_english_or_romanian_is_dropped():
+    assert passes_gate1_tracks(_job("AI Engineer", "Remote", _DUTCH), TRACKS) is None
+
+
+def test_a_romanian_posting_is_kept_he_speaks_romanian():
+    assert passes_gate1_tracks(_job("AI Engineer", "Remote", _ROMANIAN + " agentic"), TRACKS) == "ai"
+
+
+def test_any_required_non_english_language_is_dropped():
+    for desc in (
+        "Agentic AI. Excellent communication skills in Greek and English.",
+        "LLM automation. Fluent Dutch is required.",
+        "AI engineer. Native Spanish speaker.",
+    ):
+        assert passes_gate1_tracks(_job("AI Engineer", "Remote - Europe", desc), TRACKS) is None, desc
+
+
+def test_another_language_as_a_merit_is_kept():
+    desc = ("Agentic AI in Python. Meriting: prior consulting experience, "
+            "Swedish language skills are a plus.")
+    assert passes_gate1_tracks(_job("AI Engineer", "Remote - Europe", desc), TRACKS) == "ai"
+
+
+def test_hybrid_work_in_the_perks_under_a_remote_label_is_dropped():
+    for desc in (
+        "Agentic AI in Python. The perks: 30 days vacation, hybrid work and flexible hours.",
+        "LLM automation. Your work-life balance supported by a hybrid working model.",
+    ):
+        assert passes_gate1_tracks(_job("AI Engineer", "Stockholm (Remote)", desc), TRACKS) is None, desc
+
+
+def test_hybrid_as_a_technical_term_is_not_hybrid_work():
+    desc = "Agentic AI in Python. RAG with vector search, hybrid retrieval and reranking. Fully remote."
+    assert passes_gate1_tracks(_job("AI Engineer", "Remote - Europe", desc), TRACKS) == "ai"
+
+
+def test_a_capped_time_abroad_perk_means_residency_is_required():
+    """Wealthsimple ('Remote - Anywhere'): '90 days away: work outside Canada for
+    up to 90 days per year' -- you must live in Canada. He marked it No."""
+    desc = "Agentic AI. 90 days away: work outside Canada for up to 90 days per year."
+    assert passes_gate1_tracks(_job("AI Engineer", "Remote - Anywhere", desc), TRACKS) is None
