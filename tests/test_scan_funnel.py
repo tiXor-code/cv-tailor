@@ -187,6 +187,7 @@ def test_gate_stats_counts_every_rejection_by_gate(tmp_path):
     assert stats.rejected == {
         scan.GATE1_ROLE: 1,
         scan.GATE1_GEO: 1,
+        scan.GATE1_LANG: 0,
         scan.GATE2_SMB: 1,
         scan.GATE3_SEEN: 1,
         scan.GATE3_BATCH: 1,
@@ -391,3 +392,9 @@ def test_scan_never_loads_a_disabled_board(tmp_path):
         "disabled:\n  - badboard\n")
 
     assert scan.load_sources(tmp_path) == []
+
+
+def test_a_language_drop_has_its_own_bucket():
+    """A real AI match dropped only for required German/French is its own
+    reason -- not geo, which would hide how many jobs the language rule costs."""
+    assert scan.GATE1_LANG in scan.GATES

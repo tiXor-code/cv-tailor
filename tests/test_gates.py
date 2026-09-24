@@ -129,3 +129,81 @@ def test_norina_jobs_compat_signatures_unchanged():
     assert list(inspect.signature(is_eu_eligible).parameters) == ["location", "description"]
     assert list(inspect.signature(has_target_keyword).parameters) == ["text", "keywords"]
     assert list(inspect.signature(passes_gate1).parameters) == ["job", "keywords"]
+
+
+# --- Calibration, Teodor 2026-09-24: remote only, ANY country that will hire
+# him (US, EU, Asia, Cyprus), no German/French. Scout's own gate
+# (passes_gate1_tracks); norina-jobs' imports above keep their behaviour. ---
+
+def test_a_worldwide_remote_job_from_a_us_company_now_passes():
+    job = _job("AI Automation Engineer", "Remote (Worldwide)",
+               "US-based startup. Build agentic automations in Python. Contractors welcome.")
+    assert passes_gate1_tracks(job, TRACKS) == "ai"
+
+
+def test_a_remote_job_listed_in_a_non_eu_country_reaches_the_scorer():
+    """'Remote - United States' alone does not prove residency is required;
+    the scorer reads the full text and decides. The gate only drops explicit
+    requirements."""
+    job = _job("Forward Deployed Engineer", "Remote - United States", "Agentic AI, Python.")
+    assert passes_gate1_tracks(job, TRACKS) == "ai"
+
+
+def test_residency_authorization_or_clearance_requirements_are_dropped():
+    for desc in (
+        "Agentic AI. You must be located in the United States.",
+        "Python automation. Must be authorized to work in the US without sponsorship.",
+        "AI engineer role. Active security clearance required.",
+        "Agentic workflows. Candidates must reside in Canada.",
+    ):
+        assert passes_gate1_tracks(_job("AI Engineer", "Remote", desc), TRACKS) is None, desc
+
+
+def test_an_eu_residency_requirement_is_fine_he_is_an_eu_citizen():
+    job = _job("AI Engineer", "Remote", "Agentic AI. Must be based in the EU.")
+    assert passes_gate1_tracks(job, TRACKS) == "ai"
+
+
+def test_an_onsite_or_hybrid_job_is_dropped_even_in_europe():
+    for loc in ("Bucharest, Romania (Hybrid)", "Berlin (On-site)", "Lisbon - In office"):
+        assert passes_gate1_tracks(_job("AI Engineer", loc, "Python agentic"), TRACKS) is None, loc
+
+
+def test_required_german_or_french_is_dropped():
+    for desc in (
+        "Agentic AI in Python. Fluent German is required.",
+        "LLM automation. You speak French at C1 level or above.",
+        "AI engineer. Business-level German (mandatory).",
+    ):
+        assert passes_gate1_tracks(_job("AI Engineer", "Remote - Europe", desc), TRACKS) is None, desc
+    assert passes_gate1_tracks(
+        _job("Senior AI Engineer (German Speaking)", "Remote - Europe", "Agentic AI in Python."),
+        TRACKS) is None
+
+
+def test_german_or_french_as_a_plus_is_kept():
+    for desc in (
+        "Agentic AI in Python. German is a plus.",
+        "LLM automation. French would be nice to have.",
+        "Remote across Europe including Germany and France. Python agentic.",
+        "Strong engineering culture in Germany. Agentic AI in Python.",
+        "Excellent benefits for our French and German offices. Agentic AI.",
+    ):
+        assert passes_gate1_tracks(_job("AI Engineer", "Remote - Europe", desc), TRACKS) == "ai", desc
+
+
+def test_a_posting_written_in_german_or_french_is_dropped():
+    de = ("Wir suchen einen AI Engineer (m/w/d) für unser Team. Du entwickelst agentic "
+          "Workflows mit Python und bringst Erfahrung mit LLMs mit. Wir bieten dir die "
+          "Möglichkeit, remote zu arbeiten, und ein tolles Team.")
+    fr = ("Nous recherchons un AI Engineer pour notre équipe. Vous développerez des "
+          "workflows agentic avec Python et vous avez une expérience des LLMs. Nous "
+          "proposons un poste en remote et une équipe formidable.")
+    assert passes_gate1_tracks(_job("AI Engineer", "Remote", de), TRACKS) is None
+    assert passes_gate1_tracks(_job("AI Engineer", "Remote", fr), TRACKS) is None
+
+
+def test_requires_excluded_language_is_the_attributable_reason():
+    from cv_tailor.gates import requires_excluded_language
+    assert requires_excluded_language("AI Engineer", "Fluent German is required.")
+    assert not requires_excluded_language("AI Engineer", "German is a plus.")

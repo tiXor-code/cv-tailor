@@ -25,26 +25,18 @@ sources:
   - kind: greenhouse
     slug: canonical
     name: Canonical
-  # Free remote-job boards (no API key), one entry per track so both the ai
-  # and content tracks (see profile.yaml tracks:) get board coverage.
+  # Free remote-job boards (no API key). AI roles only since 2026-09-24: the
+  # content-track entries (marketing, copywriting, video, content producer)
+  # were removed with the content track itself.
   - kind: remotive
     category: software-dev
-  - kind: remotive
-    category: marketing
   - kind: remoteok
     tag: ai
-  - kind: remoteok
-    tag: marketing
   - kind: jobicy
     count: 30
     tag: software
-  - kind: jobicy
-    count: 30
-    tag: copywriting
   - kind: wwr
     category: programming
-  - kind: wwr
-    category: sales-and-marketing
   # Two more keyless aggregators. arbeitnow is a European (German-heavy) board
   # where only ~6% of postings are remote and it ignores its own ?remote=true
   # filter, so pages are what buy remote EU hits -- 3 pages is ~400 postings,
@@ -106,11 +98,6 @@ sources:
     query: "python developer remote"
     country: pl
     max_days_old: 7
-  # measured 0 at both 7d and 30d on 2026-08-17
-  - kind: adzuna
-    query: "content producer remote"
-    country: gb
-    max_days_old: 7
   # JSearch (OpenWebNinja). Needs JSEARCH_API_KEYS in .env -- NEVER here.
   #
   # UK-TARGETED ONLY, and "UK" must be in the query TEXT: measured 2026-08-17,
@@ -137,8 +124,6 @@ sources:
     query: "python developer remote UK"
   - kind: jsearch
     query: "forward deployed engineer remote UK"
-  - kind: jsearch
-    query: "content producer remote UK"
   # SerpAPI google_jobs rejects continent locations ("Europe") and city locations
   # return 0; rely on the query text + ltype=1 (remote) and let Gate 1 + the LLM
   # enforce EU-eligibility. No `location` param.
@@ -153,10 +138,6 @@ sources:
     query: "AI automation engineer remote europe"
   - kind: serpapi
     query: "forward deployed engineer remote europe"
-  - kind: serpapi
-    query: "content producer remote part-time"
-  - kind: serpapi
-    query: "freelance video editor remote europe"
   # LinkedIn. Needs LINKEDIN_API_KEY *and* LINKEDIN_API_URL in .env -- NEVER
   # here. Several services resell LinkedIn job search and they disagree on
   # host, auth header and response envelope, so the provider is configuration:
@@ -242,6 +223,20 @@ sources:
     locations: ["Ireland", "Spain", "Portugal", "Germany", "Netherlands"]
     cadence: "weekly"
     weekday: 4
+    published_at: "r604800"
+    work_type: ["remote"]
+    max_items: 150
+    job_title_exclude: ["Sales", "Recruiter", "Account Executive", "Intern"]
+  # Cyprus (Teodor, 2026-09-24: "a lot of companies are looking in Cyprus for
+  # remote people like me"). Saturday slot, so the weekday rotation is
+  # untouched: +~$0.44/month. Much of this market is iGaming/forex/fintech,
+  # which he is fine with.
+  - kind: apify_linkedin
+    label: "sat-cyprus-ai"
+    keywords: ["AI Engineer", "AI Automation Engineer", "Forward Deployed Engineer"]
+    locations: ["Cyprus"]
+    cadence: "weekly"
+    weekday: 5
     published_at: "r604800"
     work_type: ["remote"]
     max_items: 150

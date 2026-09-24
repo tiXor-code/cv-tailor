@@ -16,32 +16,46 @@ target_keywords:
 - full stack
 - platform engineer
 tracks:
+  # AI-related roles only (Teodor, 2026-09-24). The content track is retired.
+  # Matching is a plain substring test on title + description, so every entry
+  # must be a phrase that cannot hide inside an ordinary word: "rag" matched
+  # "leverage", "storage" and "coverage", and "prompt" matched "promptly",
+  # which let nearly every posting past this gate.
   ai:
     summary_id: ai_automation_engineer
     skill_groups: [languages, frameworks, ai, data, devops, tools]
     keywords:
     - ai engineer
+    - ai developer
     - ai automation
+    - ai integration
+    - ai implementation
+    - ai solutions
+    - ai specialist
+    - ai operations
+    - ai deployment
+    - ai product
+    - ai consultant
+    - applied ai
+    - generative ai
+    - genai
+    - gen ai
     - agentic
+    - ai agent
     - llm
-    - rag
-    - python
-    - typescript
+    - large language model
+    - retrieval-augmented
+    - retrieval augmented
+    - langchain
+    - langgraph
+    - prompt engineer
     - forward deployed
     - solutions engineer
     - automation engineer
+    - automation specialist
     - n8n
-    - prompt
     - machine learning engineer
-    - backend engineer
-    - full stack
-    - platform engineer
-  content:
-    summary_id: content_producer
-    skill_groups: [content, tools, leadership]
-    keywords: [content producer, content creator, content strategist, video editor,
-               video producer, editorial, copywriter, social media manager,
-               social media content, youtube, short-form video, content marketing]
+    - ml engineer
 contact:
   name: Teodor-Cristian Lutoiu
   email: contact@teodorlutoiu.com

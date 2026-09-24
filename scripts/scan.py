@@ -67,7 +67,7 @@ def _is_auth_error(exc: Exception) -> bool:
                              or "access denied" in blob
                              or "incorrect api key" in blob)
 from cv_tailor.cache import connect, is_new, mark_seen
-from cv_tailor.gates import matched_tracks, passes_gate1_tracks
+from cv_tailor.gates import matched_tracks, passes_gate1_tracks, requires_excluded_language
 from cv_tailor.enrich import is_smb, smb_hint
 
 DB_PATH = ROOT / "data" / "jobs.db"
@@ -89,10 +89,13 @@ APIFY_BUDGET_PATH = ROOT / "data" / "apify_result_budget.json"
 # worth arguing about. A job failing both is counted once, as role.
 GATE1_ROLE = "gate1_role"
 GATE1_GEO = "gate1_geo"
+# A real AI match dropped only because it needs German or French (Teodor,
+# 2026-09-24). Its own bucket, so the cost of that rule stays visible.
+GATE1_LANG = "gate1_lang"
 GATE2_SMB = "gate2_smb"
 GATE3_SEEN = "gate3_seen"
 GATE3_BATCH = "gate3_batch"
-GATES = (GATE1_ROLE, GATE1_GEO, GATE2_SMB, GATE3_SEEN, GATE3_BATCH)
+GATES = (GATE1_ROLE, GATE1_GEO, GATE1_LANG, GATE2_SMB, GATE3_SEEN, GATE3_BATCH)
 GATE_SAMPLE_CAP = 5     # titles kept per gate; gate 1 drops ~1,000/day
 GATE_SAMPLE_WIDTH = 90  # per-sample character cap, so one long title can't own the log
 
@@ -144,6 +147,19 @@ class GateStats:
         return lines
 
 
+def _min_monthly_eur() -> int | None:
+    """His pay floor (answers.yaml, gitignored): his expectation IS his minimum
+    (Teodor, 2026-09-24). None when unreadable -- the scorer then applies no
+    pay rule rather than a guessed one."""
+    try:
+        from cv_tailor.answers import load_answers
+        value = (load_answers() or {}).get("salary_fulltime_gross_eur_month")
+        return int(value) if value else None
+    except Exception as exc:  # noqa: BLE001 -- a scan must not die on the floor
+        print(f"  pay floor unavailable ({type(exc).__name__}); scoring without it", file=sys.stderr)
+        return None
+
+
 def run_gates(jobs, tracks, conn, stats=None):
     """Gate 1 (track-aware rules) -> Gate 2 (SMB) -> Gate 3 (dedup). Each
     survivor gains a `.track` attribute set to its winning track id (see
@@ -169,7 +185,12 @@ def run_gates(jobs, tracks, conn, stats=None):
             # matched_tracks is the same keyword scan Gate 1 already ran; it is
             # re-run here only for jobs the gate rejected, purely to attribute
             # the rejection. It cannot change the outcome above.
-            stats.reject(GATE1_ROLE if not matched_tracks(j, tracks) else GATE1_GEO, j)
+            if not matched_tracks(j, tracks):
+                stats.reject(GATE1_ROLE, j)
+            elif requires_excluded_language(j.title, j.description):
+                stats.reject(GATE1_LANG, j)
+            else:
+                stats.reject(GATE1_GEO, j)
             continue
         j.track = track
         if not is_smb(j, conn):
@@ -323,6 +344,7 @@ def main(argv=None):
         print(f"  {len(survivors)} after CRM dedup (dropped {before - len(survivors)})", file=sys.stderr)
 
     client = build_azure_client()
+    min_pay = _min_monthly_eur()
     scored = []
     failures = 0
     unscored = 0
@@ -331,7 +353,7 @@ def main(argv=None):
             hint = smb_hint(j, conn)
             track = getattr(j, "track", "ai")
             r = score_job(profile, j.title, f"{j.location} [{hint}]", j.description,
-                          client=client, track=track)
+                          client=client, track=track, min_monthly_eur=min_pay)
             s = _score_from(r)
             mark_seen(conn, j, score=s)
             if s is None:
