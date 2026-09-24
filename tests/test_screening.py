@@ -1040,3 +1040,41 @@ def test_splitting_never_hijacks_a_non_contact_name_label():
         out = answer_question(_q(label), _PROFILE, _ANSWERS)
         assert out is None or out.value not in ("Ada", "Lovelace"), \
             f"{label} -> {out.value if out else None!r}"
+
+
+# --- Per-question answers Teodor wrote himself (2026-09-24, Ygo) ------------
+# A free-text question the profile cannot ground ("Have you ever built agentic
+# systems in production?") parks the job. His own answer, saved once under
+# answers.yaml `question_answers`, is reused wherever the same question is asked.
+
+from cv_tailor.screening import Question, answer_question
+
+
+def _qa(**extra):
+    return {"question_answers": [
+        {"match": "Have you ever built agentic /non-deterministic systems in production?",
+         "answer": "Fixture answer about fixture agents."},
+    ], **extra}
+
+
+def test_his_saved_answer_fills_the_matching_question():
+    q = Question("Have you ever built agentic / non-deterministic systems in production?*", "textarea", True)
+    ans = answer_question(q, {"contact": {}}, _qa())
+    assert ans.value == "Fixture answer about fixture agents."
+    assert ans.grounded_in == "answers:question_answers"
+
+
+def test_matching_ignores_case_punctuation_and_spacing():
+    q = Question("HAVE YOU EVER BUILT AGENTIC NON-DETERMINISTIC SYSTEMS IN PRODUCTION", "text", True)
+    assert answer_question(q, {"contact": {}}, _qa()).value == "Fixture answer about fixture agents."
+
+
+def test_an_unrelated_question_is_untouched():
+    q = Question("Have you ever built a compiler?", "textarea", True)
+    assert answer_question(q, {"contact": {}}, _qa()) is None
+
+
+def test_a_saved_answer_never_overrides_the_eeo_decline():
+    answers = {"question_answers": [{"match": "gender", "answer": "Fixture"}]}
+    q = Question("Gender", "select", False, ("Male", "Female", "Decline to self-identify"))
+    assert answer_question(q, {"contact": {}}, answers).value == "Decline to self-identify"

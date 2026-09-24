@@ -728,9 +728,34 @@ def _salary_answer(q: Question, answers: dict) -> Answer | _FailClosed | None:
 
 # --- deterministic dispatcher ---
 
+def _normalize_question(text: str) -> str:
+    return " ".join(re.sub(r"[^a-z0-9]+", " ", (text or "").lower()).split())
+
+
+def _saved_question_answer(q: Question, answers: dict) -> Answer | None:
+    """Teodor's own answer to a specific question (answers.yaml
+    `question_answers`: [{match, answer}]), matched on the question's words
+    regardless of case, punctuation and spacing. Added 2026-09-24 for Ygo: a
+    free-text question the profile cannot ground parks the job, and his answer
+    written once should serve every form that asks it again."""
+    label = _normalize_question(q.label)
+    for item in (answers or {}).get("question_answers") or []:
+        match = _normalize_question(str((item or {}).get("match") or ""))
+        value = (item or {}).get("answer")
+        if match and value and match in label:
+            return Answer(str(value).strip(), "answers:question_answers")
+    return None
+
+
 def _deterministic_answer(q: Question, profile: dict, answers: dict) -> Answer | _FailClosed | None:
     label = q.label.lower()
     contact = (profile or {}).get("contact", {}) or {}
+
+    # His own words for this exact question win over every rule below (the
+    # EEO decline is handled before this function is ever called).
+    saved = _saved_question_answer(q, answers)
+    if saved is not None:
+        return saved
 
     # answers.yaml categories -- checked before generic contact fields so e.g.
     # "relocation" (contains "location") is never mistaken for contact.location.
