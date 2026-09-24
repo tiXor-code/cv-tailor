@@ -453,6 +453,27 @@ def test_a_portal_defence_is_never_retried_even_after_a_fix(tmp_path, reason):
     assert q["job-1"]["status"] == q["job-2"]["status"] == "needs_human"
 
 
+def test_a_handoff_is_its_own_digest_section_not_a_failure(tmp_path):
+    """A LinkedIn job handed to Teodor is neither applied nor failed. Without
+    its own bucket, autopilot filed any unknown final status under Failed."""
+    from cv_tailor.autopilot import build_digest
+    _write_day(tmp_path, TODAY, [_entry(1, score=8), _entry(2, score=7)])
+
+    def runner(day, job_id):
+        status = "handed_off" if job_id == "job-1" else "pending"
+        update_entry(day, job_id, lambda e: e.update(status=status), queue_dir=tmp_path)
+        return 0
+
+    report = run_autopilot(NOW, queue_dir=tmp_path, runner=runner)
+
+    assert [e["id"] for _, e in report.handed_off] == ["job-1"]
+    assert [e["id"] for _, e in report.deferred] == ["job-2"]
+    assert report.failed == []
+    text = build_digest(report)
+    assert "Sent to you to apply on LinkedIn (1)" in text
+    assert "Waiting for tomorrow's LinkedIn slots (1)" in text
+
+
 def test_reviving_drops_the_phantom_ledger_row(tmp_path, monkeypatch):
     """Without this the feature is silently useless. Sardine's park left a row
     in the applications ledger (09:04 2026-09-16), and apply_approved refuses a

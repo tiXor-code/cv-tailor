@@ -55,6 +55,7 @@ from cv_tailor.apply_policy import (
     proves_no_submission,
 )
 from cv_tailor.ats_resolve import resolve_ats_url
+from cv_tailor import linkedin_handoff
 from cv_tailor.assemble import AssembleError, assemble_package
 from cv_tailor.cache import (
     application_exists,
@@ -173,6 +174,35 @@ def _record_blocked_question(e: dict, reason) -> None:
         e.pop("blocked_question_kind", None)
         return
     e["blocked_question"], e["blocked_question_kind"] = parsed
+
+
+def _handoff_linkedin(args, entry: dict, meta: dict, profile: dict, answers: dict) -> int:
+    """Send one LinkedIn job to Teodor to apply himself, within the daily cap.
+
+    Over the cap, or if Telegram fails, the job goes back to pending so
+    tomorrow's autopilot -- highest score first -- offers it again. Only a
+    completed send is stamped handed_off, which autopilot never re-picks, so
+    a job reaches him at most once."""
+    if linkedin_handoff.handoffs_on(linkedin_handoff.today()) >= linkedin_handoff.daily_cap():
+        update_entry(args.scan_date, args.job_id, _status_mut("pending"))
+        print("linkedin handoff: daily cap reached; waits for tomorrow", file=sys.stderr)
+        return 0
+
+    card = linkedin_handoff.format_card(entry, linkedin_handoff.answer_sheet(profile, answers))
+    ok = send_text(card)
+    label = f"{entry.get('company')} / {entry.get('title')}"
+    for key in ("cv_path", "cover_letter_path"):
+        if meta.get(key):
+            ok = send_document(meta[key], caption=label) and ok
+    if not ok:
+        update_entry(args.scan_date, args.job_id, _status_mut("pending"))
+        print("linkedin handoff: telegram send failed; offered again tomorrow", file=sys.stderr)
+        return 0
+
+    update_entry(args.scan_date, args.job_id, _status_mut(
+        "handed_off", handed_off_at=datetime.now(timezone.utc).isoformat()))
+    print(f"linkedin handoff: sent to Teodor ({label})", file=sys.stderr)
+    return 0
 
 
 def _status_mut(status: str, *, error: str | None = None, **extra):
@@ -316,6 +346,16 @@ def _handle_portal(args, entry: dict, meta: dict) -> int:
             entry = update_entry(args.scan_date, args.job_id, lambda e: e.update(
                 apply_target=resolved, apply_target_original=current_target))
             print(f"apply_target resolved to ATS: {resolved}", file=sys.stderr)
+
+    # Supervised LinkedIn Easy Apply (Teodor, 2026-09-24: option B, 10 a day).
+    # A LinkedIn job that still has no fillable form after the resolver is
+    # handed to HIM rather than parked no-adapter. No browser ever opens
+    # LinkedIn, and no ledger row is written: only he knows if he submits.
+    # Armed only, so dry runs and a paused system never message him.
+    live_target = (entry.get("apply_target") or entry.get("url") or "").strip()
+    if (armed and not handoff and entry.get("source") == "linkedin"
+            and adapter_for(live_target) is None):
+        return _handoff_linkedin(args, entry, meta, profile, answers)
 
     if not armed and not handoff:
         result = run_portal_application(entry, meta, profile, answers, dry_run=True, client=client)

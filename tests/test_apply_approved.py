@@ -1350,3 +1350,107 @@ def test_email_send_failure_clears_a_stale_blocking_question(mod, monkeypatch, t
     entry = _read_entry(tmp_path, "2026-07-10", "job-1")
     assert entry["status"] == "failed" and "smtp down" in entry["error"]
     assert "blocked_question" not in entry and "blocked_question_kind" not in entry
+
+
+# --- supervised LinkedIn Easy Apply (Teodor, 2026-09-24: option B, 10/day) ----
+
+def _linkedin_entry(**overrides):
+    base = dict(source="linkedin", apply_method="portal", score=8, why="Strong fit.",
+                url="https://www.linkedin.com/jobs/view/4457351096",
+                apply_target="https://www.linkedin.com/jobs/view/4457351096")
+    base.update(overrides)
+    return _entry(**base)
+
+
+def _handoff_setup(mod, monkeypatch, tmp_path, *, armed="1"):
+    monkeypatch.setenv("APPLY_ARMED", armed)
+    monkeypatch.setattr(mod, "assemble_package", _fake_assemble(package_dir=tmp_path / "pkg"))
+    monkeypatch.setattr(mod, "resolve_ats_url", lambda e: None)
+    # never the real answers.yaml inside a test
+    monkeypatch.setattr(mod, "load_answers", lambda *a, **k: {"years_experience": 9})
+    monkeypatch.setattr(mod, "build_azure_client", lambda *a, **k: None)
+    portal = _FakeRunPortal([])
+    monkeypatch.setattr(mod, "run_portal_application", portal)
+    texts, docs = [], []
+    monkeypatch.setattr(mod, "send_text", lambda t, **k: texts.append(t) or True)
+    monkeypatch.setattr(mod, "send_document",
+                        lambda p, caption="", **k: docs.append(str(p)) or True)
+    return portal, texts, docs
+
+
+def test_a_linkedin_job_with_no_form_is_handed_to_teodor(mod, monkeypatch, tmp_path):
+    """~92% of LinkedIn rows lead to no form Scout can fill. Instead of parking
+    no-adapter silently, send him everything he needs to apply himself -- and
+    no browser ever touches LinkedIn."""
+    _write_queue(tmp_path, "2026-09-24", _linkedin_entry())
+    portal, texts, docs = _handoff_setup(mod, monkeypatch, tmp_path)
+
+    rc = mod.main(["2026-09-24", "job-1"])
+
+    assert rc == 0
+    entry = _read_entry(tmp_path, "2026-09-24", "job-1")
+    assert entry["status"] == "handed_off"
+    assert entry.get("handed_off_at")
+    assert portal.calls == [], "no browser may ever open LinkedIn"
+    assert any("linkedin.com/jobs/view/4457351096" in t for t in texts)
+    assert any(d.endswith("cv.pdf") for d in docs)
+    assert any(d.endswith("cover_letter.md") for d in docs)
+
+
+def test_a_handoff_is_never_recorded_as_applied(mod, monkeypatch, tmp_path):
+    """Only Teodor knows whether he clicked Submit. A ledger row would claim an
+    application that may never happen and block the company via norm_key."""
+    _write_queue(tmp_path, "2026-09-24", _linkedin_entry())
+    _handoff_setup(mod, monkeypatch, tmp_path)
+
+    mod.main(["2026-09-24", "job-1"])
+
+    conn = mod.connect(tmp_path / "jobs.db")
+    assert not mod.own_application_recorded(conn, "job-1")
+
+
+def test_at_the_daily_cap_the_job_waits_for_tomorrow(mod, monkeypatch, tmp_path):
+    """10 a day, his number. Over the cap nothing is sent and the job goes back
+    to pending, so tomorrow's autopilot (highest score first) picks it up."""
+    from datetime import datetime, timezone
+    now = datetime.now(timezone.utc).isoformat()
+    other = tmp_path / "2026-09-23"
+    other.mkdir(parents=True)
+    (other / "jobs.json").write_text(json.dumps(
+        [{"id": f"h{i}", "status": "handed_off", "handed_off_at": now} for i in range(10)]))
+    _write_queue(tmp_path, "2026-09-24", _linkedin_entry())
+    _, texts, docs = _handoff_setup(mod, monkeypatch, tmp_path)
+
+    rc = mod.main(["2026-09-24", "job-1"])
+
+    assert rc == 0
+    assert _read_entry(tmp_path, "2026-09-24", "job-1")["status"] == "pending"
+    assert texts == [] and docs == []
+
+
+def test_an_unarmed_run_never_messages_him(mod, monkeypatch, tmp_path):
+    """Dry runs and a paused system stay silent: the old dry-run path runs."""
+    from cv_tailor.portal import PortalResult
+    _write_queue(tmp_path, "2026-09-24", _linkedin_entry())
+    portal, texts, _ = _handoff_setup(mod, monkeypatch, tmp_path, armed="0")
+    portal._results = [PortalResult(status="needs_human", reason="no-adapter", evidence_dir="")]
+
+    mod.main(["2026-09-24", "job-1"])
+
+    assert not any("linkedin.com/jobs/view" in t for t in texts)
+    assert _read_entry(tmp_path, "2026-09-24", "job-1")["status"] != "handed_off"
+
+
+def test_a_non_linkedin_job_with_no_adapter_is_unchanged(mod, monkeypatch, tmp_path):
+    """The handoff is LinkedIn-only; every other no-adapter park behaves as before."""
+    from cv_tailor.portal import PortalResult
+    _write_queue(tmp_path, "2026-09-24", _linkedin_entry(
+        source="arbeitnow", url="https://www.arbeitnow.com/jobs/x",
+        apply_target="https://www.arbeitnow.com/jobs/x"))
+    portal, _, _ = _handoff_setup(mod, monkeypatch, tmp_path)
+    portal._results = [PortalResult(status="needs_human", reason="no-adapter", evidence_dir="")]
+
+    mod.main(["2026-09-24", "job-1"])
+
+    assert len(portal.calls) == 1
+    assert _read_entry(tmp_path, "2026-09-24", "job-1")["status"] != "handed_off"

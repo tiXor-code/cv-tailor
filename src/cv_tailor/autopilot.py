@@ -49,6 +49,9 @@ STRANDED_STATUSES = ("assembling", "sending")
 STRANDED_AFTER = timedelta(seconds=ORCHESTRATOR_TIMEOUT * 3)
 _APPLIED = ("sent", "preview_sent")
 _PARKED = ("needs_review", "needs_human", "ready")
+# Supervised LinkedIn Easy Apply: sent to Teodor to apply himself. Neither
+# applied nor failed -- without its own bucket it was filed under Failed.
+_HANDED_OFF = ("handed_off",)
 _DAY_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 _ROOT = Path(__file__).resolve().parents[2]
 _ORCHESTRATOR = _ROOT / "scripts" / "apply_approved.py"
@@ -83,10 +86,13 @@ class AutopilotReport:
     queued_new: list = field(default_factory=list)
     expired: list = field(default_factory=list)
     stranded: list = field(default_factory=list)
+    handed_off: list = field(default_factory=list)
+    deferred: list = field(default_factory=list)
 
     def has_activity(self) -> bool:
         return bool(self.applied or self.parked or self.failed
-                    or self.queued_new or self.expired or self.stranded)
+                    or self.queued_new or self.expired or self.stranded
+                    or self.handed_off or self.deferred)
 
 
 def _day_dirs(queue_dir=None) -> list[tuple[str, Path]]:
@@ -478,6 +484,10 @@ def build_digest(report: AutopilotReport) -> str | None:
              lambda e: f" [{e.get('apply_method', '?')}, {e.get('status')}]")
     _section("Parked for you", report.parked,
              lambda e: f" ({e.get('status')}: {e.get('error') or 'cover warnings'})")
+    _section("Sent to you to apply on LinkedIn", report.handed_off,
+             lambda e: f" [{e.get('score')}/10]")
+    _section("Waiting for tomorrow's LinkedIn slots", report.deferred,
+             lambda e: f" [{e.get('score')}/10]")
     _section("Failed", report.failed, lambda e: f": {e.get('error') or '?'}")
     _section("Queued for review", report.queued_new,
              lambda e: f" [{e.get('score')}/10]")
@@ -538,6 +548,12 @@ def run_autopilot(now: datetime | None = None, *, queue_dir=None,
         status = final.get("status")
         if status in _APPLIED:
             report.applied.append((scan_date, final))
+        elif status in _HANDED_OFF:
+            report.handed_off.append((scan_date, final))
+        elif status == "pending":
+            # Back to pending on purpose: the LinkedIn handoff cap was reached
+            # (or Telegram failed), and tomorrow's pass offers it again.
+            report.deferred.append((scan_date, final))
         elif status in _PARKED:
             report.parked.append((scan_date, final))
         else:
@@ -546,8 +562,11 @@ def run_autopilot(now: datetime | None = None, *, queue_dir=None,
     for scan_date, day_dir in _day_dirs(queue_dir):
         if scan_date != today:
             continue
+        deferred_ids = {e.get("id") for _, e in report.deferred}
         for entry in _read_day(day_dir):
-            if entry.get("status") == "pending":
+            # A job deferred by the handoff cap is already listed as waiting;
+            # listing it again as newly queued would count it twice.
+            if entry.get("status") == "pending" and entry.get("id") not in deferred_ids:
                 report.queued_new.append((scan_date, entry))
 
     report.expired = _sweep_expired(now, queue_dir=queue_dir)
