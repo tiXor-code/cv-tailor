@@ -1392,9 +1392,25 @@ def test_a_linkedin_job_with_no_form_is_handed_to_teodor(mod, monkeypatch, tmp_p
     assert entry["status"] == "handed_off"
     assert entry.get("handed_off_at")
     assert portal.calls == [], "no browser may ever open LinkedIn"
-    assert any("linkedin.com/jobs/view/4457351096" in t for t in texts)
-    assert any(d.endswith("cv.pdf") for d in docs)
-    assert any(d.endswith("cover_letter.md") for d in docs)
+    # The admin /scout list shows it; the autopilot digest is the one summary
+    # message (Teodor, 2026-09-24). No per-job Telegram card or attachments.
+    assert texts == [] and docs == []
+    assert "Years of experience: 9" in entry["answer_sheet"]
+
+
+def test_a_job_he_already_applied_to_is_not_handed_off_again(mod, monkeypatch, tmp_path):
+    """Same company|role already in the ledger (sent by Scout, or ticked by him
+    from an earlier posting): handing it off again would ask him to apply twice."""
+    _write_queue(tmp_path, "2026-09-24", _linkedin_entry())
+    _handoff_setup(mod, monkeypatch, tmp_path)
+    conn = mod.connect(tmp_path / "jobs.db")
+    mod.record_application(conn, job_id="older-posting", company="Acme Inc.",
+                           role="AI Engineer", url="https://x.example", channel="portal")
+
+    mod.main(["2026-09-24", "job-1"])
+
+    entry = _read_entry(tmp_path, "2026-09-24", "job-1")
+    assert entry["status"] == "failed" and entry["error"] == "duplicate"
 
 
 def test_a_handoff_is_never_recorded_as_applied(mod, monkeypatch, tmp_path):

@@ -2,19 +2,19 @@
 
 Scout never touches his LinkedIn account. Automating Easy Apply would mean
 driving his real, logged-in account, which LinkedIn's User Agreement prohibits
-and actively detects -- the realistic cost is a restricted account. So for a
+and actively detects -- the realistic cost is a restricted account. So a
 LinkedIn job that clears Scout's funnel but leads to no form Scout can fill
-(~92% of LinkedIn rows in the first measured run, 2026-09-24), Scout sends HIM
-the link, the tailored CV and cover letter, and an answer sheet, and he clicks
-Easy Apply himself.
+(~92% of LinkedIn rows in the first measured run, 2026-09-24) goes on HIS list
+at admin.teodorlutoiu.com/scout: link, tailored CV and cover letter, and an
+answer sheet. He applies himself, then ticks Applied or Not applying
+(scripts/mark_handoff.py). The autopilot digest is the only Telegram message.
 
 Easy Apply's questions are only visible when logged in, so the sheet cannot be
 per-job: it covers the questions Easy Apply commonly asks, from answers.yaml,
 and marks anything Scout does not know for him to answer -- never guessed.
 
-A handoff is NOT an application. Only he knows whether he clicked Submit, so no
-ledger row is written; recording one would claim an application that may never
-happen and block the company through norm_key.
+A handoff is NOT an application: no ledger row until he ticks Applied.
+Unticked handoffs expire after 7 days (autopilot EXPIRABLE_STATUSES).
 """
 from __future__ import annotations
 
@@ -96,25 +96,3 @@ def answer_sheet(profile: dict, answers: dict) -> str:
         ("How did you hear", val("how_heard")),
     ]
     return "\n".join(f"- {label}: {value}" for label, value in rows)
-
-
-def format_card(entry: dict, sheet: str) -> str:
-    """The Telegram message for one job. Plain text: no markup to escape."""
-    score = entry.get("score")
-    lines = [
-        f"LinkedIn - apply yourself: {entry.get('title') or '?'}",
-        f"{entry.get('company') or '?'}" + (f" | score {score}/10" if score is not None else ""),
-    ]
-    if entry.get("why"):
-        lines.append(f"Why: {entry['why']}")
-    lines += [
-        f"Link: {entry.get('url') or entry.get('apply_target') or '?'}",
-        "",
-        "Answer sheet (from your answers.yaml; Easy Apply's own questions are "
-        "only visible once you open it):",
-        sheet,
-        "",
-        "Tailored CV and cover letter attached. Scout has NOT recorded this as "
-        "applied -- only you know if you submit.",
-    ]
-    return "\n".join(lines)

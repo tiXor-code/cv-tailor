@@ -244,3 +244,14 @@ def test_own_application_recorded_true_only_for_the_exact_job_id(tmp_path):
     # A different job_id -- even with the same normalized company|role -- is
     # NOT "our own" row (that's application_exists's job, not this one's).
     assert own_application_recorded(conn, "job-2") is False
+
+
+def test_his_own_linkedin_applications_do_not_use_scouts_daily_cap(tmp_path):
+    """APPLY_DAILY_CAP limits what SCOUT sends. Applications Teodor made by
+    hand and ticked on /scout stay in the ledger (duplicate block) but must not
+    eat Scout's slots for the day."""
+    from cv_tailor.cache import applications_sent_today, connect, record_application
+    conn = connect(tmp_path / "jobs.db")
+    record_application(conn, job_id="a", company="A", role="R", url="u", channel="portal")
+    record_application(conn, job_id="b", company="B", role="R", url="u", channel="linkedin-manual")
+    assert applications_sent_today(conn) == 1

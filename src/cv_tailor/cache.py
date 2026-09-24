@@ -213,9 +213,16 @@ def application_exists(conn: sqlite3.Connection, *, job_id: str, company: str, r
     return False
 
 
+# Ledger channel for a LinkedIn application Teodor made himself and ticked on
+# admin /scout (scripts/mark_handoff.py). Kept in the ledger so the duplicate
+# block covers it, but never counted against Scout's own daily cap.
+MANUAL_CHANNEL = "linkedin-manual"
+
+
 def applications_sent_today(conn: sqlite3.Connection) -> int:
     today = datetime.now().strftime("%Y-%m-%d")
     row = conn.execute(
-        "SELECT COUNT(*) FROM applications WHERE substr(sent_at, 1, 10) = ?", (today,)
+        "SELECT COUNT(*) FROM applications WHERE substr(sent_at, 1, 10) = ? AND channel != ?",
+        (today, MANUAL_CHANNEL),
     ).fetchone()
     return row[0] if row else 0

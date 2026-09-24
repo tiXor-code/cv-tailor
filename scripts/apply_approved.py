@@ -177,31 +177,32 @@ def _record_blocked_question(e: dict, reason) -> None:
 
 
 def _handoff_linkedin(args, entry: dict, meta: dict, profile: dict, answers: dict) -> int:
-    """Send one LinkedIn job to Teodor to apply himself, within the daily cap.
+    """Put one LinkedIn job on Teodor's list at admin /scout, within the daily cap.
 
-    Over the cap, or if Telegram fails, the job goes back to pending so
-    tomorrow's autopilot -- highest score first -- offers it again. Only a
-    completed send is stamped handed_off, which autopilot never re-picks, so
-    a job reaches him at most once."""
+    No per-job Telegram: the autopilot digest is the one summary message and
+    links to the list (Teodor, 2026-09-24). He applies on LinkedIn, then ticks
+    Applied or Not applying (scripts/mark_handoff.py). The answer sheet is
+    stored on the entry so the list can show it next to the link.
+
+    Over the cap the job goes back to pending so tomorrow's autopilot -- highest
+    score first -- offers it again. A company|role already in the ledger is not
+    handed off: that would ask him to apply twice."""
+    conn = connect(_db_path())
+    if application_exists(conn, job_id=entry.get("id", ""),
+                          company=entry.get("company", ""), role=entry.get("title", "")):
+        update_entry(args.scan_date, args.job_id, _status_mut("failed", error="duplicate"))
+        print("linkedin handoff blocked: duplicate", file=sys.stderr)
+        return 1
     if linkedin_handoff.handoffs_on(linkedin_handoff.today()) >= linkedin_handoff.daily_cap():
         update_entry(args.scan_date, args.job_id, _status_mut("pending"))
         print("linkedin handoff: daily cap reached; waits for tomorrow", file=sys.stderr)
         return 0
 
-    card = linkedin_handoff.format_card(entry, linkedin_handoff.answer_sheet(profile, answers))
-    ok = send_text(card)
-    label = f"{entry.get('company')} / {entry.get('title')}"
-    for key in ("cv_path", "cover_letter_path"):
-        if meta.get(key):
-            ok = send_document(meta[key], caption=label) and ok
-    if not ok:
-        update_entry(args.scan_date, args.job_id, _status_mut("pending"))
-        print("linkedin handoff: telegram send failed; offered again tomorrow", file=sys.stderr)
-        return 0
-
     update_entry(args.scan_date, args.job_id, _status_mut(
-        "handed_off", handed_off_at=datetime.now(timezone.utc).isoformat()))
-    print(f"linkedin handoff: sent to Teodor ({label})", file=sys.stderr)
+        "handed_off", handed_off_at=datetime.now(timezone.utc).isoformat(),
+        answer_sheet=linkedin_handoff.answer_sheet(profile, answers)))
+    print(f"linkedin handoff: on his list ({entry.get('company')} / {entry.get('title')})",
+          file=sys.stderr)
     return 0
 
 

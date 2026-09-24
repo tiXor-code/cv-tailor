@@ -470,7 +470,7 @@ def test_a_handoff_is_its_own_digest_section_not_a_failure(tmp_path):
     assert [e["id"] for _, e in report.deferred] == ["job-2"]
     assert report.failed == []
     text = build_digest(report)
-    assert "Sent to you to apply on LinkedIn (1)" in text
+    assert "New on your LinkedIn list (apply, then tick it) (1)" in text
     assert "Waiting for tomorrow's LinkedIn slots (1)" in text
 
 
@@ -622,3 +622,25 @@ def test_expiring_an_ambiguous_park_keeps_its_ledger_row(tmp_path, monkeypatch):
     run_autopilot(NOW, queue_dir=tmp_path, runner=lambda d, j: 0)
 
     assert _ledger_owns(db) is True
+
+
+def test_a_handoff_he_never_ticked_drops_off_after_seven_days(tmp_path):
+    """Teodor, 2026-09-24: drop unticked LinkedIn handoffs after 7 days --
+    postings go stale and a growing backlog makes the list useless."""
+    old_day = (NOW - timedelta(days=8)).date().isoformat()
+    stale = (NOW - timedelta(days=7, hours=1)).isoformat()
+    fresh = (NOW - timedelta(days=2)).isoformat()
+    _write_day(tmp_path, old_day, [
+        _entry(1, status="handed_off", status_changed_at=stale),
+        _entry(2, status="handed_off", status_changed_at=fresh),
+        _entry(3, status="applied_by_hand", status_changed_at=stale),
+    ])
+    _write_day(tmp_path, TODAY, [])
+
+    report = run_autopilot(NOW, queue_dir=tmp_path, runner=lambda d, j: 0)
+
+    assert [e["id"] for _, e in report.expired] == ["job-1"]
+    q = _read(tmp_path, old_day)
+    assert q["job-1"]["error"] == "auto_expired"
+    assert q["job-2"]["status"] == "handed_off"
+    assert q["job-3"]["status"] == "applied_by_hand"

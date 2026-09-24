@@ -39,7 +39,9 @@ from cv_tailor.scout_queue import StatusConflict, queue_root, update_entry
 AUTO_APPROVE_MIN = 6  # hard floor; SCOUT_AUTO_APPROVE_MIN may raise it, never lower it
 EXPIRE_DAYS = 7
 ORCHESTRATOR_TIMEOUT = 1200  # per-job backstop; portal runs have their own wall clock
-EXPIRABLE_STATUSES = ("pending", "needs_review", "needs_human")
+# handed_off: an unticked LinkedIn handoff drops off his list after the same
+# 7 days (Teodor, 2026-09-24) -- postings go stale.
+EXPIRABLE_STATUSES = ("pending", "needs_review", "needs_human", "handed_off")
 # Mid-flight statuses written by scripts/apply_approved.py. A killed
 # orchestrator leaves an entry parked in one of these forever: the daily pass
 # only looks at `pending`, and _sweep_expired only looks at EXPIRABLE_STATUSES.
@@ -484,7 +486,7 @@ def build_digest(report: AutopilotReport) -> str | None:
              lambda e: f" [{e.get('apply_method', '?')}, {e.get('status')}]")
     _section("Parked for you", report.parked,
              lambda e: f" ({e.get('status')}: {e.get('error') or 'cover warnings'})")
-    _section("Sent to you to apply on LinkedIn", report.handed_off,
+    _section("New on your LinkedIn list (apply, then tick it)", report.handed_off,
              lambda e: f" [{e.get('score')}/10]")
     _section("Waiting for tomorrow's LinkedIn slots", report.deferred,
              lambda e: f" [{e.get('score')}/10]")

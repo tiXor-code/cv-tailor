@@ -45,15 +45,6 @@ def test_missing_facts_are_marked_for_him_never_guessed():
     assert "Salary expectation: answer yourself" in sheet
 
 
-def test_card_carries_link_company_score_and_reason():
-    entry = {"title": "Applied AI Engineer", "company": "Acme", "score": 8,
-             "why": "Strong fit.", "url": "https://www.linkedin.com/jobs/view/123"}
-    card = lh.format_card(entry, "SHEET-BODY")
-    for expected in ("Applied AI Engineer", "Acme", "8/10", "Strong fit.",
-                     "https://www.linkedin.com/jobs/view/123", "SHEET-BODY"):
-        assert expected in card, expected
-
-
 def test_handoffs_are_counted_per_day(tmp_path):
     day = tmp_path / "2026-09-24"
     day.mkdir()
