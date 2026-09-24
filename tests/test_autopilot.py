@@ -422,6 +422,37 @@ def test_the_fingerprint_moves_with_answers_and_adapter_code(tmp_path, monkeypat
     assert ap._compute_fingerprint(src_dir=src, answers_path=answers) != after_answers
 
 
+@pytest.mark.parametrize("reason", [
+    "submit-rejected: the portal explicitly refused the submission, nothing was sent",
+    "captcha",
+])
+def test_a_portal_defence_is_never_retried_even_after_a_fix(tmp_path, reason):
+    """proves_no_submission is the right test for ROLLBACK and the wrong one
+    for RETRY. A spam flag or a captcha is the portal's own defence, not a bug a
+    code change could fix -- and resubmitting to a portal that flagged the
+    submission as spam is permanently out of scope.
+
+    Live ElevenLabs (score 8), 2026-09-24: filled its whole form, clicked
+    submit, and got "flagged as possible spam". Its reason had just CHANGED
+    (Location -> submit-rejected), so without this the next 09:00 run would
+    have resubmitted it automatically. Excluded even with a moved fingerprint."""
+    yesterday = (NOW - timedelta(days=1)).date().isoformat()
+    _write_day(tmp_path, yesterday, [
+        _entry(1, score=8, status="needs_human", error=reason),
+        _entry(2, score=8, status="needs_human", error=reason,
+               revived_at="2026-09-20T00:00:00+00:00",
+               revived_for="unwritable-required:Location", revived_code="fp-old"),
+    ])
+    _write_day(tmp_path, TODAY, [])
+    ran = []
+
+    run_autopilot(NOW, queue_dir=tmp_path, runner=lambda d, j: ran.append(j) or 0)
+
+    assert ran == []
+    q = _read(tmp_path, yesterday)
+    assert q["job-1"]["status"] == q["job-2"]["status"] == "needs_human"
+
+
 def test_reviving_drops_the_phantom_ledger_row(tmp_path, monkeypatch):
     """Without this the feature is silently useless. Sardine's park left a row
     in the applications ledger (09:04 2026-09-16), and apply_approved refuses a

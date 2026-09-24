@@ -158,6 +158,15 @@ def _reload(scan_date: str, job_id: str, *, queue_dir=None) -> dict:
     return {"id": job_id, "status": "failed", "error": "entry vanished"}
 
 
+# Parks whose cause is the PORTAL'S OWN DEFENCE rather than a Scout bug.
+# proves_no_submission() is the right test for ROLLBACK (nothing was sent) and
+# the wrong one for RETRY: a spam flag or a captcha cannot be "fixed" by a code
+# change without evading it, and resubmitting to a portal that flagged the
+# submission as spam is permanently out of scope. Live ElevenLabs (score 8,
+# 2026-09-24) was flagged on submit, and its reason had just CHANGED, so the
+# sweep would have resubmitted it at the next 09:00 run.
+_NEVER_RETRY_PREFIXES = ("submit-rejected", "captcha", "handoff-timeout: captcha")
+
 _FINGERPRINT_SRC = Path(__file__).resolve().parent          # src/cv_tailor
 _FINGERPRINT_ANSWERS = Path(__file__).resolve().parents[2] / "answers.yaml"
 
@@ -239,6 +248,8 @@ def _sweep_revivable(now: datetime, *, queue_dir=None) -> list[tuple[str, dict]]
             # Telegram the letter), and nothing else in autopilot can advance
             # that status -- _sweep_expired only rejects it.
             if status == "needs_human" and not proves_no_submission(reason):
+                continue
+            if str(reason or "").startswith(_NEVER_RETRY_PREFIXES):
                 continue
             if entry.get("revived_at"):
                 previous = entry.get("revived_for")
