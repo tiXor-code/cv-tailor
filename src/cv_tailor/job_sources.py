@@ -1226,6 +1226,12 @@ def _canonical_job_url(url) -> str:
     return str(url or "").split("?")[0].split("#")[0].rstrip("/")
 
 
+def _apify_today():
+    """Seam for the weekday rotation, so tests can pin the day."""
+    import datetime as _dt
+    return _dt.date.today()
+
+
 def fetch_apify_linkedin(keywords, locations, *, work_type=None,
                          published_at="r86400", experience_level=None,
                          job_title_exclude=None, max_items=None,
@@ -1249,6 +1255,12 @@ def fetch_apify_linkedin(keywords, locations, *, work_type=None,
         return []
     if os.environ.get("APIFY_ENABLED") != "1":
         print(f"apify disabled (APIFY_ENABLED != 1); skipped {tag!r}", file=sys.stderr)
+        return []
+    # Weekly entries rotate one per weekday. $5/month at ~$0.11 a run (the
+    # actor's 150-result floor) buys ~45 runs; a query per weekday is ~22.
+    # Checked BEFORE the budget, so an off-day never touches the counter.
+    if str(cadence).strip().lower() == "weekly" and _apify_today().weekday() != int(weekday):
+        print(f"apify: {tag!r} runs on weekday {weekday}; not today", file=sys.stderr)
         return []
     if budget is None:
         print(f"warning: apify source {tag!r} got no budget; SKIPPED rather than "
@@ -1287,6 +1299,9 @@ def fetch_apify_linkedin(keywords, locations, *, work_type=None,
         # does not read.
         "saveOnlyUniqueItems": True,
         "enrichCompanyData": False,
+        # Agency reposts are paid rows for roles already reachable directly
+        # (2 of 150 in the first real run).
+        "excludeRecruitingAgencies": True,
     }
     if experience_level:
         payload["experienceLevel"] = list(experience_level)
@@ -1335,6 +1350,7 @@ def fetch_apify_linkedin(keywords, locations, *, work_type=None,
               file=sys.stderr)
         return []
 
+    remote_only = [str(w).strip().lower() for w in (work_type or ["remote"])] == ["remote"]
     postings: list[JobPosting] = []
     seen_ids: set = set()
     seen_urls: set = set()
@@ -1367,8 +1383,15 @@ def fetch_apify_linkedin(keywords, locations, *, work_type=None,
         chosen = _best_company_url(org, options, link) if options else link
 
         location = str(_apify_first(row, "location", "jobLocation")).strip()
-        work = str(_apify_first(row, "workType", "workplaceType")).strip().lower()
-        if work == "remote" and "remote" not in location.lower():
+        # Remoteness comes from the SEARCH, never the row. MEASURED on the first
+        # real run (150 rows, 2026-09-24): the OUTPUT `workType` is the job
+        # FUNCTION ("Information Technology, Engineering, and Consulting") and
+        # no location said "remote" -- while Gate 1 reads remoteness off the
+        # location string. The INPUT workType is a real server-side filter
+        # (enum on-site/remote/hybrid), so every row of a remote-ONLY search is
+        # remote by LinkedIn's own classification. A search that also admits
+        # hybrid or on-site makes no such claim.
+        if remote_only and "remote" not in location.lower():
             location = f"Remote - {location}" if location else "Remote"
 
         description = _strip_html(str(_apify_first(

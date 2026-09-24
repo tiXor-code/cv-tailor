@@ -178,93 +178,76 @@ sources:
 
   # --- LinkedIn via Apify (kind: apify_linkedin) ----------------------------
   #
-  # Actor cheap_scraper/linkedin-job-scraper, PAY PER RESULT, on a FREE $5/mo
-  # tier. NO CREDENTIAL LIVES HERE (SEC020): APIFY_TOKEN is env-only, read from
-  # ~/clawd/.env by run_scan.sh. The source is also OFF unless APIFY_ENABLED=1,
-  # so a bare `python scripts/scan.py` can never bill.
+  # Actor cheap_scraper/linkedin-job-scraper, FREE $5/month plan. NO CREDENTIAL
+  # LIVES HERE (SEC020): run_scan.sh reads APIFY_TOKEN from ~/clawd/.env at run
+  # time. OFF unless APIFY_ENABLED=1, so a bare `python scripts/scan.py` never
+  # bills.
   #
-  # Placed LAST on purpose, and it is a free cost control: fetch_all extends in
-  # list order and Gate 3's batch dedup admits the FIRST norm_key it sees, so
-  # the ~127 free harvested Ashby boards and the Greenhouse/Lever copies win the
-  # in-batch race and the PAID LinkedIn duplicate is the one dropped.
+  # MEASURED on the first real run (2026-09-24, 150 rows): the actor enforces a
+  # 150-result floor per run (~$0.11 at $0.0007/result + $0.005 start), every
+  # row's applyUrl is the LinkedIn page itself, and ~8% (12/150) resolve through
+  # the board probe to an Ashby/Greenhouse/Lever posting Scout can apply to.
+  # So LinkedIn is discovery plus a thin apply stream, and a seven-a-day matrix
+  # would have cost ~$20/month. Instead: ONE query per weekday, rotating
+  # (cadence: weekly + weekday 0=Mon..4=Fri), each looking back 7 days so a
+  # week of rotation leaves no gap. ~22 runs, ~$2.40/month.
   #
-  # ONLY THE PROBE IS ACTIVE. The actor's OUTPUT field names are not published
-  # in its input schema and no run has been made, so the mapper's camelCase
-  # assumption is unverified. Run the probe once (5 results), confirm the keys,
-  # THEN uncomment the rest. The mapper screams if billed rows map to nothing.
+  # Full-time AI/engineering only (Teodor, 2026-09-17). Placed LAST on purpose:
+  # the free harvested boards win Gate 3's in-batch dedup race, so a paid
+  # LinkedIn duplicate is the copy dropped.
   - kind: apify_linkedin
-    label: "probe-schema-eu"
-    keywords: ["AI Engineer"]
+    label: "mon-applied-solutions-eu"
+    keywords: ["Applied AI Engineer", "AI Solutions Engineer"]
     locations: ["European Union"]
+    cadence: "weekly"
+    weekday: 0
     published_at: "r604800"
     work_type: ["remote"]
-    max_items: 5
+    max_items: 150
     job_title_exclude: ["Sales", "Recruiter", "Account Executive", "Intern"]
-
-  # --- verified-shape sweep: uncomment AFTER the probe confirms the mapping ---
-  # Daily spend is bounded by ApifyResultBudget (APIFY_DAILY_RESULT_CAP, 25/day
-  # and APIFY_RESULT_CAP, 600/mo), so these maxItems are per-query ceilings, not
-  # a promise to fetch that many.
+  # Romania: the repo's biggest blind spot -- no other source covers it.
+  - kind: apify_linkedin
+    label: "tue-romania-ai-llm"
+    keywords: ["AI Engineer", "LLM Engineer"]
+    locations: ["Romania"]
+    cadence: "weekly"
+    weekday: 1
+    published_at: "r604800"
+    work_type: ["remote"]
+    max_items: 150
+    job_title_exclude: ["Sales", "Recruiter", "Account Executive", "Intern"]
+  - kind: apify_linkedin
+    label: "wed-ai-automation-eu"
+    keywords: ["AI Automation Specialist", "AI Automation Engineer"]
+    locations: ["European Union"]
+    cadence: "weekly"
+    weekday: 2
+    published_at: "r604800"
+    work_type: ["remote"]
+    max_items: 150
+    job_title_exclude: ["Sales", "Recruiter", "Account Executive", "Intern"]
+  - kind: apify_linkedin
+    label: "thu-forward-deployed-genai-eu"
+    keywords: ["Forward Deployed Engineer", "Generative AI Engineer"]
+    locations: ["European Union"]
+    cadence: "weekly"
+    weekday: 3
+    published_at: "r604800"
+    work_type: ["remote"]
+    max_items: 150
+    job_title_exclude: ["Sales", "Recruiter", "Account Executive", "Intern"]
+  - kind: apify_linkedin
+    label: "fri-ai-engineer-ie-iberia-dach-nl"
+    keywords: ["AI Engineer"]
+    locations: ["Ireland", "Spain", "Portugal", "Germany", "Netherlands"]
+    cadence: "weekly"
+    weekday: 4
+    published_at: "r604800"
+    work_type: ["remote"]
+    max_items: 150
+    job_title_exclude: ["Sales", "Recruiter", "Account Executive", "Intern"]
   #
-  # - kind: apify_linkedin
-  #   label: "tier1-ai-automation-eu-daily"
-  #   keywords: ["AI Automation Specialist", "AI Automation Engineer"]
-  #   locations: ["European Union"]
-  #   published_at: "r86400"
-  #   work_type: ["remote"]
-  #   max_items: 12
-  # - kind: apify_linkedin
-  #   label: "tier1-applied-solutions-eu-daily"
-  #   keywords: ["Applied AI Engineer", "AI Solutions Engineer"]
-  #   locations: ["European Union"]
-  #   published_at: "r86400"
-  #   work_type: ["remote"]
-  #   max_items: 12
-  # - kind: apify_linkedin
-  #   label: "tier1-forward-deployed-genai-eu-daily"
-  #   keywords: ["Forward Deployed Engineer", "Generative AI Engineer"]
-  #   locations: ["European Union"]
-  #   published_at: "r86400"
-  #   work_type: ["remote"]
-  #   max_items: 10
-  # Romania is the repo's single biggest blind spot: Adzuna runs gb/de/nl/pl,
-  # JSearch is UK-only, and the harvested Ashby boards skew US/UK. Nothing
-  # covers his home market today.
-  # - kind: apify_linkedin
-  #   label: "romania-ai-llm-daily"
-  #   keywords: ["AI Engineer", "LLM Engineer"]
-  #   locations: ["Romania"]
-  #   published_at: "r86400"
-  #   work_type: ["remote"]
-  #   max_items: 10
-  # - kind: apify_linkedin
-  #   label: "phase3-ie-iberia-daily"
-  #   keywords: ["AI Engineer"]
-  #   locations: ["Ireland", "Spain", "Portugal"]
-  #   published_at: "r86400"
-  #   work_type: ["remote"]
-  #   max_items: 10
-  # - kind: apify_linkedin
-  #   label: "phase3-dach-benelux-daily"
-  #   keywords: ["AI Engineer"]
-  #   locations: ["Germany", "Netherlands"]
-  #   published_at: "r86400"
-  #   work_type: ["remote"]
-  #   max_items: 10
-  # Weekly backfill recovers days launchd missed or a scan died partway through.
-  # - kind: apify_linkedin
-  #   label: "tier1-weekly-backfill"
-  #   keywords: ["AI Automation Specialist", "Applied AI Engineer", "AI Solutions Engineer"]
-  #   locations: ["European Union", "Romania"]
-  #   published_at: "r604800"
-  #   work_type: ["remote"]
-  #   max_items: 20
-  #   cadence: "weekly"
-  #   weekday: 1
-  #
-  # NEVER SEARCHED, recorded so nobody re-derives them. These titles match his
-  # CV superficially but return mostly-irrelevant paid rows: "Automation
-  # Engineer" is industrial/PLC, "Producer"/"Associate Producer" is games/media
-  # staffing, "Technical Product Manager"/"Digital Product Manager" is a
-  # different career track, and "AI Specialist" is dominated by data-labelling
-  # gigs. Put them in job_title_exclude, never in keywords.
+  # NEVER SEARCHED, recorded so nobody re-derives them: "Automation Engineer"
+  # (industrial/PLC), "Producer"/"Associate Producer" (games/media staffing),
+  # "Technical Product Manager"/"Digital Product Manager" (different track),
+  # "AI Specialist" (dominated by data-labelling gigs).

@@ -452,3 +452,97 @@ def test_fetch_all_reads_no_credential_from_a_source_entry(monkeypatch):
     assert "also_ignored" not in repr(seen)
     assert "still_ignored" not in repr(seen)
     assert not any(k in seen for k in ("token", "api_key", "apify_token"))
+
+
+# --- remoteness comes from the SEARCH, not the row ---------------------------
+#
+# MEASURED on the first real run (150 rows, 2026-09-24): the actor's OUTPUT
+# `workType` is the job FUNCTION ("Information Technology, Engineering, and
+# Consulting"), and no row's location said "remote". Gate 1 reads remoteness off
+# the location string, so without a marker every LinkedIn row risked being
+# dropped. The INPUT workType is a real server-side filter (enum on-site /
+# remote / hybrid), so a remote-only search returns rows LinkedIn itself
+# classifies as remote -- that is the evidence the marker rests on.
+
+LIVE_SHAPED = dict(ROW, location="Spain",
+                   workType="Information Technology, Engineering, and Consulting")
+
+
+def test_a_remote_only_search_marks_its_rows_remote(monkeypatch):
+    rec = _Recorder(payload=[LIVE_SHAPED])
+    monkeypatch.setattr(js.urllib.request, "urlopen", rec)
+
+    (post,) = fetch_apify_linkedin(["AI Engineer"], ["European Union"],
+                                   work_type=["remote"], budget=_StubBudget())
+
+    assert post.location == "Remote - Spain"
+
+
+def test_a_search_that_allows_hybrid_makes_no_remote_claim(monkeypatch):
+    """A row from a search that also admits hybrid or on-site may be neither
+    remote nor labelled so -- never fabricate the marker."""
+    rec = _Recorder(payload=[LIVE_SHAPED])
+    monkeypatch.setattr(js.urllib.request, "urlopen", rec)
+
+    (post,) = fetch_apify_linkedin(["AI Engineer"], ["European Union"],
+                                   work_type=["remote", "hybrid"], budget=_StubBudget())
+
+    assert post.location == "Spain"
+
+
+def test_the_row_level_work_type_never_drives_the_marker(monkeypatch):
+    """The output field shares the input's NAME but not its meaning."""
+    rec = _Recorder(payload=[dict(ROW, location="Spain", workType="remote")])
+    monkeypatch.setattr(js.urllib.request, "urlopen", rec)
+
+    (post,) = fetch_apify_linkedin(["AI Engineer"], ["European Union"],
+                                   work_type=["on-site"], budget=_StubBudget())
+
+    assert post.location == "Spain"
+
+
+def test_recruiting_agencies_are_excluded_server_side(monkeypatch):
+    """Agency reposts (e.g. "Archer - The IT Recruitment Specialists" in the
+    first real run) are paid rows for roles already reachable directly."""
+    rec = _Recorder(payload=[ROW])
+    monkeypatch.setattr(js.urllib.request, "urlopen", rec)
+
+    fetch_apify_linkedin(["AI Engineer"], ["Romania"], budget=_StubBudget())
+
+    assert json.loads(rec.calls[0].data.decode())["excludeRecruitingAgencies"] is True
+
+
+# --- weekday rotation ---------------------------------------------------------
+#
+# $5/month at ~$0.11 per run (the actor's 150-result floor) buys ~45 runs. The
+# original seven-queries-a-day matrix would have cost ~$20/month, so the plan is
+# ONE query per weekday, rotating. The fetcher already ACCEPTED cadence/weekday
+# but never enforced them -- with a one-run-per-scan guard it would have re-run
+# the FIRST query every day and never rotated.
+
+def test_a_weekly_entry_runs_only_on_its_weekday(monkeypatch):
+    from datetime import date
+    rec = _Recorder(payload=[ROW])
+    monkeypatch.setattr(js.urllib.request, "urlopen", rec)
+    monkeypatch.setattr(js, "_apify_today", lambda: date(2026, 9, 28))   # a Monday
+    budget = _StubBudget()
+
+    off = fetch_apify_linkedin(["AI Engineer"], ["Romania"], cadence="weekly",
+                               weekday=2, budget=budget)
+    assert off == [] and rec.calls == []
+    assert budget.reserved == [], "an off-day must not even touch the budget"
+
+    fetch_apify_linkedin(["AI Engineer"], ["Romania"], cadence="weekly",
+                         weekday=0, budget=budget)
+    assert len(rec.calls) == 1, "its own weekday runs"
+
+
+def test_a_daily_entry_is_not_gated_by_weekday(monkeypatch):
+    from datetime import date
+    rec = _Recorder(payload=[ROW])
+    monkeypatch.setattr(js.urllib.request, "urlopen", rec)
+    monkeypatch.setattr(js, "_apify_today", lambda: date(2026, 9, 30))   # a Wednesday
+
+    fetch_apify_linkedin(["AI Engineer"], ["Romania"], cadence="daily",
+                         weekday=0, budget=_StubBudget())
+    assert len(rec.calls) == 1

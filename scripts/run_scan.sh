@@ -19,6 +19,15 @@ LOG="$LOG_DIR/$(date +%F).log"
   source "$REPO/.env"
   set +a
 
+  # LinkedIn via Apify. The token's single source of truth is ~/clawd/.env: it
+  # is read here at run time and never copied into this repo or any tracked
+  # file (SEC020). Caps fit the FREE $5/month plan: the actor's floor is 150
+  # results (~$0.11) per run, and one rotating query per weekday is ~22 runs
+  # (~$2.40) a month. APIFY_RESULT_CAP leaves headroom under the $5 ceiling.
+  APIFY_TOKEN="$(grep -m1 '^APIFY_TOKEN=' "$HOME/clawd/.env" 2>/dev/null | cut -d= -f2- | tr -d "\"'")"
+  export APIFY_TOKEN
+  export APIFY_ENABLED=1 APIFY_MAX_RUNS_PER_SCAN=1 APIFY_DAILY_RESULT_CAP=150 APIFY_RESULT_CAP=3300
+
   source "$REPO/.venv/bin/activate"
 
   # Ashby board harvest: probes companies the scan has already seen against the
