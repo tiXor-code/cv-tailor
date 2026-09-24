@@ -1183,8 +1183,19 @@ _APIFY_ENDPOINT = f"https://api.apify.com/v2/acts/{_APIFY_ACTOR}/run-sync-get-da
 # NOT _JSEARCH_TIMEOUT_S: a 60s client timeout on a multi-minute actor means the
 # client gives up while Apify keeps running and still bills.
 _APIFY_TIMEOUT_S = 240
-_APIFY_MAX_ITEMS = 12
-_APIFY_MAX_ITEMS_CEILING = 50
+# MEASURED against the live API 2026-09-18, not read from the input schema
+# (which documents no minimum): a request for fewer is rejected outright with
+# "Input is not valid: Field input.maxItems must be >= 150". So there is no
+# such thing as a cheap probe run -- the smallest possible run is 150 results,
+# about $0.11 at $0.0007/result plus a $0.005/GB actor start.
+_APIFY_ACTOR_MIN_ITEMS = 150
+_APIFY_MAX_ITEMS = 150
+_APIFY_MAX_ITEMS_CEILING = 500
+# The actor is PAY_PER_EVENT (since 2026-03-27, despite a title still reading
+# "Pay Per Result"), so a result count only bounds cost indirectly.
+# maxTotalChargeUsd is the direct ceiling and Apify enforces it server-side --
+# the backstop if a result ever costs more than we think.
+_APIFY_MAX_CHARGE_USD = os.environ.get("APIFY_MAX_CHARGE_USD", "0.25")
 _APIFY_STATE = {"runs": 0}
 
 
@@ -1248,11 +1259,22 @@ def fetch_apify_linkedin(keywords, locations, *, work_type=None,
         return []
 
     want = _APIFY_MAX_ITEMS if max_items is None else int(max_items)
-    want = max(1, min(want, _APIFY_MAX_ITEMS_CEILING))
+    # Raised TO the floor, not capped below it: asking for 12 does not buy a
+    # cheaper run, it buys a 400.
+    want = max(_APIFY_ACTOR_MIN_ITEMS, min(want, _APIFY_MAX_ITEMS_CEILING))
 
     granted = budget.reserve(want)
     if granted <= 0:
         print(f"apify budget exhausted; dropped {tag!r}", file=sys.stderr)
+        return []
+    if granted < _APIFY_ACTOR_MIN_ITEMS:
+        # A partial grant is useless here. Sending the smaller number buys a
+        # 400; sending the floor anyway would spend allowance that was never
+        # reserved. Refund the whole grant and skip.
+        budget.settle(granted, 0)
+        print(f"apify: budget could only grant {granted} of the actor's "
+              f"{_APIFY_ACTOR_MIN_ITEMS}-result minimum; dropped {tag!r}",
+              file=sys.stderr)
         return []
 
     payload = {
@@ -1274,7 +1296,8 @@ def fetch_apify_linkedin(keywords, locations, *, work_type=None,
     # maxItems in the URL is Apify's own billing ceiling; the body's is the
     # actor's. Both, so a misbehaving actor still cannot overspend.
     url = (f"{_APIFY_ENDPOINT}?maxItems={granted}&timeout=180"
-           f"&memory=1024&format=json&clean=true")
+           f"&memory=1024&format=json&clean=true"
+           f"&maxTotalChargeUsd={_APIFY_MAX_CHARGE_USD}")
 
     rows: list = []
     try:

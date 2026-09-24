@@ -8,10 +8,12 @@ $5/month. Every gate that can prevent a network call must be checked BEFORE the
 socket opens, and a misconfigured credential must never burn a paid slot.
 
 TRUST. The actor's OUTPUT field names are not published in its input schema and
-no run has been made, so the camelCase names asserted here are the documented
-assumption, verified by a one-off maxItems=5 probe before any real sweep. The
-mapper therefore also carries a canary: if billed rows arrive and map to
-nothing, that is a LOUD failure, never a silent empty list.
+no run has succeeded, so the camelCase names asserted here are an ASSUMPTION.
+The intended cheap probe turned out to be impossible: the live API rejects
+anything under 150 results ("Field input.maxItems must be >= 150"), so the
+smallest verification run is a real ~$0.11 one. Until that runs, the mapper
+carries a canary: if billed rows arrive and map to nothing, that is a LOUD
+failure naming the keys it saw, never a silent empty list.
 """
 import json
 
@@ -51,7 +53,10 @@ class _Recorder:
 
 
 class _StubBudget:
-    def __init__(self, grant=25):
+    # Default grant is above the actor's 150-result floor, because a grant
+    # below it means "skip" rather than "run smaller" -- there is no such
+    # thing as a cheaper run with this actor.
+    def __init__(self, grant=500):
         self._grant = grant
         self.reserved = []
         self.settled = []
@@ -199,12 +204,56 @@ def test_caps_charged_results_in_both_the_url_and_the_body(monkeypatch):
     rec = _Recorder(payload=[ROW])
     monkeypatch.setattr(js.urllib.request, "urlopen", rec)
 
-    fetch_apify_linkedin(["AI Engineer"], ["Romania"], max_items=7,
-                         budget=_StubBudget(grant=7))
+    fetch_apify_linkedin(["AI Engineer"], ["Romania"], max_items=200,
+                         budget=_StubBudget(grant=200))
 
     req = rec.calls[0]
-    assert "maxItems=7" in req.full_url
-    assert json.loads(req.data.decode())["maxItems"] == 7
+    assert "maxItems=200" in req.full_url
+    assert json.loads(req.data.decode())["maxItems"] == 200
+
+
+def test_a_request_below_the_actor_floor_is_raised_to_it(monkeypatch):
+    """MEASURED against the live API: the actor rejects anything smaller with
+    "Field input.maxItems must be >= 150". A request for 12 is not a cheap
+    run, it is a 400 -- so the floor is applied rather than the caller's
+    smaller number."""
+    rec = _Recorder(payload=[ROW])
+    monkeypatch.setattr(js.urllib.request, "urlopen", rec)
+
+    fetch_apify_linkedin(["AI Engineer"], ["Romania"], max_items=12,
+                         budget=_StubBudget(grant=500))
+
+    body = json.loads(rec.calls[0].data.decode())
+    assert body["maxItems"] == js._APIFY_ACTOR_MIN_ITEMS == 150
+    assert f"maxItems={js._APIFY_ACTOR_MIN_ITEMS}" in rec.calls[0].full_url
+
+
+def test_refuses_to_run_when_the_budget_cannot_cover_the_floor(monkeypatch):
+    """There is no such thing as a smaller run with this actor. If the budget
+    can only grant 25, sending a 25-item request buys a 400, and sending a
+    150-item one spends allowance that was never reserved. Skip, and refund."""
+    rec = _Recorder(payload=[ROW])
+    monkeypatch.setattr(js.urllib.request, "urlopen", rec)
+    budget = _StubBudget(grant=25)
+
+    out = fetch_apify_linkedin(["AI Engineer"], ["Romania"], max_items=150,
+                               budget=budget)
+
+    assert out == []
+    assert rec.calls == [], "a partial grant must not become a doomed request"
+    assert budget.settled == [(25, 0)], "the partial grant is refunded in full"
+
+
+def test_sends_a_hard_dollar_ceiling_for_the_run(monkeypatch):
+    """The actor is PAY_PER_EVENT ($0.0007/result + $0.005/GB start), so a
+    result count is an indirect cost control. maxTotalChargeUsd is the direct
+    one and Apify enforces it server-side."""
+    rec = _Recorder(payload=[ROW])
+    monkeypatch.setattr(js.urllib.request, "urlopen", rec)
+
+    fetch_apify_linkedin(["AI Engineer"], ["Romania"], budget=_StubBudget(grant=500))
+
+    assert "maxTotalChargeUsd=" in rec.calls[0].full_url
 
 
 def test_a_source_entry_cannot_raise_the_cap_without_bound(monkeypatch):
@@ -213,8 +262,8 @@ def test_a_source_entry_cannot_raise_the_cap_without_bound(monkeypatch):
     rec = _Recorder(payload=[ROW])
     monkeypatch.setattr(js.urllib.request, "urlopen", rec)
 
-    fetch_apify_linkedin(["AI Engineer"], ["Romania"], max_items=5000,
-                         budget=_StubBudget(grant=5000))
+    fetch_apify_linkedin(["AI Engineer"], ["Romania"], max_items=9999,
+                         budget=_StubBudget(grant=9999))
 
     req = rec.calls[0]
     body = json.loads(req.data.decode())
@@ -227,12 +276,13 @@ def test_a_source_entry_cannot_raise_the_cap_without_bound(monkeypatch):
 def test_settles_the_unused_grant_back(monkeypatch):
     rec = _Recorder(payload=[ROW])
     monkeypatch.setattr(js.urllib.request, "urlopen", rec)
-    budget = _StubBudget(grant=25)
+    budget = _StubBudget(grant=200)
 
-    fetch_apify_linkedin(["AI Engineer"], ["Romania"], max_items=25, budget=budget)
+    # Above the actor's 150 floor, so the request is made as asked.
+    fetch_apify_linkedin(["AI Engineer"], ["Romania"], max_items=200, budget=budget)
 
-    assert budget.reserved == [25]
-    assert budget.settled == [(25, 1)], "granted 25, actually billed 1 row"
+    assert budget.reserved == [200]
+    assert budget.settled == [(200, 1)], "granted 200, actually billed 1 row"
 
 
 def test_settles_even_when_the_call_raises(monkeypatch):
@@ -240,11 +290,14 @@ def test_settles_even_when_the_call_raises(monkeypatch):
     the whole grant."""
     rec = _Recorder(error=RuntimeError("network down"))
     monkeypatch.setattr(js.urllib.request, "urlopen", rec)
-    budget = _StubBudget(grant=25)
+    budget = _StubBudget(grant=200)
 
-    fetch_apify_linkedin(["AI Engineer"], ["Romania"], max_items=25, budget=budget)
+    # Above the 150 floor on purpose: with a smaller grant this returns before
+    # any request is made, and would pass while testing nothing of the sort.
+    fetch_apify_linkedin(["AI Engineer"], ["Romania"], max_items=200, budget=budget)
 
-    assert budget.settled == [(25, 0)]
+    assert rec.calls, "the request must actually have been attempted"
+    assert budget.settled == [(200, 0)]
 
 
 # --- mapping ---------------------------------------------------------------
