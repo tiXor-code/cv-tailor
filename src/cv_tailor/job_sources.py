@@ -11,11 +11,13 @@ import html
 import os
 import re
 import sys
+import time
 import urllib.error
 import urllib.request
 import json
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field
+from datetime import datetime, timedelta, timezone
 from urllib.parse import urlparse, quote_plus, unquote_plus
 
 from cv_tailor.gates import is_remote
@@ -1062,6 +1064,259 @@ def fetch_linkedin(query: str, country: str = "gb", api_key=None, api_url=None,
     return out
 
 
+# --- Startup / AI-native boards (Teodor, 2026-09-24) ------------------------
+# Measured 2026-09-24 against Scout's targets (score 8+, which needs an
+# AI-native signal such as Claude Code / Cursor): HN 3 of 256 postings, YC 2 of
+# 48, startup.jobs 2-3 real per 14 days after country filtering -- against 6 of
+# 1,650 on the boards Scout already read. All three are free.
+
+_BOARD_TEXT_CAP = 20_000       # untrusted board text: capped before it goes anywhere
+_ATS_LINK_RE = re.compile(
+    r"https?://(?:jobs\.ashbyhq\.com|(?:job-)?boards\.greenhouse\.io|jobs\.lever\.co|"
+    r"apply\.workable\.com)/[^\s\"'<>)]+", re.I)
+_HREF_RE = re.compile(r"""href=["'](https?://[^"'<>\s]+)["']""", re.I)
+_BARE_LINK_RE = re.compile(r"https?://[^\s\"'<>)]+")
+_ROLE_WORD_RE = re.compile(
+    r"engineer|developer|founding|\bai\b|\bml\b|product|scientist|\blead\b|architect", re.I)
+
+
+def _get_text(url: str, *, timeout: int = 20) -> str:
+    req = urllib.request.Request(url, headers={"User-Agent": _BOARD_UA})
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        raw = resp.read()
+    return raw.decode("utf-8", "ignore") if isinstance(raw, bytes) else str(raw)
+
+
+def _links_in(raw_html: str) -> list[str]:
+    # HN escapes the slashes inside links (href="https:&#x2F;&#x2F;..."), so
+    # unescape before matching or no link is ever found.
+    raw_html = html.unescape(raw_html or "")
+    seen, out = set(), []
+    for url in _HREF_RE.findall(raw_html) + _BARE_LINK_RE.findall(_strip_html(raw_html)):
+        url = url.rstrip(".,;")
+        if url not in seen:
+            seen.add(url)
+            out.append(url)
+    return out
+
+
+def fetch_hn_whoishiring(max_age_days: int = 40) -> list[JobPosting]:
+    """Top-level posts of the newest HN "Ask HN: Who is hiring?" thread.
+
+    Monthly thread, read daily: posts trickle in all month and Gate 3 drops
+    the ones already seen. A thread older than `max_age_days` is skipped, so a
+    missing new thread never re-serves last month's. The URL is the post's
+    first ATS link (the portal adapters can drive those), else the HN item."""
+    try:
+        hits = _http_json("https://hn.algolia.com/api/v1/search_by_date"
+                          "?tags=story,author_whoishiring&query=hiring&hitsPerPage=5").get("hits", [])
+        story = next((h for h in hits if "who is hiring" in (h.get("title") or "").lower()), None)
+        if story is None:
+            print("warning: hn: no 'Who is hiring' thread found")
+            return []
+        created = datetime.fromisoformat(str(story.get("created_at", "")).replace("Z", "+00:00"))
+        if datetime.now(timezone.utc) - created > timedelta(days=max_age_days):
+            print(f"warning: hn: newest thread {story.get('title')!r} is older than {max_age_days} days")
+            return []
+        tree = _http_json(f"https://hn.algolia.com/api/v1/items/{story['objectID']}")
+    except Exception as e:
+        print(f"warning: hn fetch failed: {e}")
+        return []
+    out: list[JobPosting] = []
+    for c in tree.get("children") or []:
+        raw = (c.get("text") or "")[:_BOARD_TEXT_CAP]
+        text = _strip_html(raw)
+        if len(text) < 80 or not c.get("id"):
+            continue
+        header = _strip_html(re.split(r"<p>|\n", raw, maxsplit=1)[0])[:300]
+        parts = [s.strip() for s in header.split("|") if s.strip()]
+        org = parts[0][:120] if parts else "Unknown"
+        role = next((s for s in parts[1:] if _ROLE_WORD_RE.search(s)),
+                    parts[1] if len(parts) > 1 else "Engineer")
+        links = _links_in(raw)
+        ats = next((u for u in links if _ATS_LINK_RE.match(u)), None)
+        out.append(JobPosting(
+            source="hn", org=org, title=role[:200], location=header,
+            url=ats or f"https://news.ycombinator.com/item?id={c['id']}",
+            description=text, raw_id=str(c["id"]),
+            apply_options=_apply_option_links([{"link": u} for u in links]),
+        ))
+    return out
+
+
+def _inertia_props(page: str) -> dict:
+    m = re.search(r'data-page="([^"]+)"', page)
+    return json.loads(html.unescape(m.group(1))).get("props", {}) if m else {}
+
+
+def _jsonld_jobposting(page: str) -> dict:
+    for m in re.finditer(r"<script[^>]*ld\+json[^>]*>(.*?)</script>", page, re.S):
+        try:
+            data = json.loads(m.group(1))
+        except ValueError:
+            continue
+        if isinstance(data, list):
+            nodes = data
+        elif isinstance(data, dict):
+            nodes = data.get("@graph") or [data]
+        else:
+            nodes = []
+        for node in nodes:
+            if isinstance(node, dict) and node.get("@type") == "JobPosting":
+                return node
+    return {}
+
+
+def fetch_yc_jobs(roles: tuple = ("software-engineer", "science")) -> list[JobPosting]:
+    """YC's public remote job pages (ycombinator.com/jobs/role/<role>/remote).
+
+    The location is kept VERBATIM ("Remote (US)") so the gate's non-EU-remote
+    rule sees it. applyUrl needs a YC account, so a YC job parks as
+    no-adapter unless ats_resolve finds the company's own ATS posting."""
+    postings, seen = [], set()
+    for role in roles:
+        try:
+            props = _inertia_props(_get_text(f"https://www.ycombinator.com/jobs/role/{quote_plus(role)}/remote"))
+        except Exception as e:
+            print(f"warning: yc fetch failed for role={role!r}: {e}")
+            continue
+        for p in props.get("jobPostings") or []:
+            if p.get("id") is not None and p["id"] not in seen:
+                seen.add(p["id"])
+                postings.append(p)
+    out: list[JobPosting] = []
+    for p in postings:
+        path = str(p.get("url") or "")
+        url = path if path.startswith("http") else f"https://www.ycombinator.com{path}"
+        time.sleep(0.3)
+        try:
+            node = _jsonld_jobposting(_get_text(url))
+            desc = _strip_html(str(node.get("description") or "")[:_BOARD_TEXT_CAP])
+        except Exception as e:
+            print(f"warning: yc job page failed {url}: {e}")
+            desc = ""
+        out.append(JobPosting(
+            source="yc", org=str(p.get("companyName") or "Unknown")[:120],
+            title=str(p.get("title") or "")[:200], location=str(p.get("location") or "")[:200],
+            url=url, description=f"{desc} {p.get('companyOneLiner') or ''}".strip(),
+            raw_id=str(p["id"]),
+        ))
+    return out
+
+
+# EU27 + EEA + Switzerland + UK (Teodor 2026-09-24: UK-remote stays in).
+_STARTUPJOBS_COUNTRIES = frozenset(
+    "AT BE BG HR CY CZ DK EE FI FR DE GR HU IE IT LV LT LU MT NL PL PT RO SK SI ES SE "
+    "IS LI NO CH GB".split())
+_STARTUPJOBS_ROLES = (
+    "ai-engineer", "machine-learning-engineer", "ml-engineer", "forward-deployed-engineer",
+    "full-stack-engineer", "full-stack-developer", "software-engineer", "backend-engineer",
+    "product-engineer", "automation-engineer", "prompt-engineer")
+_STARTUPJOBS_MCP = "https://api.startup.jobs/mcp"
+
+
+class _RateLimited(Exception):
+    pass
+
+
+def _startupjobs_call(method: str, params: dict, *, gap_seconds: float, seq: list) -> dict:
+    """One MCP JSON-RPC call to startup.jobs' free tier: a courtesy gap before
+    every call, 15s then 30s back-off on HTTP 429, then _RateLimited."""
+    seq[0] += 1
+    body = json.dumps({"jsonrpc": "2.0", "id": f"scout-{seq[0]}", "method": method,
+                       "params": params}).encode()
+    raw = b""
+    for backoff in (15, 30, None):
+        time.sleep(gap_seconds)
+        req = urllib.request.Request(_STARTUPJOBS_MCP, data=body, headers={
+            "content-type": "application/json", "accept": "application/json, text/event-stream",
+            "User-Agent": _BOARD_UA})
+        try:
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                raw = resp.read()
+            break
+        except urllib.error.HTTPError as e:
+            if e.code != 429:
+                raise
+            if backoff is None:
+                raise _RateLimited() from None
+            time.sleep(backoff)
+    text = raw.decode("utf-8", "ignore") if isinstance(raw, bytes) else str(raw)
+    if "data:" in text[:64]:
+        text = "\n".join(line[5:].strip() for line in text.splitlines() if line.startswith("data:"))
+    return json.loads(text).get("result") or {}
+
+
+def _startupjobs_tool(name: str, args: dict, **kw) -> dict:
+    res = _startupjobs_call("tools/call", {"name": name, "arguments": args}, **kw)
+    if res.get("structuredContent"):
+        return res["structuredContent"]
+    content = res.get("content") or [{}]
+    return json.loads(content[0].get("text") or "{}")
+
+
+def fetch_startupjobs(countries=_STARTUPJOBS_COUNTRIES, include_no_country: bool = True,
+                      roles=_STARTUPJOBS_ROLES, pages: int = 2, max_details: int = 80,
+                      gap_seconds: float = 4.0) -> list[JobPosting]:
+    """startup.jobs via its official MCP endpoint (free tier: last 14 days, no
+    key). Remote listings in tech roles, kept only when the listing's country
+    is one he can work from (`countries`) or none is given. Most "remote"
+    listings there are remote WITHIN one country -- 11 of 16 raw matches on
+    2026-09-24 were US/LATAM/Asia-bound -- so the country filter is what makes
+    this source useful. Throttled: the free tier 429s after a few hundred
+    rapid calls; on a third consecutive 429 it returns what it has."""
+    seq, kw = [0], {"gap_seconds": gap_seconds}
+    kept, seen = [], set()
+    try:
+        _startupjobs_call("initialize", {"protocolVersion": "2025-03-26", "capabilities": {},
+                                         "clientInfo": {"name": "cv-tailor-scout", "version": "0.3"}},
+                          seq=seq, **kw)
+        for role in roles:
+            cursor = None
+            for _ in range(pages):
+                args = {"role": role, "workplace_type": "remote", "limit": 50}
+                if cursor:
+                    args["cursor"] = cursor
+                page = _startupjobs_tool("search_jobs", args, seq=seq, **kw)
+                for j in page.get("jobs") or []:
+                    loc = j.get("location") if isinstance(j.get("location"), dict) else {}
+                    code = (loc.get("country_code") or "").upper()
+                    if j.get("id") in seen or not (code in countries or (not code and include_no_country)):
+                        continue
+                    seen.add(j.get("id"))
+                    kept.append((j, loc.get("country")))
+                cursor = page.get("next_cursor")
+                if not cursor:
+                    break
+    except _RateLimited:
+        print(f"warning: startupjobs rate-limited during search; continuing with {len(kept)} listings")
+    except Exception as e:
+        print(f"warning: startupjobs fetch failed: {e}")
+        return []
+    out: list[JobPosting] = []
+    for j, country in kept[:max_details]:
+        try:
+            d = _startupjobs_tool("get_job", {"id": j["id"]}, seq=seq, **kw)
+        except _RateLimited:
+            print(f"warning: startupjobs rate-limited after {len(out)} job details")
+            break
+        except Exception as e:
+            print(f"warning: startupjobs get_job {j.get('id')} failed: {e}")
+            continue
+        d = d.get("job", d) if isinstance(d, dict) else {}
+        comp = d.get("company") or j.get("company") or {}
+        org = comp.get("name") if isinstance(comp, dict) else str(comp)
+        out.append(JobPosting(
+            source="startupjobs", org=str(org or "Unknown")[:120],
+            title=str(d.get("title") or j.get("title") or "")[:200],
+            location=f"Remote - {country or 'Anywhere'}",
+            url=str(d.get("url") or j.get("url") or f"https://startup.jobs/{j['id']}"),
+            description=_strip_html(str(d.get("description") or "")[:_BOARD_TEXT_CAP]),
+            raw_id=str(j["id"]),
+        ))
+    return out
+
+
 def fetch_all(sources: list[dict], serp_budget=None, jsearch_budget=None,
               apify_budget=None) -> list[JobPosting]:
     """sources = [{'kind': 'ashby'|'greenhouse'|'lever', 'slug': '...', 'name': '...'}, ...]
@@ -1096,6 +1351,15 @@ def fetch_all(sources: list[dict], serp_budget=None, jsearch_budget=None,
         "wwr": lambda s: fetch_wwr(s["category"]),
         "arbeitnow": lambda s: fetch_arbeitnow(s.get("pages", 1)),
         "himalayas": lambda s: fetch_himalayas(s.get("count", _HIMALAYAS_PAGE_SIZE)),
+        "hn_whoishiring": lambda s: fetch_hn_whoishiring(max_age_days=s.get("max_age_days", 40)),
+        "yc_jobs": lambda s: fetch_yc_jobs(roles=tuple(s.get("roles") or ("software-engineer", "science"))),
+        "startupjobs": lambda s: fetch_startupjobs(
+            countries=(frozenset(c.upper() for c in s["countries"]) if s.get("countries")
+                       else _STARTUPJOBS_COUNTRIES),
+            include_no_country=s.get("include_no_country", True),
+            roles=tuple(s.get("roles") or _STARTUPJOBS_ROLES),
+            pages=s.get("pages", 2), max_details=s.get("max_details", 80),
+            gap_seconds=s.get("gap_seconds", 4.0)),
         # No credentials read from `s` for either of the two below: a source
         # entry lives in the COMMITTED sources.yaml, so accepting app_id /
         # app_key / api_keys there at all would invite someone to put live

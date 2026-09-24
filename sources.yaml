@@ -57,6 +57,28 @@ sources:
     pages: 3
   - kind: himalayas
     count: 60
+  # Startup / AI-native boards (Teodor, 2026-09-24: "more of the Ygo startup,
+  # AI-activated development positions"). Measured that day, Ygo-type matches
+  # (score 8+, which needs an AI-native signal): HN 3 of 256 postings, YC 2 of
+  # 48, startup.jobs 2-3 real per 14 days after country filtering -- against 6
+  # of 1,650 on every board above combined. All free, no credentials.
+  #
+  # HN "Ask HN: Who is hiring?": monthly thread, read daily (Gate 3 drops the
+  # posts already seen); skipped once the newest thread is older than 40 days.
+  - kind: hn_whoishiring
+    max_age_days: 40
+  # YC's public remote job pages. Locations stay verbatim, so "Remote (US)"
+  # jobs die at the gate. Applying needs a YC account: these park as
+  # no-adapter unless ats_resolve finds the company's own ATS.
+  - kind: yc_jobs
+    roles: ["software-engineer", "science"]
+  # startup.jobs official MCP endpoint, free tier (14 days). Kept only when the
+  # listing's country is EU/EEA/CH/UK or none is given -- 11 of 16 raw matches
+  # were US/LATAM/Asia-bound. 4s between calls; it 429s on bursts.
+  - kind: startupjobs
+    pages: 2
+    max_details: 80
+    gap_seconds: 4.0
   # Adzuna. Needs ADZUNA_APP_ID + ADZUNA_APP_KEY in .env -- NEVER here; the
   # dispatch reads env only and every entry no-ops with a warning until set.
   # fetch_adzuna supports ten EU markets; four are configured below.
