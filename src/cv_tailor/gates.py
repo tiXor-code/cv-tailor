@@ -121,6 +121,17 @@ _ONSITE_DAYS_RE = re.compile(
     r"\d+\s*days?\s*(?:per|a)\s*week\s*(?:in|at|on-?site|in[- ]office)", re.I)
 
 
+# "Remote (US)", "Remote, Canada", "US / Remote (US; CA)": remote, but only
+# from a non-EU country. Measured 2026-09-24: the scorer gave YC postings
+# located like this 9-10, so the gate drops them -- unless the location also
+# names an EU country, Europe or worldwide (_EU_RE / _GLOBAL_RE).
+_NON_EU_CODES = (r"(?:us|usa|u\.s\.|united\s+states|ca|can|canada|uk|united\s+kingdom|au|australia|"
+                 r"in|india|br|brazil|mx|mexico|latam|americas|north\s+america|nz|il|israel|sg|singapore)")
+_REMOTE_NON_EU_LOC_RE = re.compile(
+    rf"remote\s*[\(\-–:,]\s*{_NON_EU_CODES}(?:\s*[;,/&]\s*{_NON_EU_CODES}|\s+or\s+{_NON_EU_CODES})*\s*\)?\s*$|"
+    rf"remote\s*\(\s*{_NON_EU_CODES}(?:\s*[;,/]\s*{_NON_EU_CODES})*\s*\)", re.I)
+
+
 def is_scout_geo_eligible(location: str, description: str) -> bool:
     """Remote-anywhere eligibility for Scout. False only on an explicit
     non-EU residency/authorization/clearance requirement, or onsite work: a
@@ -128,6 +139,10 @@ def is_scout_geo_eligible(location: str, description: str) -> bool:
     N-days-a-week-in-office cadence with no remote location."""
     loc = location or ""
     if _RESIDENCY_RE.search(_blob(loc, description, cap=6000)):
+        return False
+    if (_REMOTE_NON_EU_LOC_RE.search(loc)
+            and not _EU_RE.search(re.sub(r"\b(?:ca|uk)\b", "", loc, flags=re.I))
+            and not _GLOBAL_RE.search(loc)):
         return False
     remote_loc = bool(_REMOTE_RE.search(loc))
     if _ONSITE_LOCATION_RE.search(loc) and not remote_loc:

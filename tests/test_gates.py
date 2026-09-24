@@ -141,12 +141,19 @@ def test_a_worldwide_remote_job_from_a_us_company_now_passes():
     assert passes_gate1_tracks(job, TRACKS) == "ai"
 
 
-def test_a_remote_job_listed_in_a_non_eu_country_reaches_the_scorer():
-    """'Remote - United States' alone does not prove residency is required;
-    the scorer reads the full text and decides. The gate only drops explicit
-    requirements."""
-    job = _job("Forward Deployed Engineer", "Remote - United States", "Agentic AI, Python.")
-    assert passes_gate1_tracks(job, TRACKS) == "ai"
+def test_remote_restricted_to_a_non_eu_country_is_dropped():
+    """Measured 2026-09-24: YC postings located "Remote (US)" / "Remote (CA)"
+    scored 9-10 -- the scorer does not cap them -- so the gate does. Only
+    when the location names no EU country, Europe or worldwide."""
+    for loc in ("Remote - United States", "Remote (US)", "San Francisco, CA, US / Remote (US)",
+                "CA / Remote (CA)", "Remote (US; CA)", "Remote, US", "Remote - Canada"):
+        assert passes_gate1_tracks(_job("AI Engineer", loc, "Agentic AI, Python."), TRACKS) is None, loc
+
+
+def test_remote_listing_several_countries_including_the_eu_passes():
+    for loc in ("Remote, Canada; Remote, Poland", "Remote (US or Europe)", "Remote - Worldwide",
+                "Berlin, BE, DE / Remote", "Remote"):
+        assert passes_gate1_tracks(_job("AI Engineer", loc, "Agentic AI, Python."), TRACKS) == "ai", loc
 
 
 def test_residency_authorization_or_clearance_requirements_are_dropped():
