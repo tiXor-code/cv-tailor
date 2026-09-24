@@ -253,6 +253,30 @@
     rgAnchor.parentNode.insertBefore(rgWrap, rgAnchor);
   }
 
+  // consent / consentmarketing: a REQUIRED single-checkbox agreement at the
+  // end of the form. Live Bjak (score 7) parked unanswerable-required:Consent;
+  // its wording opted him into "recruitment marketing purposes and ... business
+  // updates", which Teodor (2026-09-24) wants parked. Application-only consent
+  // gets ticked.
+  if (variant === "consent" || variant === "consentmarketing") {
+    var cAnchor = document.getElementById("q_required_text")
+      .closest(".ashby-application-form-field-entry");
+    var cWrap = document.createElement("div");
+    cWrap.className = "ashby-application-form-field-entry";
+    cWrap.setAttribute("data-field-path", "q_consent");
+    var words = variant === "consentmarketing"
+      ? "By checking this box, you consent to the use of your personal data for " +
+        "recruitment marketing purposes and to receive business updates."
+      : "I agree to the processing of my personal data for the purpose of this application.";
+    cWrap.innerHTML =
+      '<label class="_heading_f7cvd_52 _required_f7cvd_91 ' +
+      'ashby-application-form-question-title">Consent</label>' +
+      '<p>' + words + '</p>' +
+      '<input type="checkbox" id="q_consent_box" name="q_consent_box">' +
+      '<label for="q_consent_box">I agree</label>';
+    cAnchor.parentNode.insertBefore(cWrap, cAnchor);
+  }
+
   if (variant === "salarynumber" || variant === "salarynumbernonote") {
     var anchorEl = document.getElementById("q_required_text")
       .closest(".ashby-application-form-field-entry");

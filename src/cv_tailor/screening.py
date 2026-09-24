@@ -224,6 +224,37 @@ def _start_date_answer(answers: dict) -> Answer | None:
     return Answer(f"Within {raw.value} days of an offer", raw.grounded_in)
 
 
+def consent_is_application_only(text: str) -> bool:
+    """True only for a recognisable consent/agreement whose wording covers THIS
+    application and nothing beyond it.
+
+    Teodor, 2026-09-24: auto-tick application-only consent, park marketing.
+    Live Bjak (score 7) asked him to accept "recruitment marketing purposes and
+    ... business updates", and everfield to be contacted "about job
+    opportunities for up to 2 years" -- both reach beyond the application, so
+    both park. Text that is not recognisably consent at all also returns False:
+    a lone checkbox we cannot classify may be a factual claim, and is never
+    guessed."""
+    text = text or ""
+    return bool(_CONSENT_RE.search(text)) and not _BEYOND_APPLICATION_RE.search(text)
+
+
+def _how_heard_answer(q: Question, answers: dict) -> Answer | None:
+    """answers.how_heard, falling back to an "Other..." option when the form
+    offers no match. That fallback is Teodor's own rule, chosen with the "Job
+    board" answer on 2026-09-16; live ElevenLabs (score 8) offered no job-board
+    choice and parked with the fact in hand."""
+    raw = _from_answers(answers, "how_heard")
+    if raw is None or q.kind not in _OPTION_KINDS:
+        return raw
+    if _match_option(raw.value, q.options) is not None:
+        return raw          # _kind_gate maps it to the exact option text
+    for opt in q.options:
+        if _OTHER_OPTION_RE.search(opt):
+            return Answer(opt, raw.grounded_in)
+    return raw              # no Other either: _kind_gate fails closed
+
+
 def _yes_no_from_flag(answers: dict, key: str) -> Answer | None:
     """A boolean fact rendered as the Yes/No these forms actually offer."""
     value = (answers or {}).get(key)
@@ -341,6 +372,30 @@ _AVAILAB_RE = re.compile(r"\bavailab", re.I)
 # "Total years of experience", Mistral.ai (7) monthly travel, Flip (6) fluent
 # German. All are facts, so they come from answers.yaml and are never inferred.
 _HOW_HEARD_RE = re.compile(r"how did you hear|where did you (?:hear|find)|how you heard", re.I)
+# Distinct from regular travel for the JOB, so it is its own fact. Live Sardine
+# (score 8): "Are you available to attend an in-person interview if requested".
+_IN_PERSON_INTERVIEW_RE = re.compile(
+    r"in[- ]person interview|on[- ]?site interview|interview in[- ]person"
+    r"|attend (?:an |the )?interview (?:on[- ]?site|in[- ]person)", re.I)
+_OTHER_OPTION_RE = re.compile(r"^\s*other\b", re.I)
+# Recognising consent in a YES/NO question needs explicit consent vocabulary.
+# _CONSENT_RE alone is too broad here: "Can you confirm you have 5+ years of
+# Kubernetes experience?" contains "confirm", and treating that as consent
+# would answer Yes to a factual claim about him.
+_YESNO_CONSENT_RE = re.compile(
+    r"\bconsent\b|privacy (?:notice|policy)|\bgdpr\b|personal data"
+    r"|background (?:check|verification|screening)", re.I)
+# Consent classification for a lone required checkbox. Teodor, 2026-09-24:
+# tick consent that covers ONLY this application; park anything reaching
+# beyond it -- he is never to be opted in silently.
+_CONSENT_RE = re.compile(
+    r"\bconsent\b|\bagree\b|\bconfirm\b|\backnowledge\b|privacy (?:notice|policy)"
+    r"|\bgdpr\b|data protection|personal data", re.I)
+_BEYOND_APPLICATION_RE = re.compile(
+    r"marketing|newsletter|promotion|business updates|updates and notifications"
+    r"|(?:future|other|new) (?:job )?(?:opportunit|role|vacanc|position|opening)"
+    r"|talent (?:pool|community|network)"
+    r"|contact (?:you|me) (?:about|regarding|for) (?:job|career|employment)", re.I)
 # TOTAL experience only. "How many years of Kubernetes experience do you have?"
 # must NOT be answered from this key -- years with one technology is a
 # different fact, and stating the overall figure there is a false claim on a
@@ -679,6 +734,18 @@ def _deterministic_answer(q: Question, profile: dict, answers: dict) -> Answer |
 
     # answers.yaml categories -- checked before generic contact fields so e.g.
     # "relocation" (contains "location") is never mistaken for contact.location.
+    # Consent in a Yes/No question is a POLICY decision, decided here so it can
+    # never reach the LLM tier. Teodor, 2026-09-24: agree to consent scoped to
+    # THIS application (live Sardine: a background check "if you advance in the
+    # process"); refuse anything reaching beyond it. _FAIL_CLOSED parks the
+    # question -- before this, a marketing-consent Yes/No fell through to the
+    # LLM, which could say Yes and bypass the rule that parks marketing boxes.
+    if q.kind in _OPTION_KINDS and _YESNO_CONSENT_RE.search(label):
+        if consent_is_application_only(q.label):
+            yes = _find_bool_option(q.options, want_yes=True)
+            return Answer(yes, "policy:consent-application-only") if yes else _FAIL_CLOSED
+        return _FAIL_CLOSED
+
     if _RELOC_RE.search(label):
         return _relocation_answer(q, answers)
     if _is_hourly(label):
@@ -696,7 +763,11 @@ def _deterministic_answer(q: Question, profile: dict, answers: dict) -> Answer |
     # Travel and language answer Yes/No only for an OPTION question; a
     # free-text version wants prose and falls through to a later tier.
     if _HOW_HEARD_RE.search(label):
-        return _from_answers(answers, "how_heard")
+        return _how_heard_answer(q, answers)
+    if _IN_PERSON_INTERVIEW_RE.search(label) and q.kind in _OPTION_KINDS:
+        flag = _yes_no_from_flag(answers, "in_person_interview")
+        if flag is not None:
+            return flag
     if _YEARS_EXP_RE.search(label):
         return _from_answers(answers, "years_experience")
     if _TRAVEL_RE.search(label) and q.kind in _OPTION_KINDS:

@@ -39,3 +39,5 @@ timezone_overlap_ok:
   - CET
 hourly_rate_ask_usd: 25
 hours_per_week_available: 10
+# Distinct from regular travel for the job itself: a one-off interview trip.
+in_person_interview: false

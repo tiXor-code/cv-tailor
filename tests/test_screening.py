@@ -2,7 +2,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from cv_tailor.screening import Answer, Question, answer_question, build_llm_messages
+from cv_tailor.screening import (Answer, Question, answer_question, build_llm_messages,
+                                 consent_is_application_only)
 
 
 _PROFILE = {
@@ -37,6 +38,7 @@ _ANSWERS = {
     "languages_spoken": ["Examplish"],
     "open_to_travel": True,
     "timezone_overlap_ok": ["Exampleton"],
+    "in_person_interview": True,
     "work_authorization": "EU citizen, can work anywhere in the EU.",
     "notice_period": "30 calendar days",
     "relocation": "Not open to relocation; remote only.",
@@ -177,6 +179,106 @@ def test_regular_travel_question_is_answered_from_the_flag():
     grounded = answer_question(q, _PROFILE, dict(_ANSWERS, open_to_travel=False))
     assert grounded.value == "No"
     assert grounded.grounded_in == "answers:open_to_travel"
+
+
+def test_how_heard_falls_back_to_other_when_no_option_matches():
+    """Teodor's rule, chosen 2026-09-16 with the "Job board" answer: fall back
+    to "Other" when a form has no job-board choice. Live ElevenLabs (score 8)
+    offers I'm a user / News article / LinkedIn / Social media / In person event
+    / Referral / I was reached out to / Other (please specify) -- no match, so
+    it parked unanswerable-required with the fact in hand."""
+    q = _q("How did you hear about ElevenLabs?", kind="radio",
+           options=("I'm a user", "LinkedIn", "Referral", "Other (please specify)"))
+    out = answer_question(q, _PROFILE, _ANSWERS)
+    assert out.value == "Other (please specify)"
+    assert out.grounded_in == "answers:how_heard"
+
+
+def test_how_heard_still_prefers_a_real_match_over_other():
+    q = _q("How did you hear about us?", kind="radio",
+           options=("LinkedIn", "Fixture Careers Page", "Other"))
+    assert answer_question(q, _PROFILE, _ANSWERS).value == "Fixture Careers Page"
+
+
+def test_in_person_interview_is_answered_from_the_flag():
+    """Live Sardine (score 8): "Are you available to attend an in-person
+    interview if requested as part of the hiring process?" Teodor, 2026-09-24:
+    remote interviews only. Distinct from regular travel for the JOB, which is
+    why it is its own fact rather than inferred from open_to_travel. Both
+    directions pinned; the fixture holds the opposite of the real value."""
+    q = _q("Are you available to attend an in-person interview if requested "
+           "as part of the hiring process?", kind="radio", options=("Yes", "No"))
+    assert answer_question(q, _PROFILE, _ANSWERS).value == "Yes"
+    grounded = answer_question(q, _PROFILE, dict(_ANSWERS, in_person_interview=False))
+    assert grounded.value == "No"
+    assert grounded.grounded_in == "answers:in_person_interview"
+
+
+@pytest.mark.parametrize("text", [
+    "I confirm I have read OysterHR's Privacy Notice",
+    "I agree to the processing of my personal data for the purpose of this application.",
+    "By submitting, I consent to Acme storing my data to assess my application (GDPR).",
+])
+def test_consent_limited_to_the_application_may_be_ticked(text):
+    """Teodor, 2026-09-24: auto-tick consent that covers only the application."""
+    assert consent_is_application_only(text) is True
+
+
+@pytest.mark.parametrize("text", [
+    # live Bjak (score 7), verbatim substance
+    "By checking this box, you consent to the collection, use, processing, and "
+    "disclosure of your personal data for recruitment marketing purposes and to "
+    "receive business updates and notifications.",
+    # live everfield
+    "Do you agree to allow Everfield to contact you about job opportunities for up to 2 years?",
+    "I agree to join the talent community and receive our newsletter.",
+    "I consent to being contacted about future roles.",
+])
+def test_consent_reaching_beyond_the_application_parks(text):
+    """...and park anything that opts him into marketing, updates, or contact
+    about OTHER or FUTURE roles -- never opted in silently."""
+    assert consent_is_application_only(text) is False
+
+
+def test_a_lone_checkbox_that_is_not_consent_parks():
+    """An unrecognised single checkbox ("I am over 18"?) is a factual claim or
+    an agreement we cannot classify -- park, never guess."""
+    assert consent_is_application_only("I am a unicorn.") is False
+
+
+def test_a_yes_no_consent_scoped_to_this_application_is_answered_yes():
+    """Live Sardine (score 8): "We conduct thorough background checks as part
+    of our hiring process. By selecting "Yes," you acknowledge and consent to
+    this verification if you advance in the process." Consent scoped to THIS
+    application -- Teodor's rule (2026-09-24) is to agree to exactly that."""
+    q = _q("We conduct thorough background checks as part of our hiring process. "
+           "By selecting \u201cYes,\u201d you acknowledge and consent to this "
+           "verification if you advance in the process", kind="radio", options=("Yes", "No"))
+    out = answer_question(q, _PROFILE, _ANSWERS)
+    assert out.value == "Yes"
+    assert out.grounded_in == "policy:consent-application-only"
+
+
+def test_a_yes_no_consent_reaching_beyond_the_application_fails_closed():
+    """The hole this closes: a Yes/No consent used to fall through to the LLM
+    tier, which could answer "Yes" and opt him into marketing -- bypassing the
+    very rule that parks marketing checkboxes. It must fail closed instead,
+    even WITH a client that would happily say Yes."""
+    q = _q("Do you consent to receive marketing communications and business "
+           "updates from us?", kind="radio", options=("Yes", "No"))
+    client = _FakeClient(['{"answer": "Yes", "grounded": true}'])
+    assert answer_question(q, _PROFILE, _ANSWERS, client=client) is None
+    assert client.calls == 0, "the LLM must never be asked about consent"
+
+
+def test_confirm_in_a_factual_yes_no_is_not_mistaken_for_consent():
+    """"confirm" also opens factual questions. Treating this as consent would
+    answer Yes to a claim about his experience -- a false factual claim, the
+    worst failure here. Yes/No consent needs explicit consent vocabulary."""
+    q = _q("Can you confirm you have 5+ years of Kubernetes experience?",
+           kind="radio", options=("Yes", "No"))
+    out = answer_question(q, _PROFILE, _ANSWERS)
+    assert out is None or out.grounded_in != "policy:consent-application-only"
 
 
 def test_a_timezone_overlap_he_can_cover_is_yes():

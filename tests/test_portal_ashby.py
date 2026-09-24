@@ -33,9 +33,6 @@ _PROFILE = {
 }
 _ANSWERS = {
     "notice_period": "30 calendar days",
-    # Fictional and deliberately LOWERCASE, so the radio test also pins the
-    # case-insensitive match against the "Careers Page" option.
-    "how_heard": "careers page",
     # Fictional, like every value here -- this file is tracked in a PUBLIC
     # repo (see the work_authorization note below for the near-miss that
     # established the rule). Deliberately not a round, plausible figure.
@@ -958,6 +955,35 @@ def test_location_combobox_waits_through_a_slow_loading_list(chromium_page, pack
     assert landed == _PROFILE["contact"]["location"]
 
 
+def test_application_only_consent_is_ticked(chromium_page, package):
+    """Teodor, 2026-09-24: auto-tick consent that covers only the application.
+    A lone required checkbox used to be invisible to the adapter as a question,
+    so it could never be answered at all."""
+    page = chromium_page
+    with serve_fixtures() as base_url:
+        _goto(page, base_url, variant="consent")
+        result = AshbyAdapter().apply(page, {"id": "job-consent"}, package, _PROFILE,
+                                      _ANSWERS, dry_run=True)
+        ticked = page.locator("#q_consent_box").is_checked()
+    assert result.status == "filled", result.reason
+    assert ticked is True
+
+
+def test_marketing_consent_parks_and_is_never_ticked(chromium_page, package):
+    """...and park anything that opts him into marketing. Live Bjak (score 7):
+    "recruitment marketing purposes and ... business updates". Never opted in
+    silently -- and the box must be left UNTICKED, not ticked then parked."""
+    page = chromium_page
+    with serve_fixtures() as base_url:
+        _goto(page, base_url, variant="consentmarketing")
+        result = AshbyAdapter().apply(page, {"id": "job-consent-mkt"}, package, _PROFILE,
+                                      _ANSWERS, dry_run=True)
+        ticked = page.locator("#q_consent_box").is_checked()
+    assert result.status == "needs_human", result.reason
+    assert result.reason == "unanswerable-required:Consent"
+    assert ticked is False
+
+
 def test_a_real_radio_group_question_is_answered(chromium_page, package):
     """Live Sardine (score 8, 2026-09-24): "How did you hear about Sardine?" is a
     genuine radio group -- options Linkedin / Job Board / In-person event /
@@ -969,8 +995,14 @@ def test_a_real_radio_group_question_is_answered(chromium_page, package):
 
     with serve_fixtures() as base_url:
         _goto(page, base_url, variant="radiogroup")
+        # how_heard only HERE: in the shared _ANSWERS it made the default
+        # fixture's optional "How did you hear" answerable, which quietly
+        # broke the requiredness tests that rely on it staying unanswerable.
+        # Fictional and deliberately lowercase, to pin the case-insensitive
+        # match against "Careers Page".
+        answers = dict(_ANSWERS, how_heard="careers page")
         result = AshbyAdapter().apply(page, {"id": "job-radio"}, package, _PROFILE,
-                                      _ANSWERS, dry_run=True)
+                                      answers, dry_run=True)
         wrap = page.locator('[data-field-path="q_heard"]')
         picked = [wrap.locator("label", has_text=o).first.get_attribute("for")
                   for o in ("Careers Page", "Linkedin")]

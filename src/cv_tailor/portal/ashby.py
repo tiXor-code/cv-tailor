@@ -51,7 +51,7 @@ from cv_tailor.portal.base import (
     verify_file_attached,
     verify_filled,
 )
-from cv_tailor.screening import Question, answer_question
+from cv_tailor.screening import Question, answer_question, consent_is_application_only
 
 # How long to wait for a post-submit confirmation signal before degrading
 # to needs_human("no-confirmation"). A module constant (not a hardcoded
@@ -557,6 +557,18 @@ class AshbyAdapter(PortalAdapter):
             if question is None:
                 continue
 
+            # Consent is a POLICY decision on the wording, never an LLM answer.
+            # Teodor, 2026-09-24: tick application-only consent; park anything
+            # reaching beyond it (marketing, updates, other/future roles), and
+            # leave that box UNTICKED.
+            if question.kind == "consent":
+                if consent_is_application_only(options[0] if options else question.label):
+                    if not self._tick(wrapper) and question.required:
+                        return f"unwritable-required:{question.label}"
+                elif question.required:
+                    return f"unanswerable-required:{question.label}"
+                continue
+
             answer = answer_question(question, profile, answers, client=client,
                                       deployment=deployment, context=context)
 
@@ -816,6 +828,24 @@ class AshbyAdapter(PortalAdapter):
             return False
 
     @staticmethod
+    def _tick(wrapper) -> bool:
+        """Tick the wrapper's single checkbox and read it back. Clicks its
+        label when there is one, as a person does; styled checkboxes are often
+        not directly actionable."""
+        try:
+            box = wrapper.locator("input[type=checkbox]").first
+            if not box.is_checked():
+                rid = box.get_attribute("id") or ""
+                lab = wrapper.locator(f'label[for="{rid}"]') if rid else None
+                if lab is not None and lab.count() > 0:
+                    lab.first.click()
+                else:
+                    box.check()
+            return box.is_checked()
+        except PlaywrightError:
+            return False
+
+    @staticmethod
     def _radio_label(wrapper, radio) -> str:
         """The visible text of one radio option, via its <label for>."""
         try:
@@ -961,6 +991,18 @@ class AshbyAdapter(PortalAdapter):
                     required = self._is_required(label_el, radios.first)
                     return (Question(label=label, kind="radio", required=required,
                                      options=options), selector, options)
+
+            # A LONE checkbox is an agreement, not a text field. Live Bjak
+            # (score 7) parked unanswerable-required:Consent -- the adapter had
+            # no way to see it as a question at all. The full wording travels
+            # in `options` so policy can read what is actually being agreed to.
+            # ("Select all that apply" groups have several and are not this.)
+            checks = wrapper.locator("input[type=checkbox]")
+            if checks.count() == 1:
+                required = self._is_required(label_el, checks.first)
+                wording = (wrapper.inner_text() or "").strip()
+                return (Question(label=label, kind="consent", required=required,
+                                 options=(wording,)), selector, (wording,))
 
             # No element carries the question's id -- live ElevenLabs'
             # "Location" input had no id and no name, and its <label for>
