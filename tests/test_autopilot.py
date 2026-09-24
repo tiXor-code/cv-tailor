@@ -29,6 +29,12 @@ def _floor_env_is_stated_not_inherited(monkeypatch):
     monkeypatch.delenv("SCOUT_AUTO_APPROVE_MIN", raising=False)
 
 
+@pytest.fixture(autouse=True)
+def _fixed_fingerprint(monkeypatch):
+    from cv_tailor import autopilot as ap
+    monkeypatch.setattr(ap, "revive_fingerprint", lambda **kw: "fp-current")
+
+
 def _write_day(root: Path, day: str, entries: list[dict]) -> None:
     d = root / day
     d.mkdir(parents=True, exist_ok=True)
@@ -281,7 +287,8 @@ def test_a_revived_park_is_not_revived_again(tmp_path):
     yesterday = (NOW - timedelta(days=1)).date().isoformat()
     _write_day(tmp_path, yesterday, [
         _entry(1, score=8, status="needs_human", error="no-adapter",
-               revived_at="2026-09-15T00:00:00+00:00", revived_for="no-adapter"),
+               revived_at="2026-09-15T00:00:00+00:00", revived_for="no-adapter",
+               revived_code="fp-current"),
     ])
     _write_day(tmp_path, TODAY, [])
     ran = []
@@ -342,7 +349,8 @@ def test_a_park_whose_reason_changed_earns_another_retry(tmp_path):
         _entry(2, score=8, status="needs_human",
                error="no-adapter",
                revived_at="2026-09-15T00:00:00+00:00",
-               revived_for="no-adapter"),
+               revived_for="no-adapter",
+               revived_code="fp-current"),
     ])
     _write_day(tmp_path, TODAY, [])
     ran = []
@@ -358,6 +366,60 @@ def test_a_park_whose_reason_changed_earns_another_retry(tmp_path):
     q = _read(tmp_path, yesterday)
     assert q["job-1"]["revived_for"] == "unanswerable-required:How did you hear about Sardine?"
     assert q["job-2"]["status"] == "needs_human", "same wall twice: no further retry"
+
+
+def test_same_wall_is_retried_once_the_code_or_answers_changed(tmp_path):
+    """The same-wall rule assumed a wall that gave the same reason is unchanged
+    -- but a FIX changes the wall. Live ElevenLabs (score 8): revived once for
+    unwritable-required:Location, failed again on that same question (the bug
+    was not fixed yet), and was then blocked for good -- minutes after the
+    no-id combobox fix made its whole live form fill end to end.
+
+    So the revive remembers a fingerprint of what decides outcomes (adapters,
+    screening, apply_policy, answers.yaml) and retries when it changed."""
+    yesterday = (NOW - timedelta(days=1)).date().isoformat()
+    _write_day(tmp_path, yesterday, [
+        _entry(1, score=8, status="needs_human", error="unwritable-required:Location",
+               revived_at="2026-09-20T00:00:00+00:00",
+               revived_for="unwritable-required:Location", revived_code="fp-old"),
+        _entry(2, score=8, status="needs_human", error="unwritable-required:Location",
+               revived_at="2026-09-20T00:00:00+00:00",
+               revived_for="unwritable-required:Location", revived_code="fp-current"),
+    ])
+    _write_day(tmp_path, TODAY, [])
+    ran = []
+
+    def runner(day, job_id):
+        ran.append(job_id)
+        update_entry(day, job_id, lambda e: e.update(status="sent"), queue_dir=tmp_path)
+        return 0
+
+    run_autopilot(NOW, queue_dir=tmp_path, runner=runner)
+
+    assert ran == ["job-1"], "fingerprint moved -> one more try; unchanged -> none"
+    assert _read(tmp_path, yesterday)["job-1"]["revived_code"] == "fp-current"
+
+
+def test_the_fingerprint_moves_with_answers_and_adapter_code(tmp_path, monkeypatch):
+    """A new fact in answers.yaml is as much a changed wall as a code fix:
+    Sardine was unblocked by adding in_person_interview, not by any code.
+
+    Calls _compute_fingerprint directly: the module fixture stubs the public
+    revive_fingerprint so every OTHER test is deterministic."""
+    from cv_tailor import autopilot as ap
+    src = tmp_path / "src" / "cv_tailor"; (src / "portal").mkdir(parents=True)
+    (src / "screening.py").write_text("x = 1\n")
+    (src / "apply_policy.py").write_text("y = 1\n")
+    (src / "portal" / "ashby.py").write_text("z = 1\n")
+    answers = tmp_path / "answers.yaml"; answers.write_text("a: 1\n")
+
+    base = ap._compute_fingerprint(src_dir=src, answers_path=answers)
+    assert base == ap._compute_fingerprint(src_dir=src, answers_path=answers), "stable"
+    answers.write_text("a: 2\n")
+    after_answers = ap._compute_fingerprint(src_dir=src, answers_path=answers)
+    assert after_answers != base
+    (src / "portal" / "ashby.py").write_text("z = 2\n")
+    assert ap._compute_fingerprint(src_dir=src, answers_path=answers) != after_answers
 
 
 def test_reviving_drops_the_phantom_ledger_row(tmp_path, monkeypatch):

@@ -24,6 +24,7 @@ as a subprocess. APPLY_ARMED / APPLY_DAILY_CAP are enforced there, not here.
 """
 from __future__ import annotations
 
+import hashlib
 import os
 import re
 import subprocess
@@ -157,6 +158,40 @@ def _reload(scan_date: str, job_id: str, *, queue_dir=None) -> dict:
     return {"id": job_id, "status": "failed", "error": "entry vanished"}
 
 
+_FINGERPRINT_SRC = Path(__file__).resolve().parent          # src/cv_tailor
+_FINGERPRINT_ANSWERS = Path(__file__).resolve().parents[2] / "answers.yaml"
+
+
+def _compute_fingerprint(*, src_dir=None, answers_path=None) -> str:
+    """A short hash of everything that decides whether a park recurs: the
+    portal adapters, screening, apply_policy -- and answers.yaml, because a new
+    fact unblocks a job exactly as a code fix does (Sardine was unblocked by
+    adding in_person_interview, not by any code change).
+
+    Only the HASH is stored in the queue, never answer content. Unreadable
+    files are skipped rather than raising: a missing answers.yaml must not stop
+    the sweep."""
+    src = Path(src_dir) if src_dir is not None else _FINGERPRINT_SRC
+    ans = Path(answers_path) if answers_path is not None else _FINGERPRINT_ANSWERS
+    h = hashlib.sha256()
+    for f in [src / "screening.py", src / "apply_policy.py",
+              *sorted((src / "portal").glob("*.py"))]:
+        try:
+            h.update(f.name.encode()); h.update(f.read_bytes())
+        except OSError:
+            pass
+    try:
+        h.update(ans.read_bytes())
+    except OSError:
+        pass
+    return h.hexdigest()[:16]
+
+
+def revive_fingerprint(**kw) -> str:
+    """Public seam so tests can pin it; production computes it fresh."""
+    return _compute_fingerprint(**kw)
+
+
 def _sweep_revivable(now: datetime, *, queue_dir=None) -> list[tuple[str, dict]]:
     """Give a park that PROVES no submission one more attempt.
 
@@ -185,6 +220,7 @@ def _sweep_revivable(now: datetime, *, queue_dir=None) -> list[tuple[str, dict]]
     """
     window_start = (now - timedelta(days=EXPIRE_DAYS)).date().isoformat()
     revived: list[tuple[str, dict]] = []
+    fingerprint = revive_fingerprint()
     for scan_date, day_dir in _day_dirs(queue_dir):
         # Outside the window nothing would pick the entry up anyway, and
         # flipping it to pending would only lose the park reason at expiry.
@@ -221,7 +257,17 @@ def _sweep_revivable(now: datetime, *, queue_dir=None) -> list[tuple[str, dict]]
                 # so they get exactly one grandfather pass. Bounded and
                 # self-correcting: after it every entry carries the field and
                 # the same-wall rule below applies normally.
-                if previous is not None and previous == reason:
+                #
+                # ...and "same wall" also requires the wall itself to be
+                # unchanged. A FIX changes the wall: live ElevenLabs (score 8)
+                # failed its second try on the same Location question because
+                # that bug was not fixed yet, was then blocked for good, and
+                # minutes later its whole live form filled end to end. So a
+                # retry is also earned when the code or answers fingerprint
+                # moved. A stamp with no fingerprint gets one more try, bounded
+                # and self-correcting like the revived_for grandfather above.
+                same_wall = previous is not None and previous == reason
+                if same_wall and entry.get("revived_code") == fingerprint:
                     continue
 
             def _mut(e: dict) -> None:
@@ -229,6 +275,7 @@ def _sweep_revivable(now: datetime, *, queue_dir=None) -> list[tuple[str, dict]]
                 e["error"] = ""
                 e["revived_at"] = now.isoformat()
                 e["revived_for"] = reason
+                e["revived_code"] = fingerprint
 
             try:
                 fresh = update_entry(scan_date, entry["id"], _mut,
