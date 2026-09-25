@@ -64,6 +64,15 @@ async function handle(msg) {
         body: JSON.stringify({ date, id }),
       })).json();
     }
+    case "save": {
+      const answers = (Array.isArray(msg.answers) ? msg.answers : []).slice(0, 30)
+        .map((a) => ({ label: String(a.label || "").slice(0, 500), value: String(a.value || "").slice(0, 4000) }));
+      return (await api("/api/scout/ext/save-answers", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ answers }),
+      })).json();
+    }
     case "ping":
       return (await api("/api/scout/ext/lookup?url=")).json();
     default:

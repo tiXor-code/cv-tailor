@@ -21,3 +21,6 @@ venv/
 # OS
 .DS_Store
 answers.yaml.bak-*
+# Answers he typed into forms, saved via Scout Fill (personal)
+answers_saved.yaml
+.answers_saved.*

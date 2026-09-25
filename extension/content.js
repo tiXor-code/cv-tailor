@@ -80,12 +80,17 @@
     const btn = document.createElement("button");
     btn.type = "button";
     btn.textContent = "Fill this form";
-    box.append(title, line, status, list, btn);
+    const save = document.createElement("button");
+    save.type = "button";
+    save.hidden = true;
+    save.style.marginLeft = "6px";
+    box.append(title, line, status, list, btn, save);
     root.append(style, box);
     document.documentElement.append(host);
     return {
       host,
       btn,
+      save,
       status: (text) => { status.textContent = text; },
       needs: (labels) => {
         list.replaceChildren(...labels.map((l) => {
@@ -208,6 +213,23 @@
         } });
     }
     return fields;
+  }
+
+  // What he has put in a field (for saving his own answers).
+  function currentValue(f) {
+    const el = f.el;
+    if (f.kind === "select") return el.selectedIndex > 0 ? clean(el.options[el.selectedIndex].text) : "";
+    if (f.kind === "radio" || f.kind === "checkbox") {
+      if (el.tagName === "BUTTON") {
+        const on = [...(containerOf(el) || document).querySelectorAll("button")]
+          .find((b) => b.getAttribute("aria-pressed") === "true");
+        return on ? clean(on.innerText) : "";
+      }
+      const group = el.name ? [...document.querySelectorAll(`input[name="${CSS.escape(el.name)}"]`)] : [el];
+      return group.filter((g) => g.checked).map(optionText).join(", ");
+    }
+    if (f.kind === "consent") return "";
+    return clean(el.value);
   }
 
   // ------------------------------------------------------------ setters ----
@@ -359,6 +381,7 @@
         flag(f.el);
       }
     }
+    pending = fields.filter((f) => needs.includes(f.label.replace(/\s*\*\s*$/, "")));
     const cv = await attachCv(job);
     if (cv === false) needs.push("CV upload (download it from your Scout list)");
     panel.needs(needs);
@@ -370,6 +393,36 @@
     filled = true;
     panel.host.dataset.state = "filled"; // observable finish line (tests, and future tooling)
   }
+
+  // ---------------------------------------- saving what HE typed ----
+  // Outlined questions are the ones Scout could not answer. Once he fills
+  // them, offer to save his answers so no form ever asks him twice. On a
+  // confirmed submission they are saved anyway: that is what he sent.
+  let pending = [];
+  function typedAnswers() {
+    return pending
+      .filter((f) => f.kind !== "consent")
+      .map((f) => ({ label: f.label.slice(0, 500), value: currentValue(f).slice(0, 4000) }))
+      .filter((a) => a.value);
+  }
+  function refreshSaveButton() {
+    const n = typedAnswers().length;
+    panel.save.hidden = n === 0;
+    panel.save.textContent = `Save ${n} answer${n === 1 ? "" : "s"} for next time`;
+  }
+  async function saveTyped(quiet) {
+    const answers = typedAnswers();
+    if (!answers.length) return;
+    const res = await send({ type: "save", answers });
+    if (!quiet) panel.status(res.ok ? `Saved ${res.data.saved}. Scout will fill ${res.data.saved === 1 ? "it" : "them"} next time.` : `Could not save: ${res.error}`);
+    if (res.ok) {
+      pending = pending.filter((f) => !currentValue(f));
+      refreshSaveButton();
+    }
+  }
+  document.addEventListener("input", () => pending.length && refreshSaveButton(), true);
+  document.addEventListener("change", () => pending.length && setTimeout(refreshSaveButton, 50), true);
+  document.addEventListener("click", () => pending.length && setTimeout(refreshSaveButton, 50), true);
 
   // ------------------------------------------------- after HE submits ----
   function watchSubmission(job) {
@@ -385,6 +438,7 @@
       if (!armed || recorded) return;
       if (CONFIRM_RE.test(document.body ? document.body.innerText : "")) {
         recorded = true;
+        await saveTyped(true);
         const res = await send({ type: "applied", date: job.date, id: job.id });
         panel.status(res.ok ? "Submitted. Recorded as applied on your Scout list." : "Submitted. Tick it on your Scout list.");
         try { sessionStorage.removeItem(STORE_KEY); } catch {}
@@ -402,6 +456,7 @@
     panel = makePanel(job);
     panel.status(job.auto ? "Filling in a moment..." : "This job is on your Scout list.");
     panel.btn.addEventListener("click", () => fill(job));
+    panel.save.addEventListener("click", () => saveTyped(false));
     watchSubmission(job);
     if (job.auto) {
       await sleep(1200); // let single-page forms finish rendering

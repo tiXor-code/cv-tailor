@@ -59,6 +59,7 @@ class _Admin:
     def __init__(self, known_urls):
         self.known_urls = known_urls
         self.applied = []
+        self.saved = []
         self.questions = []
         self.tokens = []
 
@@ -95,6 +96,7 @@ class _Admin:
                 if self.path.startswith("/confirm.html"):
                     body = (b"<form id=f onsubmit=\"event.preventDefault();document.body.innerHTML="
                             b"'<h1>Thank you for applying!</h1>'\"><label for=n>Name</label><input id=n required>"
+                            b"<label for=np>What is your notice period?</label><input id=np required>"
                             b"<button type=submit>Submit application</button></form>")
                     self.send_response(200)
                     self.send_header("content-type", "text/html")
@@ -117,6 +119,9 @@ class _Admin:
                     answers = [{"label": q["label"], "value": _answer_for(q),
                                 "needs_you": _answer_for(q) is None and q["required"]} for q in body["questions"]]
                     return self._json(200, {"ok": True, "cover_letter": "I build fixture agents.", "answers": answers})
+                if self.path == "/api/scout/ext/save-answers":
+                    admin.saved.extend(body["answers"])
+                    return self._json(200, {"saved": len(body["answers"])})
                 if self.path == "/api/scout/ext/applied":
                     admin.applied.append(body)
                     return self._json(200, {"ok": True, "status": "applied_by_hand"})
@@ -257,6 +262,7 @@ def test_applied_is_recorded_only_after_he_submits_and_the_site_confirms(tmp_pat
         page = _open(ctx, f"{base}/confirm.html#scout-fill=2026-09-25~job-1")
         _wait_filled(page)
         assert admin.applied == []            # filled, not submitted, nothing recorded
+        page.fill("#np", "Fixture weeks")      # the one question only he can answer
         page.click("button[type=submit]")      # Teodor presses Submit
         page.wait_for_timeout(3000)
         assert admin.applied == [{"date": "2026-09-25", "id": "job-1"}]
@@ -272,3 +278,19 @@ def test_a_confirmation_text_without_his_submit_is_not_recorded(tmp_path):
         page.evaluate("() => document.body.append('Thank you for applying!')")
         page.wait_for_timeout(3000)
         assert admin.applied == []
+
+
+def test_what_he_typed_is_saved_when_he_submits(tmp_path):
+    """The notice period is unanswerable: he types it, submits, the site
+    confirms -- and his answer is saved so no form asks him again."""
+    admin = _Admin([])
+    with admin.serve() as base, _browser(tmp_path, base) as ctx:
+        page = _open(ctx, f"{base}/confirm.html#scout-fill=2026-09-25~job-1")
+        _wait_filled(page)
+        assert page.input_value("#np") == ""
+        page.fill("#np", "Four fixture weeks")
+        assert admin.saved == []                  # nothing saved behind his back
+        page.click("button[type=submit]")
+        page.wait_for_timeout(3000)
+        assert admin.saved == [{"label": "What is your notice period?", "value": "Four fixture weeks"}]
+        assert admin.applied == [{"date": "2026-09-25", "id": "job-1"}]

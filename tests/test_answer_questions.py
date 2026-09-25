@@ -81,9 +81,22 @@ def test_untrusted_input_is_capped_and_validated(mod, monkeypatch, tmp_path):
     rc, _ = _run(mod, {"date": "../etc", "id": "job-1", "questions": []}, monkeypatch)
     assert rc == 2
     rc, out = _run(mod, {"date": "2026-09-25", "id": "job-1", "questions": [
-        {"label": "x" * 5000, "kind": "text", "required": False}] * 200}, monkeypatch)
+        {"label": "x" * 6000, "kind": "text", "required": False}] * 200}, monkeypatch)
     assert rc == 0 and len(out["answers"]) == mod.MAX_QUESTIONS
     assert all(len(x["label"]) <= mod.MAX_LABEL for x in out["answers"])
     rc, _ = _run(mod, {"date": "2026-09-25", "id": "job-1", "questions": [
         {"label": "Q", "kind": "<script>", "required": True}]}, monkeypatch)
     assert rc == 2
+
+
+def test_save_answers_script_stores_and_rejects_bad_input(monkeypatch, tmp_path):
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("save_answers", ROOT / "scripts" / "save_answers.py")
+    m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+    target = tmp_path / "answers.yaml"
+    monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps({"answers": [{"label": "Q?", "value": "A."}]})))
+    out = io.StringIO(); monkeypatch.setattr(sys, "stdout", out)
+    assert m.main(path=target) == 0 and json.loads(out.getvalue()) == {"saved": 1}
+    assert "A." in (tmp_path / "answers_saved.yaml").read_text()
+    monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps({"answers": "nope"})))
+    assert m.main(path=target) == 2
