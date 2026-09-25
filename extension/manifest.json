@@ -1,0 +1,26 @@
+{
+  "manifest_version": 3,
+  "name": "Scout Fill",
+  "version": "0.1.0",
+  "description": "Fills job applications from your Scout list with Scout's answers and your tailored CV. You review and press Submit.",
+  "permissions": ["storage"],
+  "host_permissions": ["https://admin.teodorlutoiu.com/*"],
+  "background": { "service_worker": "background.js" },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://jobs.ashbyhq.com/*",
+        "https://boards.greenhouse.io/*",
+        "https://job-boards.greenhouse.io/*",
+        "https://job-boards.eu.greenhouse.io/*",
+        "https://jobs.lever.co/*",
+        "https://jobs.eu.lever.co/*",
+        "https://apply.workable.com/*"
+      ],
+      "js": ["content.js"],
+      "run_at": "document_idle",
+      "all_frames": true
+    }
+  ],
+  "options_page": "options.html"
+}

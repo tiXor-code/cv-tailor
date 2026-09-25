@@ -1,0 +1,20 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Scout Fill settings</title>
+<style>
+  body { font: 14px/1.5 -apple-system, "Segoe UI", Roboto, sans-serif; max-width: 520px; margin: 32px auto; padding: 0 16px; color: #18211f; }
+  label { display: block; font-weight: 600; margin-top: 16px; }
+  input { width: 100%; box-sizing: border-box; padding: 8px; font: inherit; border: 1px solid #c9d2cf; border-radius: 6px; }
+  button { margin-top: 16px; padding: 8px 14px; font: inherit; border-radius: 6px; border: 1px solid #0f6b5c; background: #0f6b5c; color: #fff; cursor: pointer; }
+  #status { margin-top: 12px; }
+  small { color: #5b6865; }
+</style>
+<h1>Scout Fill</h1>
+<p>Paste the key from <b>admin.teodorlutoiu.com/scout/extension</b>. It stays in this browser only.</p>
+<label for="token">Extension key</label>
+<input id="token" type="password" autocomplete="off">
+<label for="adminBase">Admin address <small>(leave as is)</small></label>
+<input id="adminBase" type="url" placeholder="https://admin.teodorlutoiu.com">
+<button id="save" type="button">Save and test</button>
+<p id="status" role="status"></p>
+<script src="options.js"></script>
