@@ -14,6 +14,12 @@ sources:
   - kind: ashby
     slug: patrianna
     name: Patrianna
+  # n8n (2026-09-25): Ashby board, 35 open roles incl. Forward Deployed
+  # Engineer EMEA; n8n is on his CV. Found while its DevX role reached Scout
+  # only through startup.jobs, which hides the real application link.
+  - kind: ashby
+    slug: n8n
+    name: n8n
   # Curated EU-startup ATS list (replaces the greenhouse:anthropic + lever:lever
   # placeholders -- those were smoke-test entries, not real targets).
   - kind: greenhouse
