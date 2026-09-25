@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import json
 import os
+from concurrent.futures import ThreadPoolExecutor
 import re
 import sys
 from pathlib import Path
@@ -107,22 +108,25 @@ def main(argv=None, *, client=None) -> int:
         except Exception as exc:  # noqa: BLE001 -- deterministic tier still answers
             print(f"llm unavailable ({type(exc).__name__}); deterministic answers only", file=sys.stderr)
 
-    out = []
-    for q in questions:
+    def one(q: Question) -> dict:
         if q.kind == "consent":
             ok = consent_is_application_only(q.options[0] if q.options else q.label)
-            out.append({"label": q.label, "value": "yes" if ok else None,
-                        "source": "policy:consent-application-only" if ok else "",
-                        "needs_you": not ok and q.required})
-            continue
+            return {"label": q.label, "value": "yes" if ok else None,
+                    "source": "policy:consent-application-only" if ok else "",
+                    "needs_you": not ok and q.required}
         try:
             ans = answer_question(q, profile, answers, client=client, context=context)
         except Exception as exc:  # noqa: BLE001 -- one bad question must not sink the form
             print(f"answer failed for {q.label[:60]!r}: {type(exc).__name__}", file=sys.stderr)
             ans = None
         value = ans.value if ans is not None and ans.value and ans.grounded_in != "policy:skip" else None
-        out.append({"label": q.label, "value": value, "source": ans.grounded_in if value else "",
-                    "needs_you": value is None and q.required})
+        return {"label": q.label, "value": value, "source": ans.grounded_in if value else "",
+                "needs_you": value is None and q.required}
+
+    # Composed answers cost one LLM call each; in parallel so a long form fits
+    # admin's 60s request budget. Order is preserved (the extension zips by index).
+    with ThreadPoolExecutor(max_workers=6) as pool:
+        out = list(pool.map(one, questions))
 
     json.dump({"ok": True, "contact": _contact(profile), "cover_letter": context.get("cover_letter", ""),
                "company": entry.get("company", ""), "title": entry.get("title", ""),
