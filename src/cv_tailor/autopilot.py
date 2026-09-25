@@ -486,9 +486,9 @@ def build_digest(report: AutopilotReport) -> str | None:
              lambda e: f" [{e.get('apply_method', '?')}, {e.get('status')}]")
     _section("Parked for you", report.parked,
              lambda e: f" ({e.get('status')}: {e.get('error') or 'cover warnings'})")
-    _section("New on your LinkedIn list (apply, then tick it)", report.handed_off,
+    _section("New on your apply-yourself list (apply, then tick it)", report.handed_off,
              lambda e: f" [{e.get('score')}/10]")
-    _section("Waiting for tomorrow's LinkedIn slots", report.deferred,
+    _section("Waiting for tomorrow's list slots", report.deferred,
              lambda e: f" [{e.get('score')}/10]")
     _section("Failed", report.failed, lambda e: f": {e.get('error') or '?'}")
     _section("Queued for review", report.queued_new,

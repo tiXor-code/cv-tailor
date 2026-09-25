@@ -56,3 +56,37 @@ def test_slash_joined_no_space_company_domain_wins():
 def test_or_without_trailing_space_does_not_glue():
     # 'or' with no space after it must NOT be treated as a joiner
     assert detect_apply_channel("Send your CV to jobs@acme.dev orbit@space.dev is unrelated") == ("email", "jobs@acme.dev")
+
+
+# --- Hacker News phrasings (2026-09-25): 146 of 256 September posts took
+# applications by email; the detector caught 8. ---
+
+from cv_tailor.apply_detect import detect_apply_channel as _d
+
+
+def test_hn_style_email_instructions_are_detected():
+    for text, want in (
+        ("Great team. Contact: ada@fixture.example", "ada@fixture.example"),
+        ("No visa sponsorship. To apply: hiring@fixture.example Subject: HN Hiring", "hiring@fixture.example"),
+        ("Interested? email jobs@fixture.example with your GitHub", "jobs@fixture.example"),
+        ("To apply, contact ada@fixture.example with the subject line HN", "ada@fixture.example"),
+        ("How to apply: Email ada@fixture.example with your CV", "ada@fixture.example"),
+    ):
+        assert _d(text) == ("email", want), text
+
+
+def test_obfuscated_addresses_are_decoded():
+    assert _d("Apply: jobs [at] fixture [dot] example") == ("email", "jobs@fixture.example")
+    assert _d("Email ada (at) fixture (dot) example") == ("email", "ada@fixture.example")
+    assert _d("Contact: ada at fixture dot example") == ("email", "ada@fixture.example")
+
+
+def test_non_application_addresses_stay_ignored():
+    assert _d("Questions about privacy? Contact: privacy@fixture.example") == ("portal", None)
+    assert _d("We ship at scale and our docs live at docs dot fixture.") == ("portal", None)
+
+
+def test_email_me_at_phrasings_are_detected():
+    assert _d("If you're interested, email me at ada+hn@fixture.example") == ("email", "ada+hn@fixture.example")
+    assert _d("Or, email me with a resume at ada@fixture.example, and I'll reply") == ("email", "ada@fixture.example")
+    assert _d("Apply with what you've built: ada@fixture.example") == ("email", "ada@fixture.example")

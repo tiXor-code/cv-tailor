@@ -44,6 +44,21 @@ def _job_id(job) -> str:
     return hashlib.sha1(basis.encode("utf-8")).hexdigest()[:16]
 
 
+_SUBJECT_RE = re.compile(
+    r"subject(?:\s+line)?\s*(?::|of|should\s+be|reading)?\s*[\"“']([^\"”'\n]{2,80})[\"”']|"
+    r"subject(?:\s+line)?\s*:\s*([^\n.;,()]{2,60}?)(?=\s*(?:$|[.;,()\n]|\s+(?:and|with|to|if)\b))",
+    re.I)
+
+
+def requested_subject(description: str) -> str | None:
+    """The email subject a posting asks applicants to use ("Subject: HN
+    Hiring", 'with the subject line "HN - Founding Engineer"'), or None."""
+    m = _SUBJECT_RE.search(description or "")
+    if not m:
+        return None
+    return (m.group(1) or m.group(2) or "").strip() or None
+
+
 def _to_entry(item) -> dict:
     job = item["job"]
     method, target = detect_apply_channel(
@@ -71,6 +86,9 @@ def _to_entry(item) -> dict:
         "apply_target": target if method == "email" else job.url,
         "status": "pending",
         "decided_at": None,
+        # Only meaningful for the email channel; sender.py uses it verbatim.
+        "email_subject": requested_subject(getattr(job, "description", "") or "")
+        if method == "email" else None,
     }
 
 

@@ -534,7 +534,10 @@ def test_portal_armed_needs_human_presubmit_rolls_back_ledger(mod, monkeypatch, 
 
     assert rc == 0
     entry = _read_entry(tmp_path, "2026-07-10", "job-1")
-    assert entry["status"] == "needs_human" and entry["error"] == reason
+    # Since 2026-09-25 a provable wall goes on his apply-yourself list;
+    # the ledger rollback below is the invariant this test guards.
+    want = "handed_off" if mod._handoff_reason(reason) else "needs_human"
+    assert entry["status"] == want and entry["error"] == reason
     conn = connect(tmp_path / "jobs.db")
     # the row is gone: the job can be retried, and a same-norm_key sibling
     # (regional variant of the same role) is no longer blocked as "duplicate"
@@ -1457,16 +1460,73 @@ def test_an_unarmed_run_never_messages_him(mod, monkeypatch, tmp_path):
     assert _read_entry(tmp_path, "2026-09-24", "job-1")["status"] != "handed_off"
 
 
-def test_a_non_linkedin_job_with_no_adapter_is_unchanged(mod, monkeypatch, tmp_path):
-    """The handoff is LinkedIn-only; every other no-adapter park behaves as before."""
+def _walled(mod, monkeypatch, tmp_path, reason, **entry):
+    from cv_tailor.portal import PortalResult
+    _write_queue(tmp_path, "2026-09-25", _linkedin_entry(
+        source="ashby", url="https://jobs.ashbyhq.com/fixture/1",
+        apply_target="https://jobs.ashbyhq.com/fixture/1", **entry))
+    portal, texts, docs = _handoff_setup(mod, monkeypatch, tmp_path)
+    monkeypatch.setattr(mod, "resolve_ats_url", lambda e: None)
+    portal._results = [PortalResult(status="needs_human", reason=reason, evidence_dir="")]
+    mod.main(["2026-09-25", "job-1"])
+    return _read_entry(tmp_path, "2026-09-25", "job-1"), portal, texts
+
+
+# Teodor 2026-09-25 ("go for both a and b"): a job Scout provably could not
+# submit goes on his apply-yourself list with everything ready, instead of a
+# needs-human park he has to chase.
+
+def test_a_spam_flagged_submit_goes_on_his_list(mod, monkeypatch, tmp_path):
+    entry, portal, texts = _walled(mod, monkeypatch, tmp_path,
+                                   "submit-rejected: the portal explicitly refused the submission")
+    assert entry["status"] == "handed_off"
+    assert entry.get("handed_off_at") and entry.get("answer_sheet")
+    assert "spam" in entry["handoff_reason"].lower()
+    assert not mod.own_application_recorded(mod.connect(tmp_path / "jobs.db"), "job-1")
+    assert texts == [], "the digest is the one message; no per-job Telegram"
+
+
+def test_captcha_and_no_adapter_go_on_his_list(mod, monkeypatch, tmp_path):
+    entry, _, _ = _walled(mod, monkeypatch, tmp_path, "captcha")
+    assert entry["status"] == "handed_off" and "captcha" in entry["handoff_reason"].lower()
+
+
+def test_a_question_only_he_can_answer_goes_on_his_list_naming_it(mod, monkeypatch, tmp_path):
+    entry, _, _ = _walled(mod, monkeypatch, tmp_path,
+                          "unanswerable-required:Have you shipped a fixture to production?")
+    assert entry["status"] == "handed_off"
+    assert "Have you shipped a fixture to production?" in entry["handoff_reason"]
+
+
+@pytest.mark.parametrize("reason", ["no-confirmation: submission may have gone through", "timeout"])
+def test_an_ambiguous_outcome_is_never_handed_off(mod, monkeypatch, tmp_path, reason):
+    """no-confirmation / timeout may have submitted: handing it off could make
+    him apply twice. It stays a needs-human park."""
+    entry, _, _ = _walled(mod, monkeypatch, tmp_path, reason)
+    assert entry["status"] == "needs_human", reason
+
+
+def test_a_non_linkedin_no_adapter_job_goes_on_his_list(mod, monkeypatch, tmp_path):
     from cv_tailor.portal import PortalResult
     _write_queue(tmp_path, "2026-09-24", _linkedin_entry(
         source="arbeitnow", url="https://www.arbeitnow.com/jobs/x",
         apply_target="https://www.arbeitnow.com/jobs/x"))
     portal, _, _ = _handoff_setup(mod, monkeypatch, tmp_path)
     portal._results = [PortalResult(status="needs_human", reason="no-adapter", evidence_dir="")]
-
     mod.main(["2026-09-24", "job-1"])
+    entry = _read_entry(tmp_path, "2026-09-24", "job-1")
+    assert entry["status"] == "handed_off"
+    assert "no form" in entry["handoff_reason"].lower()
 
-    assert len(portal.calls) == 1
-    assert _read_entry(tmp_path, "2026-09-24", "job-1")["status"] != "handed_off"
+
+def test_a_refused_job_skips_the_daily_cap_it_must_never_be_retried(mod, monkeypatch, tmp_path):
+    """Over the cap a LinkedIn job goes back to pending, which re-runs the
+    automation tomorrow. For a spam-refused job that would resubmit into the
+    same filter, so a refusal always lands on the list."""
+    from datetime import datetime, timezone
+    now = datetime.now(timezone.utc).isoformat()
+    other = tmp_path / "2026-09-24"; other.mkdir(parents=True)
+    (other / "jobs.json").write_text(json.dumps(
+        [{"id": f"h{i}", "status": "handed_off", "handed_off_at": now} for i in range(10)]))
+    entry, _, _ = _walled(mod, monkeypatch, tmp_path, "submit-rejected: refused")
+    assert entry["status"] == "handed_off"

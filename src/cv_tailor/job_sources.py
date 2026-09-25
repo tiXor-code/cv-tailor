@@ -8,6 +8,7 @@ entry -- and each no-ops with a warning when its key is unset, so an
 unconfigured source can never take a budget slot or reach the network."""
 from __future__ import annotations
 import html
+import html as _html  # _strip_html's parameter is named `html`
 import os
 import re
 import sys
@@ -51,6 +52,11 @@ def _strip_html(html: str) -> str:
     text = HTML_TAG_RE.sub(" ", html or "")
     for k, v in HTML_ENTITIES.items():
         text = text.replace(k, v)
+    # Numeric and named entities beyond the map above (&#x2F;, &#x27;, ...):
+    # HN ships them in every post, and they broke the scorer's and the email
+    # detector's view of the text. After the tag strip, so a decoded "<" is
+    # left as plain text rather than parsed as a tag.
+    text = _html.unescape(text)
     return re.sub(r"\s+", " ", text).strip()
 
 

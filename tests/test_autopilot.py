@@ -470,8 +470,8 @@ def test_a_handoff_is_its_own_digest_section_not_a_failure(tmp_path):
     assert [e["id"] for _, e in report.deferred] == ["job-2"]
     assert report.failed == []
     text = build_digest(report)
-    assert "New on your LinkedIn list (apply, then tick it) (1)" in text
-    assert "Waiting for tomorrow's LinkedIn slots (1)" in text
+    assert "New on your apply-yourself list (apply, then tick it) (1)" in text
+    assert "Waiting for tomorrow's list slots (1)" in text
 
 
 def test_reviving_drops_the_phantom_ledger_row(tmp_path, monkeypatch):

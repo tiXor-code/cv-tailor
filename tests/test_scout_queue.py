@@ -246,3 +246,11 @@ def test_second_same_day_scan_merges_instead_of_clobbering(tmp_path):
     # descriptions sidecar keeps both
     desc = json.loads((tmp_path / "2026-06-24" / "descriptions.json").read_text())
     assert set(desc) == set(merged)
+
+
+def test_a_requested_email_subject_is_captured_at_queue_time():
+    from cv_tailor.scout_queue import requested_subject
+    assert requested_subject("To apply: jobs@x.example Subject: HN Hiring") == "HN Hiring"
+    assert requested_subject('email us with the subject line "HN - Founding Engineer" please') == \
+        "HN - Founding Engineer"
+    assert requested_subject("Email jobs@x.example with your CV.") is None

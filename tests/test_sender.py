@@ -276,3 +276,13 @@ def test_missing_apply_target_blocks_with_reason(tmp_path, monkeypatch):
     assert result.status == "blocked"
     assert "apply_target" in result.reason
     assert fake.sendmail_calls == []
+
+
+def test_a_subject_line_the_posting_asks_for_is_used():
+    """HN posts often say 'Subject: HN Hiring' -- ignoring it lands the
+    application outside the filter they read."""
+    from cv_tailor.sender import _email_subject
+    assert _email_subject({"title": "AI Engineer", "email_subject": "HN Hiring"}) == \
+        "HN Hiring - AI Engineer - Teodor-Cristian Lutoiu"
+    assert _email_subject({"title": "AI Engineer"}) == \
+        "Application for AI Engineer - Teodor-Cristian Lutoiu"

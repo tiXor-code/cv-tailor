@@ -1372,3 +1372,10 @@ def test_fetch_all_dispatches_a_linkedin_source(monkeypatch):
     assert seen["query"] == "AI engineer remote"
     assert seen["country"] == "gb"
     assert [j.source for j in out] == ["linkedin"]
+
+
+def test_strip_html_decodes_numeric_entities():
+    """HN (and other boards) ship &#x2F; and &#x27;; the fixed entity map left
+    them in every description the scorer and the email detector read."""
+    assert job_sources._strip_html("Denver&#x2F;Boulder &amp; it&#x27;s &#39;fine&#39;") == \
+        "Denver/Boulder & it's 'fine'"

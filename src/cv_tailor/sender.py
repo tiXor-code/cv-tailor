@@ -56,11 +56,21 @@ def _signature_block(contact: dict) -> str:
     return "\n".join(str(contact[field]) for field in SIGNATURE_FIELDS if contact.get(field))
 
 
+def _email_subject(entry: dict) -> str:
+    """The posting's requested subject when it named one (HN: "Subject: HN
+    Hiring"), with the role appended so a shared inbox can still sort it."""
+    title = entry.get("title", "")
+    requested = (entry.get("email_subject") or "").strip()
+    if requested:
+        return f"{requested} - {title} - Teodor-Cristian Lutoiu"
+    return f"Application for {title} - Teodor-Cristian Lutoiu"
+
+
 def _compose_message(*, entry: dict, pkg_dir: Path, profile: dict,
                       from_addr: str, recipient: str, preview: bool) -> MIMEMultipart:
     title = entry.get("title", "")
     company = entry.get("company", "")
-    base_subject = f"Application for {title} - Teodor-Cristian Lutoiu"
+    base_subject = _email_subject(entry)
     subject = f"[PREVIEW] {base_subject}" if preview else base_subject
 
     cover_text = (pkg_dir / "cover_letter.md").read_text(encoding="utf-8").strip()

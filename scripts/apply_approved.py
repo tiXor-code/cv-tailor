@@ -200,10 +200,26 @@ def _handoff_linkedin(args, entry: dict, meta: dict, profile: dict, answers: dic
 
     update_entry(args.scan_date, args.job_id, _status_mut(
         "handed_off", handed_off_at=datetime.now(timezone.utc).isoformat(),
+        handoff_reason="LinkedIn: apply with Easy Apply",
         answer_sheet=linkedin_handoff.answer_sheet(profile, answers)))
     print(f"linkedin handoff: on his list ({entry.get('company')} / {entry.get('title')})",
           file=sys.stderr)
     return 0
+
+
+def _handoff_reason(reason) -> str | None:
+    """Plain-language reason for his list, or None when the outcome is not a
+    provable no-submission wall."""
+    r = str(reason or "")
+    if r.startswith("submit-rejected"):
+        return "The application site's spam filter refused Scout's browser"
+    if r.startswith(("captcha", "login-required")):
+        return "A captcha or login wall stopped Scout"
+    if r.startswith(("no-adapter", "missing-apply-target")):
+        return "No form Scout can fill on this site"
+    if r.startswith("unanswerable-required:"):
+        return "Needs your answer: " + r.split(":", 1)[1].strip()
+    return None
 
 
 def _status_mut(status: str, *, error: str | None = None, **extra):
@@ -436,6 +452,28 @@ def _handle_portal(args, entry: dict, meta: dict) -> int:
         # The set itself lives at module scope so the invariant is testable.
         if not own_row_skip and _proves_no_submission(result.reason):
             delete_application(conn, job_id=job_id)
+
+        # Teodor 2026-09-25: a wall that PROVES nothing was sent goes on his
+        # apply-yourself list (admin /scout) with everything ready, instead of
+        # a park he has to chase. Ambiguous outcomes (timeout, no-confirmation)
+        # never do: they may have submitted.
+        why = _handoff_reason(result.reason)
+        if why:
+            # Only a no-adapter job may wait for tomorrow's slot: re-running it
+            # submits nothing. A refused/captcha'd job must never re-run, so
+            # it lands on the list regardless of the cap.
+            retry_safe = str(result.reason).startswith(("no-adapter", "missing-apply-target"))
+            if retry_safe and (linkedin_handoff.handoffs_on(linkedin_handoff.today())
+                               >= linkedin_handoff.daily_cap()):
+                update_entry(args.scan_date, args.job_id, _status_mut("pending"))
+                return 0
+            update_entry(args.scan_date, args.job_id, _status_mut(
+                "handed_off", error=result.reason,
+                handed_off_at=datetime.now(timezone.utc).isoformat(),
+                handoff_reason=why, evidence_dir=result.evidence_dir,
+                answer_sheet=linkedin_handoff.answer_sheet(profile, answers)))
+            print(f"portal wall -> his list: {why}", file=sys.stderr)
+            return 0
 
         def _needs_human(e: dict) -> None:
             e["status"] = "needs_human"
