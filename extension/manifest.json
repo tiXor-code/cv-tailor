@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "Scout Fill",
-  "version": "0.2.0",
-  "description": "Fills job applications from your Scout list with Scout's answers and your tailored CV. You review and press Submit.",
+  "version": "0.3.0",
+  "description": "Fills job applications (and LinkedIn Easy Apply steps) with Scout's answers and your tailored CV. You review and press Submit.",
   "permissions": [
     "storage"
   ],
@@ -21,7 +21,8 @@
         "https://job-boards.eu.greenhouse.io/*",
         "https://jobs.lever.co/*",
         "https://jobs.eu.lever.co/*",
-        "https://apply.workable.com/*"
+        "https://apply.workable.com/*",
+        "https://www.linkedin.com/*"
       ],
       "js": [
         "content.js"

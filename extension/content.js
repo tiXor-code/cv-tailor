@@ -1,6 +1,7 @@
 // Scout Fill -- content script (Teodor, 2026-09-25).
 //
-// On a job application form from his Scout list: find every field, ask Scout
+// On a job application form from his Scout list -- or inside LinkedIn's Easy
+// Apply window on any job, after he clicks Fill -- find every field, ask Scout
 // (via the background worker -> admin -> the mini) for its answers, fill them,
 // attach the tailored CV, and highlight whatever only he can answer.
 //
@@ -19,6 +20,7 @@
   const CONFIRM_RE =
     /(application (has been |was )?(submitted|received|sent)|thank(s| you) for (applying|your application|submitting)|we(?:'|’)ve received your application|your application is (in|complete))/i;
   const SKIP_TYPES = new Set(["hidden", "submit", "button", "reset", "password", "image", "file"]);
+  const LINKEDIN = /(^|\.)linkedin\.com$/.test(location.hostname);
 
   const send = (msg) =>
     new Promise((resolve) => {
@@ -51,7 +53,7 @@
 
   // -------------------------------------------------------------- panel ----
   let panel = null;
-  function makePanel(job) {
+  function makePanel(job, { line: lineText, button: buttonText } = {}) {
     const host = document.createElement("div");
     host.id = "scout-fill-panel";
     host.style.cssText = "position:fixed;right:16px;bottom:16px;z-index:2147483647;";
@@ -73,24 +75,30 @@
     title.textContent = "Scout";
     const line = document.createElement("div");
     line.className = "muted";
-    line.textContent = job.company ? `${job.company} - ${job.title || ""}` : "Job from your Scout list";
+    line.textContent = lineText || (job && job.company ? `${job.company} - ${job.title || ""}` : "Job from your Scout list");
     const status = document.createElement("div");
     status.setAttribute("role", "status");
     const list = document.createElement("ul");
     const btn = document.createElement("button");
     btn.type = "button";
-    btn.textContent = "Fill this form";
+    btn.textContent = buttonText || "Fill this form";
     const save = document.createElement("button");
     save.type = "button";
     save.hidden = true;
     save.style.marginLeft = "6px";
-    box.append(title, line, status, list, btn, save);
+    const report = document.createElement("button");
+    report.type = "button";
+    report.textContent = "Send this form's layout to Scout";
+    report.style.cssText = "display:block;background:#fff;color:#0f6b5c;font-weight:500";
+    report.hidden = true;
+    box.append(title, line, status, list, btn, save, report);
     root.append(style, box);
     document.documentElement.append(host);
     return {
       host,
       btn,
       save,
+      report,
       status: (text) => { status.textContent = text; },
       needs: (labels) => {
         list.replaceChildren(...labels.map((l) => {
@@ -147,10 +155,10 @@
   }
 
   // Each field: {kind, label, required, options, set(value) -> Promise<bool>, el}
-  function scan() {
+  function scan(root = document) {
     const fields = [];
     const seenGroups = new Set();
-    const controls = document.querySelectorAll("input, textarea, select");
+    const controls = root.querySelectorAll("input, textarea, select");
     for (const el of controls) {
       const type = (el.getAttribute("type") || "text").toLowerCase();
       if (el.tagName === "INPUT" && SKIP_TYPES.has(type)) continue;
@@ -160,7 +168,7 @@
         if (seenGroups.has(key)) continue;
         seenGroups.add(key);
         const group = el.name
-          ? [...document.querySelectorAll(`input[type="${type}"][name="${CSS.escape(el.name)}"]`)]
+          ? [...root.querySelectorAll(`input[type="${type}"][name="${CSS.escape(el.name)}"]`)]
           : [el];
         const box = containerOf(el);
         // Ashby's Yes/No control: two buttons over a hidden, unnamed checkbox
@@ -199,7 +207,7 @@
       }
     }
     // Ashby-style Yes/No toggle buttons with no native radio underneath.
-    for (const box of document.querySelectorAll(".ashby-application-form-field-entry, fieldset, [class*='question']")) {
+    for (const box of root.querySelectorAll(".ashby-application-form-field-entry, fieldset, [class*='question']")) {
       const buttons = [...box.querySelectorAll("button")].filter((b) => /^(yes|no)$/i.test(clean(b.innerText)));
       if (buttons.length !== 2 || box.querySelector("input[type=radio]")) continue;
       const lbl = clean((box.querySelector("label, legend, [class*='label']") || {}).innerText);
@@ -310,8 +318,9 @@
     return false; // typed, but nothing to pick: he confirms it
   }
 
-  async function attachCv(job) {
-    const inputs = [...document.querySelectorAll("input[type=file]")];
+  async function attachCv(job, root = document) {
+    if (!job) return null; // a job not on his list has no tailored CV
+    const inputs = [...root.querySelectorAll("input[type=file]")];
     const target = inputs.find((i) => /resume|cv|curriculum/i.test(`${i.id} ${i.name} ${labelOf(i)}`)) || inputs[0];
     if (!target) return null;
     const res = await send({ type: "cv", date: job.date, id: job.id });
@@ -334,11 +343,11 @@
 
   // --------------------------------------------------------------- fill ----
   let filled = false;
-  async function fill(job) {
+  async function fill(job, root = document) {
     panel.btn.disabled = true;
     panel.status("Reading the form...");
-    let fields = scan();
-    if (!fields.length) {
+    let fields = scan(root);
+    if (!fields.length && root === document) {
       // Ashby lands on the job overview; the form is behind an "Application"
       // tab. Opening a tab only switches the view -- it never submits.
       const tab = [...document.querySelectorAll("[role=tab], a, button")]
@@ -350,13 +359,14 @@
       }
     }
     if (!fields.length) {
-      panel.status("No form found on this page yet. Open the application form, then press Fill.");
+      panel.status(LINKEDIN ? "Nothing to fill on this step. Press Next." : "No form found on this page yet. Open the application form, then press Fill.");
       panel.btn.disabled = false;
+      panel.report.hidden = false;
       return;
     }
     panel.status(`Asking Scout about ${fields.length} fields...`);
     const res = await send({
-      type: "answer", date: job.date, id: job.id,
+      type: "answer", ...(job ? { date: job.date, id: job.id } : {}),
       questions: fields.map((f) => ({ label: f.label.slice(0, 500), kind: f.kind, required: f.required, options: f.options.slice(0, 100) })),
     });
     if (!res.ok) {
@@ -381,14 +391,16 @@
         flag(f.el);
       }
     }
-    pending = fields.filter((f) => needs.includes(f.label.replace(/\s*\*\s*$/, "")));
-    const cv = await attachCv(job);
+    pending = pending.concat(fields.filter((f) => needs.includes(f.label.replace(/\s*\*\s*$/, ""))));
+    const cv = await attachCv(job, root);
     if (cv === false) needs.push("CV upload (download it from your Scout list)");
     panel.needs(needs);
+    const next = LINKEDIN ? "Next (or Submit on the last step)" : "Submit";
     panel.status(needs.length
-      ? `Filled ${done} of ${fields.length}${cv ? " + CV" : ""}. ${needs.length} need you (outlined). Then press Submit.`
-      : `Filled ${done} of ${fields.length}${cv ? " + CV" : ""}. Review, then press Submit.`);
-    panel.btn.textContent = "Fill again";
+      ? `Filled ${done} of ${fields.length}${cv ? " + CV" : ""}. ${needs.length} need you (outlined). Then press ${next}.`
+      : `Filled ${done} of ${fields.length}${cv ? " + CV" : ""}. Review, then press ${next}.`);
+    panel.report.hidden = !(needs.length || done < fields.length);
+    panel.btn.textContent = LINKEDIN ? "Fill this step again" : "Fill again";
     panel.btn.disabled = false;
     filled = true;
     panel.host.dataset.state = "filled"; // observable finish line (tests, and future tooling)
@@ -399,13 +411,23 @@
   // them, offer to save his answers so no form ever asks him twice. On a
   // confirmed submission they are saved anyway: that is what he sent.
   let pending = [];
+  // Remembered as he types: a multi-step form (LinkedIn) deletes a step's
+  // fields when he presses Next, long before the submission it belongs to.
+  const lastTyped = new Map();
+  function rememberTyped() {
+    for (const f of pending) {
+      if (f.kind === "consent" || !f.el.isConnected) continue;
+      const value = currentValue(f).slice(0, 4000);
+      if (value) lastTyped.set(f.label.slice(0, 500), value);
+      else lastTyped.delete(f.label.slice(0, 500));
+    }
+  }
   function typedAnswers() {
-    return pending
-      .filter((f) => f.kind !== "consent")
-      .map((f) => ({ label: f.label.slice(0, 500), value: currentValue(f).slice(0, 4000) }))
-      .filter((a) => a.value);
+    rememberTyped();
+    return [...lastTyped].map(([label, value]) => ({ label, value }));
   }
   function refreshSaveButton() {
+    if (!panel) return;
     const n = typedAnswers().length;
     panel.save.hidden = n === 0;
     panel.save.textContent = `Save ${n} answer${n === 1 ? "" : "s"} for next time`;
@@ -414,18 +436,40 @@
     const answers = typedAnswers();
     if (!answers.length) return;
     const res = await send({ type: "save", answers });
-    if (!quiet) panel.status(res.ok ? `Saved ${res.data.saved}. Scout will fill ${res.data.saved === 1 ? "it" : "them"} next time.` : `Could not save: ${res.error}`);
+    if (!quiet && panel) panel.status(res.ok ? `Saved ${res.data.saved}. Scout will fill ${res.data.saved === 1 ? "it" : "them"} next time.` : `Could not save: ${res.error}`);
     if (res.ok) {
-      pending = pending.filter((f) => !currentValue(f));
+      pending = pending.filter((f) => f.el.isConnected && !currentValue(f));
+      lastTyped.clear();
       refreshSaveButton();
     }
   }
-  document.addEventListener("input", () => pending.length && refreshSaveButton(), true);
-  document.addEventListener("change", () => pending.length && setTimeout(refreshSaveButton, 50), true);
-  document.addEventListener("click", () => pending.length && setTimeout(refreshSaveButton, 50), true);
+  const onEdit = () => { if (pending.length) { rememberTyped(); refreshSaveButton(); } };
+  document.addEventListener("input", onEdit, true);
+  document.addEventListener("change", () => setTimeout(onEdit, 50), true);
+  // capture phase: runs BEFORE a Next click swaps the step away
+  document.addEventListener("click", () => { if (pending.length) rememberTyped(); setTimeout(onEdit, 50); }, true);
+
+  // ------------------------------------------ layout report (his click) ----
+  // For a form Scout could not fill -- above all LinkedIn, which Claude cannot
+  // log into -- he sends its STRUCTURE so the filler can be fixed. Every value
+  // he or the site typed is stripped; scripts, styles and images are dropped.
+  function layoutOf(root) {
+    const src = root === document ? document.body : root;
+    const copy = src.cloneNode(true);
+    copy.querySelectorAll("script, style, noscript, svg, img, video, canvas, iframe, #scout-fill-panel").forEach((n) => n.remove());
+    copy.querySelectorAll("input, textarea").forEach((n) => { n.removeAttribute("value"); n.textContent = ""; });
+    copy.querySelectorAll("option[selected]").forEach((n) => n.removeAttribute("selected"));
+    return copy.outerHTML.slice(0, 2 * 1024 * 1024);
+  }
+  async function sendLayout(root) {
+    panel.report.disabled = true;
+    const res = await send({ type: "layout", url: location.href, html: layoutOf(root) });
+    panel.status(res.ok ? "Layout sent. Tell Claude it's there." : `Could not send: ${res.error}`);
+    panel.report.disabled = false;
+  }
 
   // ------------------------------------------------- after HE submits ----
-  function watchSubmission(job) {
+  function watchSubmission(getJob) {
     let armed = false;
     const arm = () => { if (filled) armed = true; };
     document.addEventListener("submit", arm, true);
@@ -439,8 +483,13 @@
       if (CONFIRM_RE.test(document.body ? document.body.innerText : "")) {
         recorded = true;
         await saveTyped(true);
+        const job = getJob();
+        if (!job) {
+          if (panel) panel.status("Submitted. Your typed answers are saved for next time.");
+          return;
+        }
         const res = await send({ type: "applied", date: job.date, id: job.id });
-        panel.status(res.ok ? "Submitted. Recorded as applied on your Scout list." : "Submitted. Tick it on your Scout list.");
+        if (panel) panel.status(res.ok ? "Submitted. Recorded as applied on your Scout list." : "Submitted. Tick it on your Scout list.");
         try { sessionStorage.removeItem(STORE_KEY); } catch {}
       }
     };
@@ -448,8 +497,69 @@
     setInterval(check, 1500);
   }
 
+  // ------------------------------------------------------------ LinkedIn ----
+  // Easy Apply is a multi-step window over the job page. The panel exists only
+  // while that window is open; nothing runs until he clicks "Fill this step".
+  // After that each new step is filled ONCE as it appears. It never clicks
+  // Next, Review or Submit -- he moves through the steps himself.
+  function easyApplyWindow() {
+    return document.querySelector(".jobs-easy-apply-modal, [data-test-modal-id='easy-apply-modal']")
+      || [...document.querySelectorAll("[role=dialog]")].find((d) =>
+        d.querySelector("form, input, select, textarea")
+        && /apply/i.test(`${d.getAttribute("aria-labelledby") || ""} ${clean((d.querySelector("h1, h2, h3") || {}).innerText)}`));
+  }
+  function stepSignature(win) {
+    return scan(win).map((f) => f.label).join("|");
+  }
+  function bootLinkedIn() {
+    let win = null;
+    let following = false;
+    let job = null;
+    let filledSteps = new Set();
+    watchSubmission(() => job);
+    setInterval(async () => {
+      const w = easyApplyWindow();
+      if (w && w !== win) {
+        win = w;
+        following = false;
+        filledSteps = new Set();
+        pending = [];
+        lastTyped.clear();
+        const res = await send({ type: "lookup", url: location.href });
+        job = res.ok && res.data && res.data.job ? res.data.job : null;
+        if (panel) panel.host.remove();
+        panel = makePanel(job, {
+          line: job ? `${job.company} - ${job.title} (on your Scout list)` : "Easy Apply - filled from your profile and saved answers",
+          button: "Fill this step",
+        });
+        panel.status(job ? "Tailored CV ready. Click Fill on each step you want filled." : "Click Fill to fill this step.");
+        panel.btn.addEventListener("click", async () => {
+          following = true;
+          filledSteps.add(stepSignature(win));
+          await fill(job, win);
+        });
+        panel.save.addEventListener("click", () => saveTyped(false));
+        panel.report.hidden = false;
+        panel.report.addEventListener("click", () => sendLayout(win));
+      } else if (!w && win) {
+        win = null;
+        if (panel) { panel.host.remove(); panel = null; }
+      } else if (w && following && !(panel && panel.btn.disabled)) {
+        const sig = stepSignature(w);
+        if (sig && !filledSteps.has(sig)) {
+          filledSteps.add(sig);
+          await fill(job, w);
+        }
+      }
+    }, 1000);
+  }
+
   // --------------------------------------------------------------- boot ----
   (async () => {
+    if (LINKEDIN) {
+      if (window.top === window) bootLinkedIn();
+      return;
+    }
     if (window.top !== window && !document.querySelector("form, input, textarea")) return;
     const job = await resolveJob();
     if (!job) return; // not a job from his list: stay invisible
@@ -457,7 +567,8 @@
     panel.status(job.auto ? "Filling in a moment..." : "This job is on your Scout list.");
     panel.btn.addEventListener("click", () => fill(job));
     panel.save.addEventListener("click", () => saveTyped(false));
-    watchSubmission(job);
+    panel.report.addEventListener("click", () => sendLayout(document));
+    watchSubmission(() => job);
     if (job.auto) {
       await sleep(1200); // let single-page forms finish rendering
       fill(job);

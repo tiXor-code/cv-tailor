@@ -1,0 +1,80 @@
+<!doctype html>
+<!--
+  LinkedIn Easy Apply replica for Scout Fill tests (2026-09-25). Built from
+  LinkedIn's known Easy Apply markup (artdeco modal, role=dialog labelled by
+  the "Apply to <Company>" header, jobs-easy-apply-form-section groupings,
+  single-line-text and text-entity-list components, form-builder radio
+  fieldsets with a legend, Next / Review / Submit application footer buttons,
+  and the "Your application was sent" confirmation). NOT verified against the
+  live site -- Claude cannot log into his LinkedIn. The extension's "Send this
+  form's layout to Scout" button exists to correct this from the real DOM.
+-->
+<html><head><meta charset="utf-8"><title>AI Engineer | Fixture Co | LinkedIn</title></head>
+<body>
+<main>
+  <h1 class="job-title">AI Engineer</h1>
+  <button id="easy-apply" class="jobs-apply-button">Easy Apply</button>
+</main>
+<script>
+  const steps = [
+    `<div class="jobs-easy-apply-form-section__grouping">
+       <div data-test-single-line-text-form-component>
+         <label for="phone" class="artdeco-text-input--label">Mobile phone number</label>
+         <input id="phone" class="artdeco-text-input--input" type="text" required aria-required="true">
+       </div>
+     </div>
+     <div class="jobs-easy-apply-form-section__grouping">
+       <div data-test-text-entity-list-form-component>
+         <label for="email"><span aria-hidden="true">Email address</span></label>
+         <select id="email" required><option>Select an option</option><option>ada@example.com</option></select>
+       </div>
+     </div>
+     <fieldset data-test-form-builder-radio-button-form-component="true">
+       <legend><span class="fb-dash-form-element__label">Are you legally authorized to work in Examplestan?</span></legend>
+       <div><input type="radio" id="auth-yes" name="auth" value="Yes" required><label for="auth-yes">Yes</label></div>
+       <div><input type="radio" id="auth-no" name="auth" value="No"><label for="auth-no">No</label></div>
+     </fieldset>
+     <div class="jobs-easy-apply-form-section__grouping">
+       <label for="years">How many years of work experience do you have with Fixturelang?</label>
+       <input id="years" type="text" required aria-required="true">
+     </div>`,
+    `<div class="jobs-document-upload">
+       <label for="resume">Upload resume</label>
+       <input id="resume" name="file" type="file" accept=".pdf,.doc,.docx">
+       <span class="resume-name"></span>
+     </div>
+     <div class="jobs-easy-apply-form-section__grouping">
+       <label for="why">Why are you interested in this role?</label>
+       <textarea id="why"></textarea>
+     </div>`,
+    `<h3>Review your application</h3><p>Check everything before you submit.</p>`,
+  ];
+  let step = 0;
+  window.__step = () => step;
+  function render(modal) {
+    const form = modal.querySelector("form");
+    form.innerHTML = steps[step];
+    const r = form.querySelector("#resume");
+    if (r) r.addEventListener("change", () => { form.querySelector(".resume-name").textContent = r.files[0] ? r.files[0].name : ""; });
+    const btn = modal.querySelector("footer button");
+    btn.textContent = step === 0 ? "Next" : step === 1 ? "Review" : "Submit application";
+  }
+  document.getElementById("easy-apply").addEventListener("click", () => {
+    const modal = document.createElement("div");
+    modal.className = "jobs-easy-apply-modal artdeco-modal";
+    modal.setAttribute("role", "dialog");
+    modal.setAttribute("aria-labelledby", "jobs-apply-header");
+    modal.innerHTML = '<h2 id="jobs-apply-header">Apply to Fixture Co</h2><form></form><footer><button type="button" id="next"></button></footer>';
+    document.body.append(modal);
+    render(modal);
+    modal.querySelector("#next").addEventListener("click", () => {
+      if (step === 2) {
+        modal.innerHTML = '<h2>Application sent</h2><p>Your application was sent to Fixture Co!</p>';
+        return;
+      }
+      step += 1;
+      render(modal);
+    });
+  });
+</script>
+</body></html>

@@ -10,7 +10,7 @@ question_answers, profile facts, answers.yaml, and answers composed from the
 job's cover letter). Anything that cannot be grounded comes back null with
 needs_you=true, and the extension highlights it. Nothing here submits anything.
 
-stdin : {"date": "YYYY-MM-DD", "id": "<job id>",
+stdin : {"date": "YYYY-MM-DD", "id": "<job id>",   (both omitted: a job not on his list)
          "questions": [{"label", "kind", "required", "options"}]}
 stdout: {"ok": true, "contact": {...}, "cover_letter": "...",
          "answers": [{"label", "value", "source", "needs_you"}]}
@@ -87,15 +87,21 @@ def main(argv=None, *, client=None) -> int:
         return 2
     date, job_id = str(payload.get("date") or ""), str(payload.get("id") or "")
     questions = _questions(payload.get("questions"))
-    if not _DATE_RE.match(date) or not _ID_RE.match(job_id) or questions is None:
+    if questions is None:
         return 2
-    try:
-        entries = json.loads((queue_root() / date / "jobs.json").read_text())
-    except (OSError, ValueError):
-        return 4
-    entry = next((e for e in entries if e.get("id") == job_id), None)
-    if entry is None:
-        return 4
+    # No job at all = a form for a job not on his list (LinkedIn Easy Apply
+    # anywhere): answered from profile + answers only, no cover letter.
+    entry: dict = {}
+    if date or job_id:
+        if not _DATE_RE.match(date) or not _ID_RE.match(job_id):
+            return 2
+        try:
+            entries = json.loads((queue_root() / date / "jobs.json").read_text())
+        except (OSError, ValueError):
+            return 4
+        entry = next((e for e in entries if e.get("id") == job_id), None)
+        if entry is None:
+            return 4
 
     profile = load_profile(Path(os.environ.get("CV_TAILOR_PROFILE", ROOT / "profile.yaml")), strict=True)
     answers = load_answers()

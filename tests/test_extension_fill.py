@@ -60,6 +60,8 @@ class _Admin:
         self.known_urls = known_urls
         self.applied = []
         self.saved = []
+        self.layouts = []
+        self.answer_refs = []
         self.questions = []
         self.tokens = []
 
@@ -116,9 +118,13 @@ class _Admin:
                 body = json.loads(self.rfile.read(int(self.headers.get("content-length") or 0)) or b"{}")
                 if self.path == "/api/scout/ext/answer":
                     admin.questions.extend(body["questions"])
+                    admin.answer_refs.append({k: body[k] for k in ("date", "id") if k in body})
                     answers = [{"label": q["label"], "value": _answer_for(q),
                                 "needs_you": _answer_for(q) is None and q["required"]} for q in body["questions"]]
                     return self._json(200, {"ok": True, "cover_letter": "I build fixture agents.", "answers": answers})
+                if self.path == "/api/scout/ext/layout":
+                    admin.layouts.append(body)
+                    return self._json(200, {"ok": True, "file": "layouts/x.html"})
                 if self.path == "/api/scout/ext/save-answers":
                     admin.saved.extend(body["answers"])
                     return self._json(200, {"saved": len(body["answers"])})
@@ -135,9 +141,18 @@ class _Admin:
             httpd.shutdown()
 
 
-def _test_copy(tmp_path) -> Path:
+def _test_copy(tmp_path, linkedin=False) -> Path:
     ext = tmp_path / "ext"
     shutil.copytree(EXT_SRC, ext)
+    content = (ext / "content.js").read_text()
+    # tests only: an open shadow root so the test can click the panel like he
+    # does, and (LinkedIn tests) 127.0.0.1 treated as linkedin.com
+    content = content.replace('attachShadow({ mode: "closed" })', 'attachShadow({ mode: "open" })')
+    if linkedin:
+        content = content.replace("const LINKEDIN = /(^|\\.)linkedin\\.com$/.test(location.hostname);",
+                                  "const LINKEDIN = true;")
+        assert "const LINKEDIN = true;" in content
+    (ext / "content.js").write_text(content)
     manifest = json.loads((ext / "manifest.json").read_text())
     manifest["host_permissions"].append("http://127.0.0.1/*")
     manifest["content_scripts"][0]["matches"].append("http://127.0.0.1/*")
@@ -146,8 +161,8 @@ def _test_copy(tmp_path) -> Path:
 
 
 @contextmanager
-def _browser(tmp_path, base, token="fixture-key-0123456789abcdef0123456789abcdef"):
-    ext = _test_copy(tmp_path)
+def _browser(tmp_path, base, token="fixture-key-0123456789abcdef0123456789abcdef", linkedin=False):
+    ext = _test_copy(tmp_path, linkedin=linkedin)
     with sync_playwright() as p:
         ctx = p.chromium.launch_persistent_context(
             str(tmp_path / "profile"), channel="chromium", headless=True,
@@ -294,3 +309,90 @@ def test_what_he_typed_is_saved_when_he_submits(tmp_path):
         page.wait_for_timeout(3000)
         assert admin.saved == [{"label": "What is your notice period?", "value": "Four fixture weeks"}]
         assert admin.applied == [{"date": "2026-09-25", "id": "job-1"}]
+
+
+
+# --- LinkedIn Easy Apply (Teodor, 2026-09-25: "do the same thing for
+# linkedin easy apply"). Replica fixture; see its header. ---------------------
+
+def _panel_button(page, text):
+    return page.locator("#scout-fill-panel").locator(f"button:has-text('{text}')")
+
+
+def _open_easy_apply(ctx, base):
+    page = _open(ctx, f"{base}/linkedin_easyapply.html")
+    page.wait_for_timeout(1500)
+    assert not _panel_present(page), "no panel while he just browses LinkedIn"
+    page.click("#easy-apply")
+    page.wait_for_selector("#scout-fill-panel", state="attached", timeout=10000)
+    return page
+
+
+def test_linkedin_nothing_happens_until_he_clicks_fill(tmp_path):
+    admin = _Admin([])
+    with admin.serve() as base, _browser(tmp_path, base, linkedin=True) as ctx:
+        page = _open_easy_apply(ctx, base)
+        page.wait_for_timeout(2500)
+        assert page.input_value("#phone") == ""
+        assert admin.questions == []
+
+
+def test_linkedin_steps_filled_never_advanced_and_applied_after_his_submit(tmp_path):
+    admin = _Admin(["http://127.0.0.1"])     # this job IS on his list
+    with admin.serve() as base, _browser(tmp_path, base, linkedin=True) as ctx:
+        page = _open_easy_apply(ctx, base)
+        _panel_button(page, "Fill this step").click()
+        _wait_filled(page)
+        assert page.input_value("#phone") == "+44 20 7946 0958"
+        assert page.eval_on_selector("#email", "e => e.options[e.selectedIndex].text") == "ada@example.com"
+        assert page.eval_on_selector("#auth-yes", "e => e.checked") is True
+        assert page.input_value("#years") == ""              # only he knows: outlined
+        page.wait_for_timeout(2500)
+        assert page.evaluate("() => window.__step()") == 0   # it never presses Next
+        page.fill("#years", "3")
+        page.click("#next")                                  # HE presses Next
+        page.wait_for_function("() => document.querySelector('#why') && document.querySelector('#why').value !== ''",
+                               timeout=15000)                # step 2 filled once, by itself
+        assert page.input_value("#why") == "I build fixture agents."
+        assert "Teodor-Lutoiu-CV.pdf" in page.inner_text(".resume-name")
+        assert page.evaluate("() => window.__step()") == 1
+        page.click("#next")                                  # Review
+        page.wait_for_timeout(1500)
+        assert admin.applied == []
+        page.click("#next")                                  # HE presses Submit application
+        page.wait_for_timeout(3000)
+        assert admin.applied == [{"date": "2026-09-25", "id": "job-1"}]
+        assert {"label": "How many years of work experience do you have with Fixturelang?", "value": "3"} in admin.saved
+        assert all(ref == {"date": "2026-09-25", "id": "job-1"} for ref in admin.answer_refs)
+
+
+def test_linkedin_job_not_on_his_list_is_filled_from_profile_without_a_cv(tmp_path):
+    admin = _Admin([])                                  # not on his list
+    with admin.serve() as base, _browser(tmp_path, base, linkedin=True) as ctx:
+        page = _open_easy_apply(ctx, base)
+        _panel_button(page, "Fill this step").click()
+        _wait_filled(page)
+        assert page.input_value("#phone") == "+44 20 7946 0958"
+        assert admin.answer_refs and all(ref == {} for ref in admin.answer_refs)
+        page.fill("#years", "3")
+        page.click("#next")
+        page.wait_for_timeout(3000)
+        assert page.eval_on_selector("#resume", "e => e.files.length") == 0   # no tailored CV to give
+        page.click("#next")
+        page.click("#next")
+        page.wait_for_timeout(3000)
+        assert admin.applied == []                          # nothing on his list to tick
+        assert any(s["value"] == "3" for s in admin.saved)  # but his typed answer is kept
+
+
+def test_layout_report_strips_values(tmp_path):
+    admin = _Admin([])
+    with admin.serve() as base, _browser(tmp_path, base, linkedin=True) as ctx:
+        page = _open_easy_apply(ctx, base)
+        page.fill("#years", "SECRET-VALUE-42")
+        _panel_button(page, "Send this form").click()
+        page.wait_for_timeout(2000)
+        assert len(admin.layouts) == 1
+        html = admin.layouts[0]["html"]
+        assert "How many years of work experience" in html and "SECRET-VALUE-42" not in html
+        assert "scout-fill-panel" not in html

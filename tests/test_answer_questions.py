@@ -100,3 +100,20 @@ def test_save_answers_script_stores_and_rejects_bad_input(monkeypatch, tmp_path)
     assert "A." in (tmp_path / "answers_saved.yaml").read_text()
     monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps({"answers": "nope"})))
     assert m.main(path=target) == 2
+
+
+def test_a_job_not_on_his_list_is_answered_from_profile_and_answers(mod, monkeypatch, tmp_path):
+    """LinkedIn Easy Apply on any job (Teodor, 2026-09-25): no queue entry,
+    so no cover letter -- profile, answers.yaml and his saved answers only."""
+    rc, out = _run(mod, {"questions": [
+        {"label": "Have you shipped a fixture to production?", "kind": "textarea", "required": True},
+        {"label": "Email address", "kind": "text", "required": True},
+    ]}, monkeypatch)
+    assert rc == 0
+    assert [a["value"] for a in out["answers"]] == ["Yes, the fixture.", "test@example.com"]
+    assert out["cover_letter"] == ""
+
+
+def test_half_a_job_reference_is_rejected(mod, monkeypatch, tmp_path):
+    rc, _ = _run(mod, {"date": "2026-09-25", "questions": []}, monkeypatch)
+    assert rc == 2

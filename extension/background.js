@@ -43,12 +43,21 @@ async function handle(msg) {
       return (await api(`/api/scout/ext/lookup?url=${encodeURIComponent(url)}`)).json();
     }
     case "answer": {
-      const { date, id } = job(msg);
+      // date+id = a job on his list; neither = any other (LinkedIn Easy Apply).
+      const ref = msg.date === undefined && msg.id === undefined ? {} : job(msg);
       const questions = Array.isArray(msg.questions) ? msg.questions.slice(0, 60) : [];
       return (await api("/api/scout/ext/answer", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ date, id, questions }),
+        body: JSON.stringify({ ...ref, questions }),
+      })).json();
+    }
+    case "layout": {
+      const html = String(msg.html || "").slice(0, 2 * 1024 * 1024);
+      return (await api("/api/scout/ext/layout", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ url: String(msg.url || "").slice(0, 2000), html }),
       })).json();
     }
     case "cv": {
