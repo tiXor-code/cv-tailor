@@ -117,3 +117,11 @@ def test_a_job_not_on_his_list_is_answered_from_profile_and_answers(mod, monkeyp
 def test_half_a_job_reference_is_rejected(mod, monkeypatch, tmp_path):
     rc, _ = _run(mod, {"date": "2026-09-25", "questions": []}, monkeypatch)
     assert rc == 2
+
+
+def test_a_job_scout_found_on_linkedin_was_heard_about_on_linkedin(mod, monkeypatch, tmp_path):
+    _queue(tmp_path, source="linkedin")
+    q = {"label": "How did you hear about this job?", "kind": "checkbox", "required": True,
+         "options": ["LinkedIn job posts", "Job Portals", "Other"]}
+    rc, out = _run(mod, {"date": "2026-09-25", "id": "job-1", "questions": [q]}, monkeypatch)
+    assert rc == 0 and out["answers"][0]["value"] == "LinkedIn job posts"

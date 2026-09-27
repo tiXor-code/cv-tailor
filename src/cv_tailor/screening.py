@@ -249,6 +249,12 @@ def _how_heard_answer(q: Question, answers: dict) -> Answer | None:
         return raw
     if _match_option(raw.value, q.options) is not None:
         return raw          # _kind_gate maps it to the exact option text
+    # "LinkedIn" -> "LinkedIn job posts" (live TalentLyft, 2026-09-27): one
+    # option that begins with the answer as a whole word is that answer.
+    lead = re.compile(rf"^\s*{re.escape(str(raw.value).strip())}\b", re.I)
+    starts = [opt for opt in q.options if lead.match(opt)]
+    if len(starts) == 1:
+        return Answer(starts[0], raw.grounded_in)
     for opt in q.options:
         if _OTHER_OPTION_RE.search(opt):
             return Answer(opt, raw.grounded_in)

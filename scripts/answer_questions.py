@@ -105,6 +105,10 @@ def main(argv=None, *, client=None) -> int:
 
     profile = load_profile(Path(os.environ.get("CV_TAILOR_PROFILE", ROOT / "profile.yaml")), strict=True)
     answers = load_answers()
+    # Scout found it on LinkedIn: that is where he heard about it (a fact, not
+    # a guess). Forms without a LinkedIn option fall back to how_heard as usual.
+    if entry.get("source") == "linkedin":
+        answers = {**answers, "how_heard": "LinkedIn"}
     context = screening_context(entry)
     if client is None and os.environ.get("SCOUT_ANSWER_LLM", "1") == "1" and "pytest" not in sys.modules:
         _load_dotenv()

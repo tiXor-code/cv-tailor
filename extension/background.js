@@ -40,7 +40,8 @@ async function handle(msg) {
   switch (msg && msg.type) {
     case "lookup": {
       const url = String(msg.url || "").slice(0, 2000);
-      return (await api(`/api/scout/ext/lookup?url=${encodeURIComponent(url)}`)).json();
+      const title = String(msg.title || "").slice(0, 500);
+      return (await api(`/api/scout/ext/lookup?url=${encodeURIComponent(url)}&title=${encodeURIComponent(title)}`)).json();
     }
     case "answer": {
       // date+id = a job on his list; neither = any other (LinkedIn Easy Apply).

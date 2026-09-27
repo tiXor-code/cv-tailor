@@ -200,6 +200,18 @@ def test_how_heard_still_prefers_a_real_match_over_other():
     assert answer_question(q, _PROFILE, _ANSWERS).value == "Fixture Careers Page"
 
 
+def test_how_heard_matches_an_option_that_begins_with_the_answer():
+    """Live TalentLyft (2026-09-27) offers "LinkedIn job posts", not "LinkedIn"."""
+    answers = {**_ANSWERS, "how_heard": "LinkedIn"}
+    q = _q("How did you hear about this job?", kind="checkbox",
+           options=("LinkedIn job posts", "Contacted by recruiter", "Job Portals", "Other"))
+    assert answer_question(q, _PROFILE, answers).value == "LinkedIn job posts"
+    # two options starting with it is no match: back to Other
+    q = _q("How did you hear about this job?", kind="radio",
+           options=("LinkedIn post", "LinkedIn ad", "Other"))
+    assert answer_question(q, _PROFILE, answers).value == "Other"
+
+
 def test_in_person_interview_is_answered_from_the_flag():
     """Live Sardine (score 8): "Are you available to attend an in-person
     interview if requested as part of the hiring process?" Teodor, 2026-09-24:

@@ -446,3 +446,18 @@ def test_icon_opens_the_panel_on_a_page_not_on_his_list(tmp_path):
         page.wait_for_timeout(500)
         assert page.locator("#scout-fill-panel").count() == 1
         assert admin.applied == []
+
+
+def test_talentlyft_confirmation_records_applied_and_saves_what_he_typed(tmp_path):
+    # Live TalentLyft's only confirmation is "Thank you!" / "All done!".
+    admin = _Admin([])
+    with admin.serve() as base, _browser(tmp_path, base) as ctx:
+        page = _open(ctx, f"{base}/talentlyft_form.html#scout-fill=2026-09-25~job-1")
+        _wait_filled(page)
+        page.fill("input[name='Answers[0].Body']", "Two weeks")
+        page.click("button[type=submit]")
+        page.wait_for_function("() => !document.getElementById('thanks').hidden")
+        page.wait_for_timeout(3000)
+        assert admin.applied == [{"date": "2026-09-25", "id": "job-1"}]
+        assert {"label": next(q["label"] for q in admin.questions if "notice period" in q["label"]),
+                "value": "Two weeks"} in admin.saved

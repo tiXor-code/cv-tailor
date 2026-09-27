@@ -18,7 +18,7 @@
   const HASH_RE = /#scout-fill=(\d{4}-\d{2}-\d{2})~([A-Za-z0-9_-]{1,64})/;
   const STORE_KEY = "scoutFillJob";
   const CONFIRM_RE =
-    /(application (has been |was )?(submitted|received|sent)|thank(s| you) for (applying|your application|submitting)|we(?:'|’)ve received your application|your application is (in|complete))/i;
+    /(application (has been |was )?(submitted|received|sent)|thank(s| you) for (applying|your application|submitting)|we(?:'|’)ve received your application|your application is (in|complete)|thank you!?\s+all done)/i; // last one: TalentLyft
   const SKIP_TYPES = new Set(["hidden", "submit", "button", "reset", "password", "image", "file"]);
   const LINKEDIN = /(^|\.)linkedin\.com$/.test(location.hostname);
 
@@ -46,7 +46,11 @@
       const saved = JSON.parse(sessionStorage.getItem(STORE_KEY) || "null");
       if (saved && saved.date && saved.id) return { ...saved, auto: false };
     } catch {}
-    const res = await send({ type: "lookup", url: location.href });
+    // A LinkedIn job applied to on the company's own site has a URL Scout never
+    // saw: the page's title and heading let admin recognise it anyway.
+    const h1 = document.querySelector("h1");
+    const title = `${document.title} | ${h1 ? clean(h1.innerText) : ""}`.slice(0, 500);
+    const res = await send({ type: "lookup", url: location.href, title });
     if (res.ok && res.data && res.data.job) return { ...res.data.job, auto: false };
     return null;
   }
