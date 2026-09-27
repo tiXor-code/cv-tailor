@@ -144,6 +144,8 @@
 
   function isRequired(el, label) {
     if (el.required || el.getAttribute("aria-required") === "true" || /\*\s*$/.test(label || "")) return true;
+    // TalentLyft marks required fields only through its FormValidation attributes.
+    if (el.getAttribute("data-fv-not-empty") === "true" || Number(el.getAttribute("data-fv-choice___min")) >= 1) return true;
     // Ashby draws its "*" with CSS on a _required_ label class, so innerText lacks it.
     const box = containerOf(el);
     return Boolean(box && box.querySelector("label[class*='required'], [class*='question-title'][class*='required']"));
@@ -332,6 +334,15 @@
     target.files = dt.files;
     target.dispatchEvent(new Event("input", { bubbles: true }));
     target.dispatchEvent(new Event("change", { bubbles: true }));
+    // TalentLyft hides the real input behind a Dropzone that only reads drops.
+    const zone = target.offsetParent === null && target.parentNode && target.parentNode.querySelector(".dropzone");
+    if (zone) {
+      const drop = new DataTransfer();
+      drop.items.add(file);
+      zone.dispatchEvent(new DragEvent("drop", { bubbles: true, cancelable: true, dataTransfer: drop }));
+      await new Promise((r) => setTimeout(r, 300));
+      return zone.querySelector(".dz-preview") !== null || document.querySelector(".dz-preview") !== null;
+    }
     return target.files.length === 1;
   }
 

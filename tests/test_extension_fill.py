@@ -396,3 +396,23 @@ def test_layout_report_strips_values(tmp_path):
         html = admin.layouts[0]["html"]
         assert "How many years of work experience" in html and "SECRET-VALUE-42" not in html
         assert "scout-fill-panel" not in html
+
+
+def test_talentlyft_required_flags_and_dropzone_resume(tmp_path):
+    # Live TalentLyft (2026-09-27): required only via data-fv-* attributes, and
+    # the CV must reach the Dropzone, not the hidden input it replaced.
+    admin = _Admin([])
+    with admin.serve() as base, _browser(tmp_path, base) as ctx:
+        page = _open(ctx, f"{base}/talentlyft_form.html#scout-fill=2026-09-25~job-1")
+        _wait_filled(page)
+        def required(text):
+            return next(q["required"] for q in admin.questions if text in q["label"])
+        assert required("notice period") is True
+        assert required("relocate to Exampleton") is True
+        assert required("GitHub profile") is False
+        assert page.input_value("input[name=FirstName]") == "Ada"
+        assert "Teodor-Lutoiu-CV.pdf" in page.inner_text(".dropzone-previews")
+        # the unanswerable required question is left for him
+        assert page.input_value("input[name='Answers[0].Body']") == ""
+        assert page.locator("#thanks").is_hidden()
+        assert admin.applied == []

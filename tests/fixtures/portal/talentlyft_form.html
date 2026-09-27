@@ -1,0 +1,58 @@
+<!doctype html>
+<html><head><title>Fixture Co - AI Engineer</title></head>
+<body>
+<!-- Shaped like a live TalentLyft form (2026-09-27): "*" in an <abbr>, required
+     only via FormValidation data-fv-* attributes, and the resume input hidden
+     behind a Dropzone that only accepts drops. -->
+<form id="form">
+  <div class="form-group text-type">
+    <label class="control-label"><abbr title="Required">*</abbr><span>First name</span><span class="required">(required)</span></label>
+    <input class="form-control" type="text" name="FirstName" data-fv-not-empty="true">
+  </div>
+  <div class="form-group text-type">
+    <label class="control-label"><abbr title="Required">*</abbr><span>Your email</span><span class="required">(required)</span></label>
+    <input class="form-control" type="email" name="Email" data-fv-not-empty="true">
+  </div>
+  <div class="form-group file-type">
+    <label class="control-label"><abbr title="Required">*</abbr><span>CV / Resume</span></label>
+    <input class="form-control input-file" type="file" name="Resume" data-fv-not-empty="true">
+  </div>
+  <div class="form-group text-type">
+    <label class="control-label"><abbr title="Required">*</abbr><span>What is your notice period?</span></label>
+    <input class="form-control" type="text" name="Answers[0].Body" data-fv-not-empty="true">
+  </div>
+  <div class="form-group radio-type">
+    <label class="control-label"><abbr title="Required">*</abbr><span>Would you relocate to Exampleton?</span></label>
+    <label><input type="radio" value="1" name="Answers[1].Choices" data-fv-choice="true" data-fv-choice___min="1"> Yes</label>
+    <label><input type="radio" value="2" name="Answers[1].Choices" data-fv-choice="true" data-fv-choice___min="1"> No</label>
+  </div>
+  <div class="form-group text-type">
+    <label class="control-label"><span>GitHub profile</span><span class="control-label-optional">(Optional)</span></label>
+    <input class="form-control" type="url" name="Answers[2].Body">
+  </div>
+  <button type="submit">Submit your application</button>
+</form>
+<div id="thanks" hidden>Thank you!</div>
+<script>
+  // a stand-in for TalentLyft's Dropzone: hides the input, previews only on drop
+  const input = document.querySelector("input[name=Resume]");
+  const wrap = document.createElement("div");
+  wrap.innerHTML = '<div class="dropzone">Drop your files here<div class="dropzone-previews"></div></div>';
+  input.style.display = "none";
+  input.parentNode.insertBefore(wrap, input);
+  const zone = wrap.querySelector(".dropzone");
+  zone.addEventListener("drop", (e) => {
+    e.preventDefault();
+    for (const f of e.dataTransfer.files) {
+      const p = document.createElement("div");
+      p.className = "dz-preview";
+      p.textContent = f.name;
+      zone.querySelector(".dropzone-previews").append(p);
+    }
+  });
+  document.getElementById("form").addEventListener("submit", (e) => {
+    e.preventDefault();
+    document.getElementById("thanks").hidden = false;
+  });
+</script>
+</body></html>
