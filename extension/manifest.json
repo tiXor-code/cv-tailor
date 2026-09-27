@@ -1,10 +1,12 @@
 {
   "manifest_version": 3,
   "name": "Scout Fill",
-  "version": "0.3.1",
+  "version": "0.4.0",
   "description": "Fills job applications (and LinkedIn Easy Apply steps) with Scout's answers and your tailored CV. You review and press Submit.",
   "permissions": [
-    "storage"
+    "storage",
+    "activeTab",
+    "scripting"
   ],
   "host_permissions": [
     "https://admin.teodorlutoiu.com/*"
@@ -32,5 +34,8 @@
       "all_frames": true
     }
   ],
-  "options_page": "options.html"
+  "options_page": "options.html",
+  "action": {
+    "default_title": "Scout Fill: fill the form on this page"
+  }
 }

@@ -98,3 +98,19 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   );
   return true;
 });
+
+// He clicks the toolbar icon on any page: the panel opens there even on sites
+// the content script doesn't run on by itself. activeTab grants access to that
+// one tab for that one click -- no standing access to other sites.
+async function openOn(tab) {
+  if (!tab || tab.id === undefined) return;
+  try {
+    // content.js ignores a second injection; its first copy handles the message
+    await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ["content.js"] });
+    await chrome.tabs.sendMessage(tab.id, { type: "scout-open" }, { frameId: 0 });
+  } catch (e) {
+    // chrome:// pages, the Web Store and PDFs refuse scripts; nothing to fill there
+    console.warn("Scout Fill: cannot open on this page", e);
+  }
+}
+chrome.action.onClicked.addListener(openOn);

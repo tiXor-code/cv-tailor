@@ -141,7 +141,7 @@ class _Admin:
             httpd.shutdown()
 
 
-def _test_copy(tmp_path, linkedin=False) -> Path:
+def _test_copy(tmp_path, linkedin=False, extra_hosts=()) -> Path:
     ext = tmp_path / "ext"
     shutil.copytree(EXT_SRC, ext)
     content = (ext / "content.js").read_text()
@@ -155,14 +155,15 @@ def _test_copy(tmp_path, linkedin=False) -> Path:
     (ext / "content.js").write_text(content)
     manifest = json.loads((ext / "manifest.json").read_text())
     manifest["host_permissions"].append("http://127.0.0.1/*")
+    manifest["host_permissions"].extend(extra_hosts)
     manifest["content_scripts"][0]["matches"].append("http://127.0.0.1/*")
     (ext / "manifest.json").write_text(json.dumps(manifest))
     return ext
 
 
 @contextmanager
-def _browser(tmp_path, base, token="fixture-key-0123456789abcdef0123456789abcdef", linkedin=False):
-    ext = _test_copy(tmp_path, linkedin=linkedin)
+def _browser(tmp_path, base, token="fixture-key-0123456789abcdef0123456789abcdef", linkedin=False, extra_hosts=()):
+    ext = _test_copy(tmp_path, linkedin=linkedin, extra_hosts=extra_hosts)
     with sync_playwright() as p:
         ctx = p.chromium.launch_persistent_context(
             str(tmp_path / "profile"), channel="chromium", headless=True,
@@ -415,4 +416,33 @@ def test_talentlyft_required_flags_and_dropzone_resume(tmp_path):
         # the unanswerable required question is left for him
         assert page.input_value("input[name='Answers[0].Body']") == ""
         assert page.locator("#thanks").is_hidden()
+        assert admin.applied == []
+
+
+def _click_icon(ctx, page):
+    # what his click on the toolbar icon runs, on the tab he is looking at
+    sw = ctx.service_workers[0]
+    page.bring_to_front()
+    sw.evaluate("async (u) => { const [t] = await chrome.tabs.query({url: u}); await openOn(t); }",
+                page.url.split("#")[0])
+
+
+def test_icon_opens_the_panel_on_a_page_not_on_his_list(tmp_path):
+    # Teodor, 2026-09-27: "open the extension myself whenever it's not popping up".
+    # localhost is NOT in the content-script matches: only the click injects it
+    # (the test's host permission stands in for the activeTab grant).
+    admin = _Admin([])
+    with admin.serve() as base, _browser(tmp_path, base, extra_hosts=["http://localhost/*"]) as ctx:
+        url = base.replace("127.0.0.1", "localhost") + "/greenhouse_form.html"
+        page = _open(ctx, url)
+        page.wait_for_timeout(1500)
+        assert not _panel_present(page)
+        _click_icon(ctx, page)
+        _wait_filled(page)
+        assert page.input_value("#first_name") == "Ada"
+        assert admin.answer_refs[-1] == {}  # generic answers: no job from his list
+        # a second click refills in place, never a second panel
+        _click_icon(ctx, page)
+        page.wait_for_timeout(500)
+        assert page.locator("#scout-fill-panel").count() == 1
         assert admin.applied == []

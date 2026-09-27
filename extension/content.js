@@ -405,6 +405,7 @@
     pending = pending.concat(fields.filter((f) => needs.includes(f.label.replace(/\s*\*\s*$/, ""))));
     const cv = await attachCv(job, root);
     if (cv === false) needs.push("CV upload (download it from your Scout list)");
+    if (cv === null && !job && root.querySelector("input[type=file]")) needs.push("CV upload (not on your Scout list, so attach your own)");
     panel.needs(needs);
     const next = LINKEDIN ? "Next (or Submit on the last step)" : "Submit";
     panel.status(needs.length
@@ -565,6 +566,39 @@
     }, 1000);
   }
 
+  // ----------------------------------------------- opened by HIM ----
+  // He clicked the Scout icon: open the panel on this page even if it isn't a
+  // job from his list, and fill straight away (the click is his go).
+  let panelBooted = false;
+  let currentJob = null;
+  function bootPanel(job, line) {
+    panelBooted = true;
+    panel = makePanel(job, line ? { line } : {});
+    panel.btn.addEventListener("click", () => fill(job));
+    panel.save.addEventListener("click", () => saveTyped(false));
+    panel.report.addEventListener("click", () => sendLayout(document));
+    watchSubmission(() => job);
+  }
+  async function openByHand() {
+    if (LINKEDIN) {
+      if (panel) return;
+      panel = makePanel(null, { line: "LinkedIn", button: "Close" });
+      panel.status("Open the Easy Apply window first. The Fill button appears on it by itself.");
+      panel.btn.addEventListener("click", () => { panel.host.remove(); panel = null; });
+      return;
+    }
+    if (panelBooted) {
+      if (panel && !panel.btn.disabled) fill(currentJob);
+      return;
+    }
+    currentJob = await resolveJob();
+    bootPanel(currentJob, currentJob ? null : "Not on your Scout list - filled from your profile and saved answers");
+    fill(currentJob);
+  }
+  chrome.runtime.onMessage.addListener((msg) => {
+    if (msg && msg.type === "scout-open" && window.top === window) openByHand();
+  });
+
   // --------------------------------------------------------------- boot ----
   (async () => {
     if (LINKEDIN) {
@@ -573,13 +607,10 @@
     }
     if (window.top !== window && !document.querySelector("form, input, textarea")) return;
     const job = await resolveJob();
-    if (!job) return; // not a job from his list: stay invisible
-    panel = makePanel(job);
+    if (!job || panelBooted) return; // not a job from his list: stay invisible until he clicks the icon
+    currentJob = job;
+    bootPanel(job);
     panel.status(job.auto ? "Filling in a moment..." : "This job is on your Scout list.");
-    panel.btn.addEventListener("click", () => fill(job));
-    panel.save.addEventListener("click", () => saveTyped(false));
-    panel.report.addEventListener("click", () => sendLayout(document));
-    watchSubmission(() => job);
     if (job.auto) {
       await sleep(1200); // let single-page forms finish rendering
       fill(job);
