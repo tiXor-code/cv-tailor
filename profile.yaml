@@ -341,6 +341,77 @@ projects:
   - Cloudflare
   bullets:
   - Shipped redesign 2026-05-21 — root domain live with hashed assets, 200 OK across pages.
+- id: second_brain
+  name: Second Brain / Meeting Copilot
+  tagline: AI meeting copilot that transcribes, summarizes, and remembers
+  tech:
+  - Claude API
+  - Fathom
+  - persistent memory system
+  bullets:
+  - Pulls meeting transcripts and turns them into structured summaries and action items.
+  - Backed by a persistent file-based memory system carried across sessions.
+- id: ai_training_program
+  name: AI Engineer Training Program
+  tagline: Duolingo-style mobile app for daily AI/Python skill-building
+  tech:
+  - Python
+  - Azure OpenAI
+  - spaced repetition
+  - sandboxed code execution
+  bullets:
+  - Duolingo-style daily quiz app; spaced-repetition engine resurfaces weak topics automatically.
+  - 270 authored questions spanning theory, code-reading, and hands-on coding exercises.
+  - Sandboxed runner executes submitted code safely and grades it against hidden tests.
+  - Open-ended answers graded instantly by an LLM judge against a rubric.
+- id: anvil_aegis
+  name: Anvil & Aegis
+  tagline: Autonomous build-proposal and security-scanning agents for a repo fleet
+  tech:
+  - Claude Code
+  - GitHub API
+  - Python
+  bullets:
+  - Anvil scans active projects daily, proposes builds, and ships approved ones unattended.
+  - Aegis continuously scans every repo for vulnerabilities and files verified GitHub issues.
+  - Adversarial verification step filters false positives before anything ships or gets filed.
+- id: aios_fleet
+  name: AIOS
+  tagline: Automation fleet running a dozen-plus autonomous background agents
+  tech:
+  - Python
+  - Telegram Bot API
+  - launchd
+  - SQLite
+  bullets:
+  - Telegram-driven job dispatcher runs headless AI agents from a single phone message.
+  - Health sentinel monitors every agent's heartbeat and flags silent failures.
+  - Coordinates independent agents across finance, security, SEO, invoicing, and prospecting.
+- id: seo_sentinel
+  name: SEO Sentinel
+  tagline: Automated SEO and AI-search-visibility monitoring across live sites
+  tech:
+  - Google Search Console API
+  - DataForSEO
+  - Python
+  bullets:
+  - Daily ranking alerts and weekly SEO audits across four production sites.
+  - Citation report measures whether ChatGPT, Perplexity, and Gemini actually cite each site.
+- id: faraapacalda
+  name: Faraapacalda.ro
+  tagline: Scraper-driven static site, 2,361 pages built and shipped
+  link: faraapacalda.ro
+  tech:
+  - Python
+  - static site generation
+  bullets:
+  - Built a custom scraper to source structured data at scale.
+  - Generated and launched 2,361 static pages end to end.
+- id: and_more
+  name: "…and many more"
+  tagline: 40+ additional shipped projects, tools, and automations available on request
+  tech: []
+  bullets: []
 skills:
   languages:
   - Python
