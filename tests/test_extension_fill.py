@@ -368,7 +368,9 @@ def test_linkedin_steps_filled_never_advanced_and_applied_after_his_submit(tmp_p
         page.wait_for_function("() => document.querySelector('#why') && document.querySelector('#why').value !== ''",
                                timeout=15000)                # step 2 filled once, by itself
         assert page.input_value("#why") == "I build fixture agents."
-        assert "Teodor-Lutoiu-CV.pdf" in page.inner_text(".resume-name")
+        # the CV is attached after the answers, so wait for it rather than race it
+        page.wait_for_function("() => (document.querySelector('.resume-name') || {}).innerText"
+                               "?.includes('Teodor-Lutoiu-CV.pdf')", timeout=15000)
         assert page.evaluate("() => window.__step()") == 1
         page.click("#next")                                  # Review
         page.wait_for_timeout(1500)
@@ -571,3 +573,43 @@ def test_upload_only_step_gets_the_tailored_cv(tmp_path, variant):
                                timeout=10000)
         assert "Tailored CV uploaded" in _panel_text(page)
         assert admin.applied == []
+
+
+def test_panel_minimizes_and_moves_out_of_the_way(tmp_path):
+    # Teodor, 2026-09-28: the panel can cover what he needs to click.
+    admin = _Admin([])
+    with admin.serve() as base, _browser(tmp_path, base) as ctx:
+        page = _fill_ashby(ctx, base)
+        shadow = "document.querySelector('#scout-fill-panel').shadowRoot"
+        before = page.evaluate("() => document.querySelector('#scout-fill-panel').getBoundingClientRect().toJSON()")
+        head = page.evaluate(f"() => {shadow}.querySelector('.head .t').getBoundingClientRect().toJSON()")
+        page.mouse.move(head["x"] + 10, head["y"] + 5)
+        page.mouse.down()
+        page.mouse.move(head["x"] - 300, head["y"] - 200, steps=8)
+        page.mouse.up()
+        after = page.evaluate("() => document.querySelector('#scout-fill-panel').getBoundingClientRect().toJSON()")
+        assert after["x"] < before["x"] - 250 and after["y"] < before["y"] - 150
+        page.evaluate(f"() => {shadow}.querySelector('button.min').click()")
+        assert page.evaluate(f"() => {shadow}.querySelector('.box').hidden") is True
+        assert page.evaluate(f"() => !{shadow}.querySelector('.pill').hidden") is True
+        # the minimized pill is small, and a click opens the panel again
+        pill = page.evaluate(f"() => {shadow}.querySelector('.pill').getBoundingClientRect().toJSON()")
+        assert pill["width"] < 140
+        page.evaluate(f"() => {shadow}.querySelector('.pill').click()")
+        assert page.evaluate(f"() => {shadow}.querySelector('.box').hidden") is False
+        # remembered for the next page
+        sw = next(w for w in ctx.service_workers if w.url.startswith("chrome-extension://"))
+        saved = sw.evaluate("() => chrome.storage.local.get('scoutPanel')")["scoutPanel"]
+        assert saved["min"] is False and saved["left"] is not None
+
+
+def test_packaged_zip_includes_the_icons(tmp_path):
+    import importlib.util
+    import zipfile
+    spec = importlib.util.spec_from_file_location("package_extension", ROOT / "scripts" / "package_extension.py")
+    m = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(m)
+    names = set(zipfile.ZipFile(m.build(tmp_path / "x.zip")).namelist())
+    manifest = json.loads((EXT_SRC / "manifest.json").read_text())
+    for path in manifest["icons"].values():
+        assert f"scout-fill/{path}" in names

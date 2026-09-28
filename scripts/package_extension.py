@@ -24,9 +24,11 @@ def build(out: Path = DEFAULT_OUT) -> Path:
     assert not any("127.0.0.1" in m for m in manifest["host_permissions"]), "test permissions in manifest"
     out.parent.mkdir(parents=True, exist_ok=True)
     with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as z:
-        for f in sorted(SRC.iterdir()):
-            if f.is_file() and not f.name.startswith("."):
-                z.write(f, f"scout-fill/{f.name}")
+        # subfolders too (icons/): a manifest icon missing from the zip stops Chrome loading it
+        for f in sorted(SRC.rglob("*")):
+            rel = f.relative_to(SRC)
+            if f.is_file() and not any(part.startswith(".") for part in rel.parts):
+                z.write(f, f"scout-fill/{rel.as_posix()}")
     return out
 
 

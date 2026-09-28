@@ -58,6 +58,20 @@
   // -------------------------------------------------------------- panel ----
   let panel = null;
   let markHandler = null; // set once the submission watcher runs
+  // The toolbar owl, drawn inline (static markup, no page text in it).
+  const OWL_SVG = '<svg viewBox="0 0 128 128" xmlns="http://www.w3.org/2000/svg"><rect width="128" height="128" rx="28" fill="#0f6b5c"/>'
+    + '<path d="M30 40 L36 16 L52 34 Z M98 40 L92 16 L76 34 Z" fill="#d9a15c"/>'
+    + '<path d="M64 26 C96 26 106 50 106 74 C106 100 88 114 64 114 C40 114 22 100 22 74 C22 50 32 26 64 26 Z" fill="#e9b872"/>'
+    + '<ellipse cx="64" cy="94" rx="24" ry="17" fill="#f6e3bf"/><circle cx="45" cy="60" r="17" fill="#fff"/>'
+    + '<circle cx="83" cy="60" r="17" fill="#fff"/><circle cx="47" cy="61" r="9" fill="#18211f"/>'
+    + '<circle cx="81" cy="61" r="9" fill="#18211f"/><path d="M58 74 L70 74 L64 84 Z" fill="#f28c28"/></svg>';
+  function owlIcon() {
+    const svg = new DOMParser().parseFromString(OWL_SVG, "image/svg+xml").documentElement;
+    svg.setAttribute("class", "owl");
+    svg.setAttribute("aria-hidden", "true");
+    return document.importNode(svg, true);
+  }
+
   function makePanel(job, { line: lineText, button: buttonText } = {}) {
     const host = document.createElement("div");
     host.id = "scout-fill-panel";
@@ -73,12 +87,35 @@
       button[disabled]{opacity:.5;cursor:default}
       ul{margin:6px 0 0;padding-left:18px;max-height:140px;overflow:auto}
       .muted{color:#5b6865}
+      .head{display:flex;align-items:center;gap:6px;margin-bottom:4px;cursor:move;user-select:none;touch-action:none}
+      .head .t{flex:1;margin:0}
+      .owl{width:20px;height:20px;flex:none;display:block}
+      button.min{margin:0;padding:0 8px;line-height:20px;background:#fff;color:#0f6b5c;font-size:16px;cursor:pointer}
+      .pill{font:600 13px -apple-system,"Segoe UI",Roboto,sans-serif;display:flex;align-items:center;gap:6px;margin:0;padding:6px 12px 6px 8px;border-radius:999px;
+        box-shadow:0 6px 24px rgba(0,0,0,.18);cursor:move;touch-action:none}
       [hidden]{display:none!important}`;
     const box = document.createElement("div");
     box.className = "box";
+    const head = document.createElement("div");
+    head.className = "head";
+    head.title = "Drag to move";
     const title = document.createElement("div");
     title.className = "t";
     title.textContent = "Scout";
+    const minimize = document.createElement("button");
+    minimize.type = "button";
+    minimize.className = "min";
+    minimize.textContent = "\u2013";
+    minimize.title = "Minimize";
+    minimize.setAttribute("aria-label", "Minimize Scout");
+    head.append(owlIcon(), title, minimize);
+    // minimized: a small draggable pill; clicking it opens the panel again
+    const pill = document.createElement("button");
+    pill.type = "button";
+    pill.className = "pill";
+    pill.title = "Open Scout (drag to move)";
+    pill.append(owlIcon(), "Scout");
+    pill.hidden = true;
     const line = document.createElement("div");
     line.className = "muted";
     line.textContent = lineText || (job && job.company ? `${job.company} - ${job.title || ""}` : "Job from your Scout list");
@@ -103,9 +140,65 @@
     mark.style.cssText = "display:block";
     mark.hidden = true;
     mark.addEventListener("click", () => { if (markHandler) markHandler(); });
-    box.append(title, line, status, list, btn, save, mark, report);
-    root.append(style, box);
+    box.append(head, line, status, list, btn, save, mark, report);
+    root.append(style, box, pill);
     document.documentElement.append(host);
+
+    // ---- minimize and move (he may need what is under the panel) ----
+    const place = { left: null, top: null, min: false };
+    const apply = () => {
+      box.hidden = place.min;
+      pill.hidden = !place.min;
+      if (place.left === null) return;
+      const r = host.getBoundingClientRect();
+      const left = Math.min(Math.max(0, place.left), Math.max(0, innerWidth - r.width));
+      const top = Math.min(Math.max(0, place.top), Math.max(0, innerHeight - r.height));
+      host.style.left = `${left}px`;
+      host.style.top = `${top}px`;
+      host.style.right = "auto";
+      host.style.bottom = "auto";
+    };
+    const remember = () => {
+      try { chrome.storage.local.set({ scoutPanel: { ...place } }); } catch {}
+    };
+    try {
+      chrome.storage.local.get("scoutPanel", (got) => {
+        const saved = got && got.scoutPanel;
+        if (saved) { Object.assign(place, saved); apply(); }
+      });
+    } catch {}
+    const setMin = (min) => { place.min = min; apply(); remember(); };
+    minimize.addEventListener("click", () => setMin(true));
+    let moved = false;
+    const drag = (handle) => handle.addEventListener("pointerdown", (e) => {
+      if (e.button !== 0 || (handle === head && e.target === minimize)) return;
+      const r = host.getBoundingClientRect();
+      const dx = e.clientX - r.left;
+      const dy = e.clientY - r.top;
+      const x0 = e.clientX;
+      const y0 = e.clientY;
+      moved = false;
+      handle.setPointerCapture(e.pointerId);
+      const move = (ev) => {
+        if (!moved && Math.abs(ev.clientX - x0) + Math.abs(ev.clientY - y0) < 4) return;
+        moved = true;
+        place.left = ev.clientX - dx;
+        place.top = ev.clientY - dy;
+        apply();
+      };
+      const up = () => {
+        handle.removeEventListener("pointermove", move);
+        handle.removeEventListener("pointerup", up);
+        // the click that ends a drag must not also open the pill
+        if (moved) { remember(); setTimeout(() => { moved = false; }, 0); }
+      };
+      handle.addEventListener("pointermove", move);
+      handle.addEventListener("pointerup", up);
+    });
+    drag(head);
+    drag(pill);
+    pill.addEventListener("click", () => { if (!moved) setMin(false); });
+    addEventListener("resize", apply);
     return {
       host,
       btn,

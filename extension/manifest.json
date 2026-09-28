@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Scout Fill",
-  "version": "0.5.1",
+  "version": "0.6.0",
   "description": "Fills job applications (and LinkedIn Easy Apply steps) with Scout's answers and your tailored CV. You review and press Submit.",
   "permissions": [
     "storage",
@@ -37,6 +37,17 @@
   ],
   "options_page": "options.html",
   "action": {
-    "default_title": "Scout Fill: fill the form on this page"
+    "default_title": "Scout Fill: fill the form on this page",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "32": "icons/icon32.png",
+      "48": "icons/icon48.png"
+    }
+  },
+  "icons": {
+    "16": "icons/icon16.png",
+    "32": "icons/icon32.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
   }
 }

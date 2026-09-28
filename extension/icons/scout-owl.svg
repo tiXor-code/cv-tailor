@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128">
+  <rect width="128" height="128" rx="28" fill="#0f6b5c"/>
+  <!-- ear tufts -->
+  <path d="M30 40 L36 16 L52 34 Z" fill="#d9a15c"/>
+  <path d="M98 40 L92 16 L76 34 Z" fill="#d9a15c"/>
+  <!-- body -->
+  <path d="M64 26 C96 26 106 50 106 74 C106 100 88 114 64 114 C40 114 22 100 22 74 C22 50 32 26 64 26 Z" fill="#e9b872"/>
+  <!-- belly -->
+  <ellipse cx="64" cy="94" rx="24" ry="17" fill="#f6e3bf"/>
+  <path d="M54 90 q4 4 8 0 M66 90 q4 4 8 0 M60 100 q4 4 8 0" stroke="#d9a15c" stroke-width="2.5" fill="none" stroke-linecap="round"/>
+  <!-- eyes -->
+  <circle cx="45" cy="60" r="17" fill="#fff"/>
+  <circle cx="83" cy="60" r="17" fill="#fff"/>
+  <circle cx="47" cy="61" r="9" fill="#18211f"/>
+  <circle cx="81" cy="61" r="9" fill="#18211f"/>
+  <circle cx="50" cy="57" r="3.2" fill="#fff"/>
+  <circle cx="84" cy="57" r="3.2" fill="#fff"/>
+  <!-- beak -->
+  <path d="M58 74 L70 74 L64 84 Z" fill="#f28c28"/>
+  <!-- cheeks -->
+  <circle cx="34" cy="80" r="5" fill="#f2a27a" opacity=".7"/>
+  <circle cx="94" cy="80" r="5" fill="#f2a27a" opacity=".7"/>
+</svg>
