@@ -98,6 +98,23 @@ def _profile_for_tailor(profile: dict, track_cfg: dict | None) -> dict:
     return constrained
 
 
+_UNFINISHED_RE = re.compile(
+    r"in development|active development|in progress|design complete|partial implementation|work in progress|\bwip\b",
+    re.I)
+
+
+def drop_unfinished_projects(profile: dict, project_ids: list) -> list:
+    by_id = {p.get("id"): p for p in profile.get("projects", []) or []}
+
+    def unfinished(pid) -> bool:
+        proj = by_id.get(pid) or {}
+        text = " ".join([str(proj.get("tagline") or "")] + [str(b) for b in proj.get("bullets") or []])
+        return bool(_UNFINISHED_RE.search(text))
+
+    finished = [pid for pid in project_ids if not unfinished(pid)]
+    return finished or list(project_ids[:1])
+
+
 def assemble_package(entry: dict, scan_date: str, *, queue_dir=None, client=None) -> dict:
     """Tailor + render + validate one job into a package dir. Returns the
     meta dict plus package_dir/cv_path/cover_letter_path (str paths). Does
@@ -133,6 +150,12 @@ def assemble_package(entry: dict, scan_date: str, *, queue_dir=None, client=None
     # track's list (templates/cv.html.j2's optional fields.skills_groups).
     # No track config -> leave fields alone, every profile.skills group
     # renders (current/pre-track behavior).
+    # Unfinished projects ("in development", "rollout in progress") read as
+    # hobby work next to production systems (Teodor, 2026-09-28). The model
+    # ignores the prompt rule often enough that it is enforced here; one is
+    # kept only when nothing finished was chosen.
+    fields["project_ids"] = drop_unfinished_projects(profile, fields.get("project_ids", []))
+
     if track_cfg and track_cfg.get("skill_groups"):
         fields["skills_groups"] = list(track_cfg["skill_groups"])
 

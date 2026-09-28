@@ -27,6 +27,19 @@ HONESTY RULES — never break these:
 - If the JD requires something the profile does not contain, list it under gaps_honest.
 - Prefer fewer but stronger items over padding with weak ones.
 
+POSITIONING (always inside the honesty rules above):
+- Present him as the experienced AI engineer the profile shows, not a hobbyist: the summary
+  leads with his strongest AI evidence (the 2022 AI dissertation, written before ChatGPT's
+  release, and the production AI systems he runs), never with a list of small builds.
+- In experience_bullets, put production systems that real users rely on first (the client
+  analytics platform, SGEO); experiments and one-off tools come after, or are left out.
+- For project_ids, prefer systems that run in production over small demos. Leave out
+  projects the profile marks as unfinished (in development, design only, rollout in
+  progress) unless nothing finished fits the role. Three or four strong projects at most.
+- summary_rewrite keeps the specific facts (the dissertation predating ChatGPT, the named
+  systems) and adds no generic claims ("proven track record", "enhances user experience").
+  CV style: no "I", "my" or "me".
+
 OUTPUT SCHEMA (strict — return exactly this JSON):
 {
   "job_meta": {

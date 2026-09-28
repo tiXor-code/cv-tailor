@@ -74,15 +74,11 @@ contact:
   github: github.com/tiXor-code
 summary_pool:
 - id: ai_automation_engineer
-  text: 'AI automation engineer who ships end-to-end systems: LLM orchestration,
-
-    RAG, retrieval pipelines, n8n workflows, and the production glue around
-
-    Azure OpenAI, Claude, and embeddings. Built and shipped a customer-support
-
-    draft agent (HMAC webhook -> classify -> embed -> pgvector -> draft ->
-
-    grade) and the icp-agent prospecting service on Vercel.
+  text: 'AI engineer working with AI since a 2022 university dissertation on AI in games, written before
+    ChatGPT''s public release. Designs, ships and runs production AI systems end to end: LLM orchestration,
+    RAG, agentic workflows and evaluation across Claude, Azure OpenAI and embeddings, built AI-natively with
+    Claude Code every day. Runs a fleet of autonomous agents in production, including a client
+    analytics platform and SGEO, an autonomous SEO and AI-search agent.
 
     '
 - id: founder_entrepreneur
@@ -123,20 +119,26 @@ experiences:
   location: Bucharest, Romania (remote-first)
   dates: Mar 2026 – Present
   bullets:
-  - Founded and run a 4-person creative agency; live since 2026-03-18 at ministerucreativ.com / .ro.
+  - Founded and run a 4-person creative agency, live since March 2026.
+  - 'Built the agency''s client analytics platform: one dashboard per client combining Instagram and Google
+    Search Console data, AI-written insights checked against the underlying data, monthly reports and
+    role-based client access.'
+  - 'Built SGEO, an autonomous SEO and AI-search (GEO) agent: tracks Google rankings and whether ChatGPT,
+    Gemini and Perplexity cite a site, then proposes and ships fixes and AI-written, fact-checked guides
+    within owner-set autonomy levels. One live site is cited by an AI assistant for 51 of 55 target searches.'
   - Built an internal AI prospecting dashboard with an n8n side-pipeline (Q1 2026 experiment).
   - Lead client delivery across web, branding, content, and automation.
   - 'Own all infrastructure: domain, hosting, CI/CD, analytics.'
 - id: wolff
-  role: Content Producer (freelance, ongoing)
-  company: Wolff Digital Marketing
+  role: AI Video Content Producer
+  company: Freelance
   location: Remote
-  dates: Jan 2026 – Present
+  dates: Jan 2026 – Apr 2026 (on hold)
   bullets:
-  - Produce short-form Instagram video content end-to-end, delivering up to 40 videos per week, with videos
+  - Produced short-form Instagram video content end-to-end, delivering up to 40 videos per week, with videos
     regularly reaching millions of views.
-  - Own scripting and copy, concept direction, quality review, and final selection of what is publishable.
-  - 'Run an AI-assisted production pipeline (Higgsfield, Kling, ElevenLabs for voice creation): reference-driven
+  - Owned scripting and copy, concept direction, quality review, and final selection of what is publishable.
+  - 'Ran an AI-assisted production pipeline (Higgsfield, Kling, ElevenLabs for voice creation): reference-driven
     prompt design, batch styled variants, and an internal production web tool I built, including a fine-tuned
     compose model.'
 - id: ea
@@ -405,7 +407,7 @@ education:
 - degree: BSc Computer Games Design and Development
   institution: University of Worcester
   year: 2022
-  notes: Dissertation "AI in Games" (predates the LLM wave).
+  notes: Dissertation "AI in Games" (2022), researching AI before ChatGPT's public release.
 languages_spoken:
 - language: Romanian
   level: native

@@ -36,6 +36,8 @@ fields that tailored his CV (pitch, matched keywords, chosen experiences/project
 HARD RULES:
 - Use ONLY facts present in the profile. Never invent employers, titles, dates,
   metrics, or skills. If the JD wants something he lacks, do not claim it.
+- Never claim impact or skill levels the profile does not state ("significantly
+  improved client outcomes", "strong Python skills"). Describe what he built.
 - LENGTH: write between 130 and 170 words. Count them before you answer. A letter
   under 130 words will be rejected.
 - Shape: one tight opener, 2-3 sentences of specific evidence tied to THIS job,
