@@ -65,6 +65,7 @@ class _Admin:
         self.questions = []
         self.tokens = []
         self.adopted = []
+        self.cv_requests = []
         self.adopt_ok = True
 
     @contextmanager
@@ -92,6 +93,7 @@ class _Admin:
                     return self._json(200, {"job": {"date": "2026-09-25", "id": "job-1", "company": "Fixture Co",
                                                     "title": "AI Engineer"} if hit else None})
                 if self.path.startswith("/api/scout/ext/cv"):
+                    admin.cv_requests.append(self.path)
                     self.send_response(200)
                     self.send_header("content-type", "application/pdf")
                     self.send_header("content-length", str(len(PDF)))
@@ -613,3 +615,33 @@ def test_packaged_zip_includes_the_icons(tmp_path):
     manifest = json.loads((EXT_SRC / "manifest.json").read_text())
     for path in manifest["icons"].values():
         assert f"scout-fill/{path}" in names
+
+
+def test_multi_step_form_uploads_cv_then_cover_letter_each_to_its_own_step(tmp_path):
+    # join.com, 2026-09-28: after the CV step comes "Upload your cover letter";
+    # the CV must never go into the cover-letter box.
+    admin = _Admin([])
+    with admin.serve() as base, _browser(tmp_path, base) as ctx:
+        page = _open(ctx, f"{base}/steps_upload.html#scout-fill=2026-09-25~job-1")
+        _wait_filled(page)
+        page.wait_for_function("() => document.getElementById('uploaded').textContent.includes('Teodor-Lutoiu-CV.pdf')",
+                               timeout=10000)
+        page.click("#continue")
+        page.wait_for_function("() => document.getElementById('uploaded').textContent.includes('coverLetter')",
+                               timeout=15000)
+        got = json.loads(page.inner_text("#uploaded"))
+        assert got == {"cv": "Teodor-Lutoiu-CV.pdf", "coverLetter": "Teodor-Lutoiu-Cover-Letter.pdf"}
+        assert any("kind=cover" in r for r in admin.cv_requests)
+        page.wait_for_function("() => document.querySelector('#scout-fill-panel').shadowRoot.querySelector('.box')"
+                               ".innerText.includes('Tailored cover letter uploaded')", timeout=10000)
+        assert admin.applied == []
+
+
+def test_a_form_with_resume_and_cover_letter_inputs_gets_both(tmp_path):
+    admin = _Admin([])
+    with admin.serve() as base, _browser(tmp_path, base) as ctx:
+        page = _open(ctx, f"{base}/greenhouse_form.html#scout-fill=2026-09-25~job-1")
+        _wait_filled(page)
+        page.wait_for_function("() => document.querySelector('#cover_letter').files.length === 1", timeout=10000)
+        assert page.eval_on_selector("#resume", "e => e.files[0].name") == "Teodor-Lutoiu-CV.pdf"
+        assert page.eval_on_selector("#cover_letter", "e => e.files[0].name") == "Teodor-Lutoiu-Cover-Letter.pdf"

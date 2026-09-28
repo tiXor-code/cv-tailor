@@ -74,7 +74,8 @@ async function handle(msg) {
     }
     case "cv": {
       const { date, id } = job(msg);
-      const res = await api(`/api/scout/ext/cv?date=${date}&id=${encodeURIComponent(id)}`);
+      const kind = msg.kind === "cover" ? "&kind=cover" : ""; // the cover letter as a PDF
+      const res = await api(`/api/scout/ext/cv?date=${date}&id=${encodeURIComponent(id)}${kind}`);
       return { base64: toBase64(await res.arrayBuffer()) };
     }
     case "applied": {

@@ -1,0 +1,29 @@
+<!doctype html>
+<html><head><title>Fixture Co - Apply</title></head>
+<body>
+<!-- Shaped like join.com (2026-09-28): one page, steps swapped in place with
+     history.pushState: "Upload your CV", then "Upload your cover letter".
+     Each step is only an upload box that accepts drops. -->
+<h1 id="h">Upload your CV</h1>
+<div id="box" style="border:1px dashed #999;padding:40px;width:400px">
+  <p>Upload file</p>
+  <p>Click to browse, or drag &amp; drop a file here.</p>
+</div>
+<p id="uploaded"></p>
+<button id="continue" type="button">Continue</button>
+<script>
+  const got = {};
+  const box = document.getElementById("box");
+  box.addEventListener("dragover", (e) => e.preventDefault());
+  box.addEventListener("drop", (e) => {
+    e.preventDefault();
+    const step = new URLSearchParams(location.search).get("step") || "cv";
+    got[step] = e.dataTransfer.files[0].name;
+    document.getElementById("uploaded").textContent = JSON.stringify(got);
+  });
+  document.getElementById("continue").addEventListener("click", () => {
+    history.pushState({}, "", location.pathname + "?step=coverLetter" + location.hash);
+    document.getElementById("h").textContent = "Upload your cover letter";
+  });
+</script>
+</body></html>

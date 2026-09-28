@@ -435,16 +435,35 @@
     return hits.find((n) => !hits.some((m) => m !== n && n.contains(m))) || null;
   }
 
-  async function attachCv(job, root = document) {
+  // Which document an upload wants: its own label/name first ("cover_letter",
+  // "Resume"), then the step it sits on (join.com: "Upload your cover letter",
+  // .../apply/coverLetter). null = the input doesn't say.
+  const COVER_RE = /cover/i;
+  const CV_RE = /resume|\bcv\b|curriculum/i;
+  function fileKind(input) {
+    const own = `${input.id} ${input.name} ${labelOf(input)}`;
+    if (COVER_RE.test(own)) return "cover";
+    if (CV_RE.test(own)) return "cv";
+    return null;
+  }
+  function stepKind(root) {
+    const heading = [...root.querySelectorAll("h1, h2")].filter(visible).map((h) => h.innerText).join(" ");
+    return COVER_RE.test(`${heading} ${location.pathname}`) ? "cover" : "cv";
+  }
+  const FILE_NAMES = { cv: "Teodor-Lutoiu-CV.pdf", cover: "Teodor-Lutoiu-Cover-Letter.pdf" };
+
+  async function attachCv(job, root = document, kind = "cv") {
     if (!job) return null; // a job not on his list has no tailored CV
     const inputs = [...root.querySelectorAll("input[type=file]")];
-    const target = inputs.find((i) => /resume|cv|curriculum/i.test(`${i.id} ${i.name} ${labelOf(i)}`)) || inputs[0];
-    const dropBox = target ? null : dropZoneOf(root);
+    const target = kind === "cover"
+      ? inputs.find((i) => fileKind(i) === "cover") || (inputs.length === 1 && !fileKind(inputs[0]) ? inputs[0] : null)
+      : inputs.find((i) => fileKind(i) === "cv") || inputs.find((i) => fileKind(i) !== "cover");
+    const dropBox = target || inputs.length ? null : dropZoneOf(root);
     if (!target && !dropBox) return null;
-    const res = await send({ type: "cv", date: job.date, id: job.id });
+    const res = await send({ type: "cv", date: job.date, id: job.id, kind });
     if (!res.ok) return false;
     const bytes = Uint8Array.from(atob(res.data.base64), (c) => c.charCodeAt(0));
-    const file = new File([bytes], "Teodor-Lutoiu-CV.pdf", { type: "application/pdf" });
+    const file = new File([bytes], FILE_NAMES[kind], { type: "application/pdf" });
     if (!target) {
       // join.com-style upload box with no file input in the page: drop onto it
       const before = document.body.innerText;
@@ -498,10 +517,13 @@
     }
     if (!fields.length && job && (root.querySelector("input[type=file]") || dropZoneOf(root))) {
       // an upload-only step (join.com "Upload your CV")
-      panel.status("Uploading your tailored CV...");
-      const cv = await attachCv(job, root);
-      panel.status(cv ? "Tailored CV uploaded. Check it shows, then continue."
-        : "Couldn't upload the CV here. Press \"Send this form's layout to Scout\" so it can be fixed.");
+      const input = root.querySelector("input[type=file]");
+      const kind = (input && fileKind(input)) || stepKind(root);
+      const what = kind === "cover" ? "cover letter" : "CV";
+      panel.status(`Uploading your tailored ${what}...`);
+      const cv = await attachCv(job, root, kind);
+      panel.status(cv ? `Tailored ${what} uploaded. Check it shows, then continue.`
+        : `Couldn't upload the ${what} here. Press "Send this form's layout to Scout" so it can be fixed.`);
       panel.report.hidden = Boolean(cv);
       panel.btn.textContent = "Upload again";
       panel.btn.disabled = false;
@@ -543,8 +565,11 @@
       }
     }
     pending = pending.concat(fields.filter((f) => needs.includes(f.label.replace(/\s*\*\s*$/, ""))));
-    const cv = await attachCv(job, root);
+    const cv = await attachCv(job, root, "cv");
     if (cv === false) needs.push("CV upload (download it from your Scout list)");
+    if (job && [...root.querySelectorAll("input[type=file]")].some((i) => fileKind(i) === "cover")) {
+      if (await attachCv(job, root, "cover") === false) needs.push("Cover letter upload");
+    }
     if (cv === null && !job && root.querySelector("input[type=file]")) needs.push("CV upload (not on your Scout list, so attach your own)");
     panel.needs(needs);
     const next = LINKEDIN ? "Next (or Submit on the last step)" : "Submit";
@@ -636,6 +661,7 @@
     return null;
   }
   let watching = false;
+  let submitted = false; // the application was sent: no more filling in this tab
   function watchSubmission(getJob) {
     if (watching) return;
     watching = true;
@@ -646,6 +672,7 @@
     const record = async (how) => {
       if (recorded) return;
       recorded = true;
+      submitted = true;
       clearTimeout(markTimer);
       await saveTyped(true);
       const job = jobNow();
@@ -764,6 +791,18 @@
     panel.save.addEventListener("click", () => saveTyped(false));
     panel.report.addEventListener("click", () => sendLayout(document));
     watchSubmission(() => currentJob);
+    // join.com moves through CV -> cover letter -> questions without loading
+    // a new page. Once he has used the panel, each new step is filled once.
+    let lastHref = location.href;
+    const done = new Set();
+    setInterval(async () => {
+      if (location.href === lastHref) return;
+      lastHref = location.href;
+      if (!filled || submitted || done.has(lastHref) || !panel || panel.btn.disabled) return;
+      done.add(lastHref);
+      await sleep(1200); // let the new step render
+      if (!submitted) fill(currentJob);
+    }, 700);
   }
   // A job not on his list: Scout reads its description (this page, the job
   // page behind it, or -- on LinkedIn -- only the page he has open), adds it
