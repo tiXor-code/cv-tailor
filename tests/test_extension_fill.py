@@ -617,12 +617,14 @@ def test_packaged_zip_includes_the_icons(tmp_path):
         assert f"scout-fill/{path}" in names
 
 
-def test_multi_step_form_uploads_cv_then_cover_letter_each_to_its_own_step(tmp_path):
+@pytest.mark.parametrize("variant", ["", "?chakra=1"])
+def test_multi_step_form_uploads_cv_then_cover_letter_each_to_its_own_step(tmp_path, variant):
     # join.com, 2026-09-28: after the CV step comes "Upload your cover letter";
-    # the CV must never go into the cover-letter box.
+    # the CV must never go into the cover-letter box. ?chakra=1 is the live
+    # shape: two unnamed uploaders per step, one hidden.
     admin = _Admin([])
     with admin.serve() as base, _browser(tmp_path, base) as ctx:
-        page = _open(ctx, f"{base}/steps_upload.html#scout-fill=2026-09-25~job-1")
+        page = _open(ctx, f"{base}/steps_upload.html{variant}#scout-fill=2026-09-25~job-1")
         _wait_filled(page)
         page.wait_for_function("() => document.getElementById('uploaded').textContent.includes('Teodor-Lutoiu-CV.pdf')",
                                timeout=10000)

@@ -21,8 +21,27 @@
     got[step] = e.dataTransfer.files[0].name;
     document.getElementById("uploaded").textContent = JSON.stringify(got);
   });
+  // ?chakra=1: live join.com (layout report 2026-09-28) renders TWO unnamed
+  // uploaders per step, one in a hidden wrapper; only the visible one counts.
+  if (new URLSearchParams(location.search).has("chakra")) {
+    const hiddenWrap = document.createElement("div");
+    hiddenWrap.style.display = "none";
+    hiddenWrap.innerHTML = '<div data-part="root"><div data-part="trigger">Upload file</div><input type="file" accept=".pdf" id="hidden-variant"></div>';
+    box.before(hiddenWrap);
+    const visibleInput = document.createElement("input");
+    visibleInput.type = "file"; visibleInput.accept = ".pdf"; visibleInput.id = "shown-variant";
+    visibleInput.style.cssText = "position:absolute;width:1px;height:1px;clip:rect(0 0 0 0)";
+    box.append(visibleInput);
+    const step = () => new URLSearchParams(location.search).get("step") || "cv";
+    visibleInput.addEventListener("change", () => {
+      got[step()] = visibleInput.files[0].name;
+      document.getElementById("uploaded").textContent = JSON.stringify(got);
+    });
+    document.getElementById("hidden-variant").addEventListener("change", () => { got.wrong = "hidden"; });
+  }
   document.getElementById("continue").addEventListener("click", () => {
-    history.pushState({}, "", location.pathname + "?step=coverLetter" + location.hash);
+    const keep = new URLSearchParams(location.search).has("chakra") ? "&chakra=1" : "";
+    history.pushState({}, "", location.pathname + "?step=coverLetter" + keep + location.hash);
     document.getElementById("h").textContent = "Upload your cover letter";
   });
 </script>

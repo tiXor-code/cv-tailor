@@ -455,9 +455,19 @@
   async function attachCv(job, root = document, kind = "cv") {
     if (!job) return null; // a job not on his list has no tailored CV
     const inputs = [...root.querySelectorAll("input[type=file]")];
-    const target = kind === "cover"
-      ? inputs.find((i) => fileKind(i) === "cover") || (inputs.length === 1 && !fileKind(inputs[0]) ? inputs[0] : null)
-      : inputs.find((i) => fileKind(i) === "cv") || inputs.find((i) => fileKind(i) !== "cover");
+    // An input that names its document wins. Unnamed inputs are used when the
+    // step itself is about this document (join.com's "Upload your cover
+    // letter" has two unnamed Chakra uploaders, one hidden), or for the CV on
+    // an ordinary form with no input named "resume".
+    let candidates = inputs.filter((i) => fileKind(i) === kind);
+    if (!candidates.length) {
+      const unnamed = inputs.filter((i) => !fileKind(i));
+      const cvFallback = kind === "cv" && !inputs.some((i) => fileKind(i) === "cv");
+      if (stepKind(root) === kind || cvFallback) candidates = unnamed;
+    }
+    // prefer the uploader he can see (the other variant sits in a hidden wrapper)
+    const shown = (i) => visible(i) || visible(i.parentElement);
+    const target = candidates.find(shown) || candidates[0];
     const dropBox = target || inputs.length ? null : dropZoneOf(root);
     if (!target && !dropBox) return null;
     const res = await send({ type: "cv", date: job.date, id: job.id, kind });
