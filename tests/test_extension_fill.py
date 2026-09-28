@@ -557,3 +557,17 @@ def test_linkedin_job_not_on_his_list_is_added_tailored_from_the_page_he_has_ope
         page.click("#next")
         page.wait_for_function("() => document.querySelector('#resume') && document.querySelector('#resume').files.length === 1",
                                timeout=15000)
+
+
+@pytest.mark.parametrize("variant", ["?input=1", ""])
+def test_upload_only_step_gets_the_tailored_cv(tmp_path, variant):
+    # join.com, 2026-09-28: "Upload your CV" has no questions, and Scout said
+    # "No form found" instead of uploading.
+    admin = _Admin([])
+    with admin.serve() as base, _browser(tmp_path, base) as ctx:
+        page = _open(ctx, f"{base}/upload_only.html{variant}#scout-fill=2026-09-25~job-1")
+        _wait_filled(page)
+        page.wait_for_function("() => document.getElementById('uploaded').textContent.includes('Teodor-Lutoiu-CV.pdf')",
+                               timeout=10000)
+        assert "Tailored CV uploaded" in _panel_text(page)
+        assert admin.applied == []

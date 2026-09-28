@@ -334,15 +334,35 @@
     return false; // typed, but nothing to pick: he confirms it
   }
 
+  // The upload box itself, for pages that only render a file input on click:
+  // the smallest element that says "drag & drop" / "drop a file".
+  function dropZoneOf(root) {
+    const hits = [...root.querySelectorAll("div, label, section, button, [role=button]")]
+      .filter((n) => visible(n) && /drag\s*(&|and)\s*drop|drop (a |your )?(file|cv|resume)/i.test(n.innerText || ""));
+    return hits.find((n) => !hits.some((m) => m !== n && n.contains(m))) || null;
+  }
+
   async function attachCv(job, root = document) {
     if (!job) return null; // a job not on his list has no tailored CV
     const inputs = [...root.querySelectorAll("input[type=file]")];
     const target = inputs.find((i) => /resume|cv|curriculum/i.test(`${i.id} ${i.name} ${labelOf(i)}`)) || inputs[0];
-    if (!target) return null;
+    const dropBox = target ? null : dropZoneOf(root);
+    if (!target && !dropBox) return null;
     const res = await send({ type: "cv", date: job.date, id: job.id });
     if (!res.ok) return false;
     const bytes = Uint8Array.from(atob(res.data.base64), (c) => c.charCodeAt(0));
     const file = new File([bytes], "Teodor-Lutoiu-CV.pdf", { type: "application/pdf" });
+    if (!target) {
+      // join.com-style upload box with no file input in the page: drop onto it
+      const before = document.body.innerText;
+      for (const type of ["dragenter", "dragover", "drop"]) {
+        const dtx = new DataTransfer();
+        dtx.items.add(file);
+        dropBox.dispatchEvent(new DragEvent(type, { bubbles: true, cancelable: true, dataTransfer: dtx }));
+      }
+      await sleep(1500);
+      return document.body.innerText !== before;
+    }
     const dt = new DataTransfer();
     dt.items.add(file);
     target.files = dt.files;
@@ -382,6 +402,19 @@
         await sleep(1200); // Ashby re-renders the resume input after the tab opens
         fields = scan();
       }
+    }
+    if (!fields.length && job && (root.querySelector("input[type=file]") || dropZoneOf(root))) {
+      // an upload-only step (join.com "Upload your CV")
+      panel.status("Uploading your tailored CV...");
+      const cv = await attachCv(job, root);
+      panel.status(cv ? "Tailored CV uploaded. Check it shows, then continue."
+        : "Couldn't upload the CV here. Press \"Send this form's layout to Scout\" so it can be fixed.");
+      panel.report.hidden = Boolean(cv);
+      panel.btn.textContent = "Upload again";
+      panel.btn.disabled = false;
+      filled = true;
+      panel.host.dataset.state = "filled";
+      return;
     }
     if (!fields.length) {
       panel.status(LINKEDIN ? "Nothing to fill on this step. Press Next." : "No form found on this page yet. Open the application form, then press Fill.");

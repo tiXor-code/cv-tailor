@@ -1,0 +1,25 @@
+<!doctype html>
+<html><head><title>Fixture Co - Upload your CV</title></head>
+<body>
+<!-- Shaped like join.com's "Upload your CV" step (2026-09-28): no questions,
+     only an upload box. ?input=1 renders a hidden file input inside the box;
+     without it the box has no input until clicked and only accepts drops. -->
+<h1>Upload your CV</h1>
+<div id="box" style="border:1px dashed #999;padding:40px;width:400px">
+  <p>Upload file</p>
+  <p>Click to browse, or drag &amp; drop a file here. The file size limit is 10 MB.</p>
+</div>
+<p id="uploaded"></p>
+<script>
+  const box = document.getElementById("box");
+  const show = (files) => { if (files && files.length) document.getElementById("uploaded").textContent = "Uploaded: " + files[0].name; };
+  if (new URLSearchParams(location.search).has("input")) {
+    const input = document.createElement("input");
+    input.type = "file"; input.style.display = "none"; input.accept = ".pdf";
+    input.addEventListener("change", () => show(input.files));
+    box.append(input);
+  }
+  box.addEventListener("dragover", (e) => e.preventDefault());
+  box.addEventListener("drop", (e) => { e.preventDefault(); show(e.dataTransfer.files); });
+</script>
+</body></html>
