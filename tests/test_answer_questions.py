@@ -125,3 +125,16 @@ def test_a_job_scout_found_on_linkedin_was_heard_about_on_linkedin(mod, monkeypa
          "options": ["LinkedIn job posts", "Job Portals", "Other"]}
     rc, out = _run(mod, {"date": "2026-09-25", "id": "job-1", "questions": [q]}, monkeypatch)
     assert rc == 0 and out["answers"][0]["value"] == "LinkedIn job posts"
+
+
+def test_a_placeholder_is_not_a_question_and_gets_no_composed_answer(mod, monkeypatch, tmp_path):
+    _queue(tmp_path)
+    qs = [{"label": "Your answer", "kind": "textarea", "required": True},
+          {"label": "Type your answer here", "kind": "textarea", "required": False},
+          {"label": "Have you shipped a fixture to production?", "kind": "textarea", "required": True}]
+    rc, out = _run(mod, {"date": "2026-09-25", "id": "job-1", "questions": qs}, monkeypatch)
+    assert rc == 0
+    a = out["answers"]
+    assert a[0]["value"] is None and a[0]["needs_you"] is True
+    assert a[1]["value"] is None and a[1]["needs_you"] is False
+    assert a[2]["value"] == "Yes, the fixture."

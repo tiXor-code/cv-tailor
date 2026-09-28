@@ -80,6 +80,12 @@ def _questions(raw) -> list[Question] | None:
     return out
 
 
+# A label that names no question at all (a bare placeholder or field name).
+_NOT_A_QUESTION_RE = re.compile(
+    r"^\s*((your |type (your |an )?|enter (your |an )?|write (your |an )?)?"
+    r"(answer|response|text|reply|here|value|input)\b.{0,20}|[\w.\-\[\]]{0,3})\s*$", re.I)
+
+
 def main(argv=None, *, client=None) -> int:
     try:
         payload = json.load(sys.stdin)
@@ -119,6 +125,10 @@ def main(argv=None, *, client=None) -> int:
             print(f"llm unavailable ({type(exc).__name__}); deterministic answers only", file=sys.stderr)
 
     def one(q: Question) -> dict:
+        if _NOT_A_QUESTION_RE.match(q.label or ""):
+            # "Your answer" is a placeholder, not a question: composing an answer
+            # to it wrote a pitch into join.com's "What city do you live in?"
+            return {"label": q.label, "value": None, "source": "", "needs_you": q.required}
         if q.kind == "consent":
             ok = consent_is_application_only(q.options[0] if q.options else q.label)
             return {"label": q.label, "value": "yes" if ok else None,

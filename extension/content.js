@@ -246,7 +246,25 @@
       const l = box.querySelector("label, legend, .application-label, [class*='label'], [class*='question-title']");
       if (l && clean(l.innerText)) return clean(l.innerText);
     }
-    return clean(el.getAttribute("placeholder") || el.getAttribute("name") || "");
+    // join.com asks one question per step as the page heading, with an
+    // unlabelled box under it: the heading IS the question. A question-shaped
+    // heading wins; otherwise a real placeholder ("First name") beats a
+    // section heading, and a generic one ("Your answer") does not.
+    const heading = headingBefore(el);
+    if (heading && /\?\s*$/.test(heading)) return heading;
+    const ph = clean(el.getAttribute("placeholder") || "");
+    if (ph && !GENERIC_PLACEHOLDER_RE.test(ph)) return ph;
+    return heading || ph || clean(el.getAttribute("name") || "");
+  }
+  const GENERIC_PLACEHOLDER_RE =
+    /^(your |type (your |an )?|enter (your |an )?|write (your |an )?)?(answer|response|text|reply|here)\b.{0,20}$/i;
+  function headingBefore(el) {
+    let best = null;
+    for (const h of document.querySelectorAll("h1, h2, h3, h4, legend")) {
+      if (!visible(h) || h.closest("#scout-fill-panel")) continue;
+      if (h.compareDocumentPosition(el) & Node.DOCUMENT_POSITION_FOLLOWING) best = h;
+    }
+    return best ? clean(best.innerText).slice(0, 300) : "";
   }
 
   function isRequired(el, label) {

@@ -647,3 +647,13 @@ def test_a_form_with_resume_and_cover_letter_inputs_gets_both(tmp_path):
         page.wait_for_function("() => document.querySelector('#cover_letter').files.length === 1", timeout=10000)
         assert page.eval_on_selector("#resume", "e => e.files[0].name") == "Teodor-Lutoiu-CV.pdf"
         assert page.eval_on_selector("#cover_letter", "e => e.files[0].name") == "Teodor-Lutoiu-Cover-Letter.pdf"
+
+
+def test_heading_question_over_an_unlabelled_box_is_the_question(tmp_path):
+    # join.com: "What city do you currently live in?" got a pitch paragraph,
+    # because the box itself carried no label, only "Your answer".
+    admin = _Admin([])
+    with admin.serve() as base, _browser(tmp_path, base) as ctx:
+        page = _open(ctx, f"{base}/question_step.html#scout-fill=2026-09-25~job-1")
+        _wait_filled(page)
+        assert [q["label"] for q in admin.questions] == ["What city do you currently live in?"]
