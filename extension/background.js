@@ -1,7 +1,7 @@
 // Scout Fill -- background service worker.
 // The only component that talks to admin.teodorlutoiu.com, with the personal
 // extension key from chrome.storage.local (never synced, never in the page).
-// Content scripts ask it for four things; anything else is refused.
+// Content scripts ask it for a fixed set of things; anything else is refused.
 
 const DEFAULT_BASE = "https://admin.teodorlutoiu.com";
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -42,6 +42,17 @@ async function handle(msg) {
       const url = String(msg.url || "").slice(0, 2000);
       const title = String(msg.title || "").slice(0, 500);
       return (await api(`/api/scout/ext/lookup?url=${encodeURIComponent(url)}&title=${encodeURIComponent(title)}`)).json();
+    }
+    case "adopt": {
+      // a job he opened himself: the mini finds its JD, lists it, tailors the CV
+      const str = (v, n) => String(v || "").slice(0, n);
+      const url = str(msg.url, 2000);
+      if (!url.startsWith("https://")) throw new Error("not an https page");
+      return (await api("/api/scout/ext/adopt", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ url, title: str(msg.title, 500), company: str(msg.company, 200), text: str(msg.text, 60000) }),
+      })).json();
     }
     case "answer": {
       // date+id = a job on his list; neither = any other (LinkedIn Easy Apply).

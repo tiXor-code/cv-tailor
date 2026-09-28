@@ -57,6 +57,7 @@
 
   // -------------------------------------------------------------- panel ----
   let panel = null;
+  let markHandler = null; // set once the submission watcher runs
   function makePanel(job, { line: lineText, button: buttonText } = {}) {
     const host = document.createElement("div");
     host.id = "scout-fill-panel";
@@ -71,7 +72,8 @@
         background:#0f6b5c;color:#fff;cursor:pointer}
       button[disabled]{opacity:.5;cursor:default}
       ul{margin:6px 0 0;padding-left:18px;max-height:140px;overflow:auto}
-      .muted{color:#5b6865}`;
+      .muted{color:#5b6865}
+      [hidden]{display:none!important}`;
     const box = document.createElement("div");
     box.className = "box";
     const title = document.createElement("div");
@@ -95,7 +97,13 @@
     report.textContent = "Send this form's layout to Scout";
     report.style.cssText = "display:block;background:#fff;color:#0f6b5c;font-weight:500";
     report.hidden = true;
-    box.append(title, line, status, list, btn, save, report);
+    const mark = document.createElement("button");
+    mark.type = "button";
+    mark.textContent = "It went through: mark as applied";
+    mark.style.cssText = "display:block";
+    mark.hidden = true;
+    mark.addEventListener("click", () => { if (markHandler) markHandler(); });
+    box.append(title, line, status, list, btn, save, mark, report);
     root.append(style, box);
     document.documentElement.append(host);
     return {
@@ -103,6 +111,8 @@
       btn,
       save,
       report,
+      mark,
+      line: (text) => { line.textContent = text; },
       status: (text) => { status.textContent = text; },
       needs: (labels) => {
         list.replaceChildren(...labels.map((l) => {
@@ -485,32 +495,77 @@
   }
 
   // ------------------------------------------------- after HE submits ----
+  // He pressed Submit: watch for the site's confirmation, then tick the job on
+  // his list. The "pressed Submit on job X" mark is kept in the tab for a few
+  // minutes, so a site that loads a separate thank-you page still records it.
+  // If no confirmation shows up, the panel offers a button to record it by hand
+  // and always says which of the two happened.
+  const ARMED_KEY = "scoutFillArmed";
+  const ARMED_TTL_MS = 10 * 60 * 1000;
+  function armedFromTab() {
+    try {
+      const a = JSON.parse(sessionStorage.getItem(ARMED_KEY) || "null");
+      if (a && a.date && a.id && Date.now() - a.at < ARMED_TTL_MS) return a;
+    } catch {}
+    return null;
+  }
+  let watching = false;
   function watchSubmission(getJob) {
-    let armed = false;
-    const arm = () => { if (filled) armed = true; };
+    if (watching) return;
+    watching = true;
+    let armed = Boolean(armedFromTab());
+    let recorded = false;
+    let markTimer = null;
+    const jobNow = () => getJob() || armedFromTab();
+    const record = async (how) => {
+      if (recorded) return;
+      recorded = true;
+      clearTimeout(markTimer);
+      await saveTyped(true);
+      const job = jobNow();
+      try { sessionStorage.removeItem(ARMED_KEY); } catch {}
+      if (!panel) panel = makePanel(job);
+      panel.mark.hidden = true;
+      if (!job) {
+        panel.status("Submitted. This job isn't on your Scout list, so there is nothing to tick. Your typed answers are saved.");
+        return;
+      }
+      const res = await send({ type: "applied", date: job.date, id: job.id });
+      panel.status(res.ok
+        ? `Recorded as applied on your Scout list${how === "hand" ? " (marked by you)" : ""}.`
+        : "NOT recorded: Scout could not reach your list. Tick it on your Scout list.");
+      panel.host.dataset.state = res.ok ? "recorded" : "record-failed";
+      try { sessionStorage.removeItem(STORE_KEY); } catch {}
+    };
+    const arm = () => {
+      if (!filled || recorded) return;
+      armed = true;
+      const job = getJob();
+      if (job) {
+        try { sessionStorage.setItem(ARMED_KEY, JSON.stringify({ date: job.date, id: job.id, at: Date.now() })); } catch {}
+      }
+      clearTimeout(markTimer);
+      markTimer = setTimeout(() => {
+        if (recorded || !panel) return;
+        if (jobNow()) {
+          panel.status("No confirmation from the site yet. If your application went through, mark it here.");
+          panel.mark.hidden = false;
+        }
+      }, 8000);
+    };
     document.addEventListener("submit", arm, true);
     document.addEventListener("click", (e) => {
-      const b = e.target && e.target.closest && e.target.closest("button, input[type=submit]");
-      if (b && /submit|apply|send application/i.test(clean(b.innerText || b.value))) arm();
+      const b = e.target && e.target.closest && e.target.closest("button, input[type=submit], [role=button]");
+      if (b && /submit|apply|send/i.test(clean(b.innerText || b.value || b.getAttribute("aria-label")))) arm();
     }, true);
-    let recorded = false;
-    const check = async () => {
+    const check = () => {
       if (!armed || recorded) return;
-      if (CONFIRM_RE.test(document.body ? document.body.innerText : "")) {
-        recorded = true;
-        await saveTyped(true);
-        const job = getJob();
-        if (!job) {
-          if (panel) panel.status("Submitted. Your typed answers are saved for next time.");
-          return;
-        }
-        const res = await send({ type: "applied", date: job.date, id: job.id });
-        if (panel) panel.status(res.ok ? "Submitted. Recorded as applied on your Scout list." : "Submitted. Tick it on your Scout list.");
-        try { sessionStorage.removeItem(STORE_KEY); } catch {}
-      }
+      if (CONFIRM_RE.test(document.body ? document.body.innerText : "")) record("site");
     };
+    markHandler = () => record("hand");
     new MutationObserver(check).observe(document.documentElement, { childList: true, subtree: true, characterData: true });
     setInterval(check, 1500);
+    check();
   }
 
   // ------------------------------------------------------------ LinkedIn ----
@@ -551,6 +606,7 @@
         panel.status(job ? "Tailored CV ready. Click Fill on each step you want filled." : "Click Fill to fill this step.");
         panel.btn.addEventListener("click", async () => {
           following = true;
+          if (!job) job = await adoptThisJob();
           filledSteps.add(stepSignature(win));
           await fill(job, win);
         });
@@ -578,11 +634,48 @@
   function bootPanel(job, line) {
     panelBooted = true;
     panel = makePanel(job, line ? { line } : {});
-    panel.btn.addEventListener("click", () => fill(job));
+    panel.btn.addEventListener("click", () => fill(currentJob));
     panel.save.addEventListener("click", () => saveTyped(false));
     panel.report.addEventListener("click", () => sendLayout(document));
-    watchSubmission(() => job);
+    watchSubmission(() => currentJob);
   }
+  // A job not on his list: Scout reads its description (this page, the job
+  // page behind it, or -- on LinkedIn -- only the page he has open), adds it
+  // to his list and tailors his CV to it, so every fill is for THIS job.
+  function pageHints() {
+    if (LINKEDIN) {
+      const id = new URL(location.href).searchParams.get("currentJobId")
+        || (location.pathname.match(/\/jobs\/view\/(?:[^/]*?-)?(\d{6,})/) || [])[1];
+      const parts = document.title.split("|").map(clean);
+      const desc = document.querySelector("#job-details, .jobs-description__content, .jobs-description, [class*='jobs-description']");
+      return {
+        url: id ? `https://www.linkedin.com/jobs/view/${id}/` : location.href,
+        title: parts[0] || "", company: parts[1] && parts[1] !== "LinkedIn" ? parts[1] : "",
+        text: clean(desc ? desc.innerText : "").slice(0, 60000),
+      };
+    }
+    const h1 = document.querySelector("h1");
+    return {
+      url: location.href, company: "",
+      title: `${document.title} | ${h1 ? clean(h1.innerText) : ""}`.slice(0, 500),
+      text: clean(document.body ? document.body.innerText : "").slice(0, 60000),
+    };
+  }
+  async function adoptThisJob() {
+    panel.btn.disabled = true;
+    panel.status("Reading the job description and tailoring your CV to it (up to a minute)...");
+    const res = await send({ type: "adopt", ...pageHints() });
+    panel.btn.disabled = false;
+    if (!res.ok || !res.data || !res.data.id) {
+      panel.status(`Couldn't find a job description here (${res.error || "no JD"}). Filling from your profile only.`);
+      return null;
+    }
+    const job = { date: res.data.date, id: res.data.id, company: res.data.company, title: res.data.title };
+    try { sessionStorage.setItem(STORE_KEY, JSON.stringify({ date: job.date, id: job.id })); } catch {}
+    panel.line(`${job.company} - ${job.title} (added to your Scout list, CV tailored)`);
+    return job;
+  }
+
   async function openByHand() {
     if (LINKEDIN) {
       if (panel) return;
@@ -596,7 +689,8 @@
       return;
     }
     currentJob = await resolveJob();
-    bootPanel(currentJob, currentJob ? null : "Not on your Scout list - filled from your profile and saved answers");
+    bootPanel(currentJob, currentJob ? null : "New job - adding it to your Scout list");
+    if (!currentJob) currentJob = await adoptThisJob();
     fill(currentJob);
   }
   chrome.runtime.onMessage.addListener((msg) => {
@@ -611,6 +705,12 @@
     }
     if (window.top !== window && !document.querySelector("form, input, textarea")) return;
     const job = await resolveJob();
+    if (!job && armedFromTab() && window.top === window) {
+      // the thank-you page after a Submit he pressed on this tab's form
+      filled = true;
+      watchSubmission(() => null);
+      return;
+    }
     if (!job || panelBooted) return; // not a job from his list: stay invisible until he clicks the icon
     currentJob = job;
     bootPanel(job);

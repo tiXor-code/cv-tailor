@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Scout Fill",
-  "version": "0.4.1",
+  "version": "0.5.0",
   "description": "Fills job applications (and LinkedIn Easy Apply steps) with Scout's answers and your tailored CV. You review and press Submit.",
   "permissions": [
     "storage",
@@ -25,6 +25,7 @@
         "https://jobs.eu.lever.co/*",
         "https://apply.workable.com/*",
         "https://*.talentlyft.com/*",
+        "https://join.com/*",
         "https://www.linkedin.com/*"
       ],
       "js": [

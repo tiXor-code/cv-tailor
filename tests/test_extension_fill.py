@@ -64,6 +64,8 @@ class _Admin:
         self.answer_refs = []
         self.questions = []
         self.tokens = []
+        self.adopted = []
+        self.adopt_ok = True
 
     @contextmanager
     def serve(self):
@@ -122,6 +124,12 @@ class _Admin:
                     answers = [{"label": q["label"], "value": _answer_for(q),
                                 "needs_you": _answer_for(q) is None and q["required"]} for q in body["questions"]]
                     return self._json(200, {"ok": True, "cover_letter": "I build fixture agents.", "answers": answers})
+                if self.path == "/api/scout/ext/adopt":
+                    admin.adopted.append(body)
+                    if not admin.adopt_ok:
+                        return self._json(404, {"error": "no job description found on this page"})
+                    return self._json(200, {"date": "2026-09-25", "id": "job-1", "company": "Fixture Co",
+                                            "title": "AI Engineer", "tailored": True, "reused": False})
                 if self.path == "/api/scout/ext/layout":
                     admin.layouts.append(body)
                     return self._json(200, {"ok": True, "file": "layouts/x.html"})
@@ -153,6 +161,11 @@ def _test_copy(tmp_path, linkedin=False, extra_hosts=()) -> Path:
                                   "const LINKEDIN = true;")
         assert "const LINKEDIN = true;" in content
     (ext / "content.js").write_text(content)
+    # tests only: fixture pages are served over http
+    bg = (ext / "background.js").read_text()
+    guard = 'if (!url.startsWith("https://")) throw new Error("not an https page");'
+    assert guard in bg
+    (ext / "background.js").write_text(bg.replace(guard, 'if (!/^https?:\\/\\//.test(url)) throw new Error("not an https page");'))
     manifest = json.loads((ext / "manifest.json").read_text())
     manifest["host_permissions"].append("http://127.0.0.1/*")
     manifest["host_permissions"].extend(extra_hosts)
@@ -369,6 +382,7 @@ def test_linkedin_steps_filled_never_advanced_and_applied_after_his_submit(tmp_p
 
 def test_linkedin_job_not_on_his_list_is_filled_from_profile_without_a_cv(tmp_path):
     admin = _Admin([])                                  # not on his list
+    admin.adopt_ok = False                              # and no JD Scout could use
     with admin.serve() as base, _browser(tmp_path, base, linkedin=True) as ctx:
         page = _open_easy_apply(ctx, base)
         _panel_button(page, "Fill this step").click()
@@ -421,7 +435,8 @@ def test_talentlyft_required_flags_and_dropzone_resume(tmp_path):
 
 def _click_icon(ctx, page):
     # what his click on the toolbar icon runs, on the tab he is looking at
-    sw = ctx.service_workers[0]
+    # the extension's own worker, not a service worker the site registered
+    sw = next(w for w in ctx.service_workers if w.url.startswith("chrome-extension://"))
     page.bring_to_front()
     sw.evaluate("async (u) => { const [t] = await chrome.tabs.query({url: u}); await openOn(t); }",
                 page.url.split("#")[0])
@@ -432,6 +447,7 @@ def test_icon_opens_the_panel_on_a_page_not_on_his_list(tmp_path):
     # localhost is NOT in the content-script matches: only the click injects it
     # (the test's host permission stands in for the activeTab grant).
     admin = _Admin([])
+    admin.adopt_ok = False
     with admin.serve() as base, _browser(tmp_path, base, extra_hosts=["http://localhost/*"]) as ctx:
         url = base.replace("127.0.0.1", "localhost") + "/greenhouse_form.html"
         page = _open(ctx, url)
@@ -461,3 +477,83 @@ def test_talentlyft_confirmation_records_applied_and_saves_what_he_typed(tmp_pat
         assert admin.applied == [{"date": "2026-09-25", "id": "job-1"}]
         assert {"label": next(q["label"] for q in admin.questions if "notice period" in q["label"]),
                 "value": "Two weeks"} in admin.saved
+
+
+def _shadow_click(page, text):
+    page.evaluate("""(t) => [...document.querySelector('#scout-fill-panel').shadowRoot.querySelectorAll('button')]
+        .find(b => b.textContent.includes(t) && !b.hidden).click()""", text)
+
+
+def _panel_text(page):
+    return page.evaluate("() => document.querySelector('#scout-fill-panel').shadowRoot.querySelector('.box').innerText")
+
+
+def test_a_separate_thank_you_page_still_records_applied(tmp_path):
+    # Greenhouse/Lever style: Submit loads a new page with the confirmation.
+    admin = _Admin([])
+    with admin.serve() as base, _browser(tmp_path, base) as ctx:
+        page = _open(ctx, f"{base}/nav_form.html#scout-fill=2026-09-25~job-1")
+        _wait_filled(page)
+        page.click("button[type=submit]")
+        page.wait_for_url("**/nav_thanks.html*")
+        page.wait_for_selector("#scout-fill-panel[data-state=recorded]", state="attached", timeout=15000)
+        assert admin.applied == [{"date": "2026-09-25", "id": "job-1"}]
+        assert "Recorded as applied" in _panel_text(page)
+
+
+def test_no_confirmation_offers_mark_as_applied(tmp_path):
+    admin = _Admin([])
+    with admin.serve() as base, _browser(tmp_path, base) as ctx:
+        page = _open(ctx, f"{base}/nav_form.html?silent=1#scout-fill=2026-09-25~job-1")
+        _wait_filled(page)
+        page.evaluate("() => { document.querySelector('form').onsubmit = (e) => e.preventDefault(); }")
+        page.click("button[type=submit]")
+        page.wait_for_timeout(9000)
+        assert admin.applied == []
+        assert "mark it here" in _panel_text(page)
+        _shadow_click(page, "mark as applied")
+        page.wait_for_selector("#scout-fill-panel[data-state=recorded]", state="attached", timeout=10000)
+        assert admin.applied == [{"date": "2026-09-25", "id": "job-1"}]
+        assert "marked by you" in _panel_text(page)
+
+
+def test_icon_on_a_new_job_adds_it_tailored_then_fills_for_it(tmp_path):
+    # Teodor, 2026-09-28 (join.com): Scout reads the JD, lists the job, tailors
+    # the CV, then fills and uploads for THAT job.
+    admin = _Admin([])
+    with admin.serve() as base, _browser(tmp_path, base, extra_hosts=["http://localhost/*"]) as ctx:
+        page = _open(ctx, base.replace("127.0.0.1", "localhost") + "/greenhouse_form.html")
+        _click_icon(ctx, page)
+        _wait_filled(page)
+        assert len(admin.adopted) == 1 and admin.adopted[0]["url"].endswith("/greenhouse_form.html")
+        assert admin.answer_refs[-1] == {"date": "2026-09-25", "id": "job-1"}
+        assert page.eval_on_selector("#resume", "e => e.files.length") == 1
+        assert "added to your Scout list" in _panel_text(page)
+        assert "mark as applied" not in _panel_text(page)   # only after he submits
+
+
+def test_icon_on_a_page_without_a_jd_falls_back_to_profile_answers(tmp_path):
+    admin = _Admin([])
+    admin.adopt_ok = False
+    with admin.serve() as base, _browser(tmp_path, base, extra_hosts=["http://localhost/*"]) as ctx:
+        page = _open(ctx, base.replace("127.0.0.1", "localhost") + "/greenhouse_form.html")
+        _click_icon(ctx, page)
+        _wait_filled(page)
+        assert admin.answer_refs[-1] == {}
+        assert page.input_value("#first_name") == "Ada"
+
+
+def test_linkedin_job_not_on_his_list_is_added_tailored_from_the_page_he_has_open(tmp_path):
+    admin = _Admin([])
+    with admin.serve() as base, _browser(tmp_path, base, linkedin=True) as ctx:
+        page = _open_easy_apply(ctx, base)
+        _panel_button(page, "Fill this step").click()
+        _wait_filled(page)
+        sent = admin.adopted[0]
+        assert sent["title"] == "AI Engineer" and sent["company"] == "Fixture Co"
+        assert "fixture agents" in sent["text"] and "Easy Apply" not in sent["text"]
+        assert admin.answer_refs[-1] == {"date": "2026-09-25", "id": "job-1"}
+        page.fill("#years", "3")
+        page.click("#next")
+        page.wait_for_function("() => document.querySelector('#resume') && document.querySelector('#resume').files.length === 1",
+                               timeout=15000)

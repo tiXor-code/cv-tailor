@@ -243,3 +243,33 @@ def update_entry(scan_date_iso: str, job_id: str, mutator, *, queue_dir=None,
             fcntl.flock(lock_fd, fcntl.LOCK_UN)
     finally:
         os.close(lock_fd)
+
+
+def add_entry(scan_date_iso: str, entry: dict, description: str, *, queue_dir=None) -> dict:
+    """Append one entry (and its JD) to a day's queue under the same flock as
+    update_entry; an entry with the same id already there wins and is returned."""
+    day_dir = queue_root(queue_dir) / _validated_day(scan_date_iso)
+    day_dir.mkdir(parents=True, exist_ok=True)
+    path = day_dir / "jobs.json"
+    lock_fd = os.open(day_dir / ".jobs.lock", os.O_CREAT | os.O_RDWR, 0o644)
+    try:
+        fcntl.flock(lock_fd, fcntl.LOCK_EX)
+        try:
+            entries = json.loads(path.read_text()) if path.exists() else []
+            existing = next((e for e in entries if e.get("id") == entry["id"]), None)
+            if existing is not None:
+                return existing
+            entries.append(entry)
+            desc_path = day_dir / "descriptions.json"
+            try:
+                descriptions = json.loads(desc_path.read_text()) if desc_path.exists() else {}
+            except (json.JSONDecodeError, OSError):
+                descriptions = {}
+            descriptions[entry["id"]] = description
+            _write_atomic(desc_path, json.dumps(descriptions, indent=2, ensure_ascii=False))
+            _write_atomic(path, json.dumps(entries, indent=2, ensure_ascii=False))
+            return entry
+        finally:
+            fcntl.flock(lock_fd, fcntl.LOCK_UN)
+    finally:
+        os.close(lock_fd)
