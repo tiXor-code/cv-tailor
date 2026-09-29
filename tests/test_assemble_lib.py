@@ -178,7 +178,9 @@ def test_assemble_package_drops_unknown_skills_emphasis(tmp_path, monkeypatch):
     result = assemble_package(entry, "2026-07-10", queue_dir=tmp_path, client="unused-sentinel")
 
     assert result["skills_dropped"] == ["automation"]
-    assert seen_fields["skills_emphasis"] == ["Python"]
+    # Python is a real profile skill but in the languages group, which is
+    # never bolded (2026-09-29) -- un-emphasized, not "dropped".
+    assert seen_fields["skills_emphasis"] == []
     assert "automation" not in seen_fields["skills_emphasis"]
 
     meta_on_disk = json.loads((Path(result["package_dir"]) / "meta.json").read_text())
@@ -297,4 +299,4 @@ def test_assemble_package_missing_tracks_config_no_restriction(tmp_path):
 
     assert result["track"] == "ai"
     html = (Path(result["package_dir"]) / "cv.html").read_text()
-    assert "Languages:" in html
+    assert "Builds with (via AI tools):" in html

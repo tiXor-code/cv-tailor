@@ -27,3 +27,15 @@ def test_render_pdf_writes_a_valid_pdf(tmp_path, fixtures_dir, project_root):
     render_pdf(html, css_path=project_root / "templates" / "cv.css", out_path=out)
     assert out.exists()
     assert out.read_bytes().startswith(b"%PDF-")
+
+def test_skill_group_labels_frame_languages_as_built_with_ai(fixtures_dir, project_root):
+    # Teodor, 2026-09-29: he builds with AI tools and does not hand-write code,
+    # so "Languages:" must not read as a claim of coding skill; "Ai" -> "AI".
+    profile = load_profile(fixtures_dir / "profile_minimal.yaml")
+    profile["skills"] = {"languages": ["Python"], "ai": ["RAG"], "devops": ["Vercel"]}
+    fields = json.loads((fixtures_dir / "fields_valid.json").read_text())
+    fields.pop("skills_groups", None)
+    html = render_html(profile, fields, template_dir=project_root / "templates")
+    assert "Builds with (via AI tools):" in html
+    assert "Languages:" not in html
+    assert ">AI:<" in html and ">DevOps:<" in html

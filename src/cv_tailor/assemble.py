@@ -168,6 +168,11 @@ def assemble_package(entry: dict, scan_date: str, *, queue_dir=None, client=None
     emphasis = [canon.get(s.lower(), s) for s in fields.get("skills_emphasis", [])]
     fields["skills_emphasis"] = [s for s in emphasis if s.lower() in canon]
     skills_dropped = [s for s in emphasis if s.lower() not in canon]
+    # Programming languages are never bolded: he builds with AI tools and
+    # does not hand-write code, so emphasis there reads as a coding claim
+    # (Teodor, 2026-09-29). They still render, un-bolded, under their label.
+    coding = {s.lower() for s in (profile.get("skills", {}) or {}).get("languages", []) or []}
+    fields["skills_emphasis"] = [s for s in fields["skills_emphasis"] if s.lower() not in coding]
 
     # remaining honesty/schema validation still hard-fails on anything that
     # references content that would otherwise render as fact (experience,

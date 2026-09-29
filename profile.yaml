@@ -23,7 +23,7 @@ tracks:
   # which let nearly every posting past this gate.
   ai:
     summary_id: ai_automation_engineer
-    skill_groups: [languages, frameworks, ai, data, devops, tools]
+    skill_groups: [ai, languages, frameworks, data, devops, tools]
     keywords:
     - ai engineer
     - ai developer

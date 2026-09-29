@@ -63,11 +63,14 @@
   {# fields.skills_groups (optional) selects AND orders the groups shown, so a
      role-specific CV can lead with what matters (e.g. content before devops).
      Absent -> every profile group renders, as before. #}
+  {# "languages" is framed as what he builds with through AI tools: he does
+     not hand-write code (Teodor, 2026-09-29). #}
+  {% set skill_labels = {"languages": "Builds with (via AI tools)", "ai": "AI", "devops": "DevOps"} %}
   {% set group_names = fields.skills_groups if fields.get('skills_groups') else profile.skills.keys() %}
   {% for group in group_names %}
     {% if group in profile.skills %}
     <p class="skill-row">
-      <span class="skill-group">{{ group | title }}:</span>
+      <span class="skill-group">{{ skill_labels.get(group, group | title) }}:</span>
       {% for item in profile.skills[group] %}
         {% if item in fields.skills_emphasis %}<strong>{{ item }}</strong>{% else %}{{ item }}{% endif %}{% if not loop.last %}, {% endif %}
       {% endfor %}
