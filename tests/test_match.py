@@ -122,6 +122,19 @@ def test_scorer_prompt_carries_the_2026_09_24_calibration():
     assert "no ai" in low                      # AI-related roles only
 
 
+def test_scorer_prompt_prefers_builder_roles_over_hand_coding_2026_09_29():
+    # Teodor, 2026-09-29: he is a Claude Code builder, not a hand-coder.
+    low = " ".join(SCORER_SYSTEM_PROMPT.lower().split())
+    assert "builder roles are his category" in low
+    for title in ("ai automation specialist/engineer", "ai prototyper", "ai solutions consultant",
+                  "gtm engineer", "ai operations"):
+        assert title in low, title
+    assert "hand-coding roles score 4 or lower, even when they name claude code" in low
+    assert "that alone is not an ai-native signal" in low
+    assert "years of professional software engineering" in low
+    assert "tech stack is never a gap" not in low, "retired: coding-heavy roles got 7s"
+
+
 def test_the_pay_floor_travels_in_the_user_message_never_the_prompt():
     """The floor is his real number (answers.yaml, gitignored). It must never
     be written into this public repo's prompt, so it rides in per call."""

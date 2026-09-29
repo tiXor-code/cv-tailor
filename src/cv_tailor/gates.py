@@ -209,15 +209,49 @@ def requires_excluded_language(title: str, description: str) -> bool:
     return False
 
 
+# Hand-coding roles (Teodor, 2026-09-29): he builds with Claude Code and AI
+# tools and does not hand-write code, so a plain software/backend/python/ML
+# engineer title is not his kind of job. Naming Claude Code, Cursor or
+# Copilot does NOT rescue one: measured on his 42 handed-off jobs, 15 of the 19
+# coding-titled postings named such tools as everyday tooling for engineers.
+# Only an explicit "you don't need a coding background" keeps one. Ambiguous
+# titles (AI Engineer, Forward Deployed, Full Stack AI, Product Engineer) are
+# left to the LLM scorer.
+_HAND_CODING_TITLE_RE = re.compile(
+    r"\b(?:software|backend|back-end|python|java|golang|platform|infrastructure|devops|"
+    r"ml|machine\s+learning|data)\s+(?:engineer|developer)\b|"
+    r"\bsoftware\s+development\s+engineer\b|\bsde\b",
+    re.I)
+_NO_CODING_NEEDED_RE = re.compile(
+    r"not\s+a\s+traditional\s+(?:coding|engineering|developer|software)\s+role|"
+    r"no\s+(?:prior\s+|formal\s+)?(?:coding|programming|software\s+engineering)\s+"
+    r"(?:experience|background|knowledge)\s+(?:is\s+)?(?:required|needed|necessary)|"
+    r"(?:coding|programming)\s+(?:experience|background|knowledge)\s+(?:is\s+)?not\s+(?:required|needed|necessary)|"
+    r"(?:don't|do\s+not)\s+need\s+(?:to\s+be\s+(?:a|an)\s+)?(?:coding|programming|developer|engineering|software)|"
+    r"non[- ]traditional\s+(?:technical\s+)?background|vibe[- ]cod",
+    re.I)
+
+
+def is_hand_coding_role(title: str, description: str) -> bool:
+    """True for a hand-coding title (software/backend/python/ML engineer ...)
+    unless the posting says outright that a coding background is not needed."""
+    if not _HAND_CODING_TITLE_RE.search(title or ""):
+        return False
+    return not _NO_CODING_NEEDED_RE.search(f"{title or ''} {description or ''}")
+
+
 def passes_gate1_tracks(job, tracks: dict) -> str | None:
     """Scout's track-aware Gate 1: remote, geo-eligible under Scout's
-    remote-anywhere rule, no required German/French, and a track keyword.
-    Returns the winning track id (first match in config order) or None."""
+    remote-anywhere rule, no required German/French, not a hand-coding role,
+    and a track keyword. Returns the winning track id (first match in config
+    order) or None."""
     if not is_remote(job.location, job.description):
         return None
     if not is_scout_geo_eligible(job.location, job.description):
         return None
     if requires_excluded_language(job.title, job.description):
+        return None
+    if is_hand_coding_role(job.title, job.description):
         return None
     matches = matched_tracks(job, tracks)
     return matches[0] if matches else None

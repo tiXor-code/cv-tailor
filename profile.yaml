@@ -11,10 +11,10 @@ target_keywords:
 - automation engineer
 - n8n
 - prompt
-- machine learning engineer
-- backend engineer
 - full stack
-- platform engineer
+- ai builder
+- ai prototyper
+- gtm engineer
 tracks:
   # AI-related roles only (Teodor, 2026-09-24). The content track is retired.
   # Matching is a plain substring test on title + description, so every entry
@@ -54,8 +54,6 @@ tracks:
     - automation engineer
     - automation specialist
     - n8n
-    - machine learning engineer
-    - ml engineer
     - claude code
     - ai-native
     - ai native
@@ -64,6 +62,17 @@ tracks:
     - ai assisted
     - vibe coding
     - product engineer
+    # Builder roles (Teodor, 2026-09-29): build with AI tools, no hand-coding.
+    # ML engineer titles were dropped from this list the same day.
+    - ai builder
+    - ai-native builder
+    - ai prototyper
+    - rapid prototyping
+    - ai transformation
+    - ai enablement
+    - gtm engineer
+    - no-code
+    - low-code
 contact:
   name: Teodor-Cristian Lutoiu
   email: contact@teodorlutoiu.com
@@ -74,10 +83,10 @@ contact:
   github: github.com/tiXor-code
 summary_pool:
 - id: ai_automation_engineer
-  text: 'AI engineer working with AI since a 2022 university dissertation on AI in games, written before
-    ChatGPT''s public release. Designs, ships and runs production AI systems end to end: LLM orchestration,
-    RAG, agentic workflows and evaluation across Claude, Azure OpenAI and embeddings, built AI-natively with
-    Claude Code every day. Runs a fleet of autonomous agents in production, including a client
+  text: 'AI automation and solutions builder, working with AI since a 2022 university dissertation on AI
+    in games, written before ChatGPT''s public release. Designs, ships and runs production AI systems end
+    to end with Claude Code and AI tools: LLM orchestration, RAG, agentic workflows and evaluation across
+    Claude, Azure OpenAI and embeddings. Runs a fleet of autonomous agents in production, including a client
     analytics platform and SGEO, an autonomous SEO and AI-search agent.
 
     '

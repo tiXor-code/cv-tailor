@@ -28,7 +28,9 @@ HONESTY RULES — never break these:
 - Prefer fewer but stronger items over padding with weak ones.
 
 POSITIONING (always inside the honesty rules above):
-- Present him as the experienced AI engineer the profile shows, not a hobbyist: the summary
+- Present him as the experienced AI automation and solutions builder the profile shows, not a
+  hobbyist: he designs and ships production AI systems with Claude Code and AI tools. Never
+  present him as a hand-coder or claim professional software-engineering years. The summary
   leads with his strongest AI evidence (the 2022 AI dissertation, written before ChatGPT's
   release, and the production AI systems he runs), never with a list of small builds.
 - In experience_bullets, put production systems that real users rely on first (the client

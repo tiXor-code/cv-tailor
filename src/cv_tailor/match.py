@@ -23,19 +23,40 @@ What he wants (calibrated 2026-09-24 against 40 postings he rated himself):
   "vibe coding", or "think how can AI build this"; says it is "not a traditional
   coding role"; or rewards speed and ownership over hand-written code. Real example he
   loved: a product engineer role that "uses Claude Code and other AI tools to ship
-  fast". Two or more such signals = 9-10; one clear signal = 8-9.
+  fast". Two or more such signals = 9-10; one clear signal = 8-9. This applies
+  only when the role is not a hand-coding role (see below): in 2026 most
+  engineering postings list Claude Code, Cursor or Copilot as everyday tooling
+  for professional coders, and that alone is not an AI-native signal.
+- Builder roles are his category (Teodor, 2026-09-29): he builds with Claude Code
+  and AI tools and does not hand-write code. Titles that usually mean this: AI
+  automation specialist/engineer, AI builder, AI-native builder, AI product
+  builder, AI prototyper, AI solutions consultant/specialist, AI implementation
+  specialist, AI transformation or enablement lead, AI operations, GTM engineer
+  (a technical automation role, not marketing). Description signals: no-code/
+  low-code, n8n/Make/Zapier, rapid prototyping, POC/MVP, "translate business
+  problems into AI solutions", portfolio of shipped automations, "technical
+  aptitude" instead of a CS degree. With one such signal and no AI-native tool
+  named, score 7-8.
 - Good, but at most 7 when the posting shows NO AI-native signal: AI engineer,
-  applied AI, LLM/agent engineer, forward deployed engineer, AI solutions/
-  automation/implementation roles, AI enablement or AI coaching roles that teach
-  teams agentic/AI-assisted engineering, and any technical role with "agentic" or
-  "AI" in the title. Backend roles at a company whose core product IS AI or
-  AI-powered search/recommendations count too.
+  LLM/agent engineer, forward deployed engineer, AI solutions/automation/
+  implementation roles, AI enablement or AI coaching roles that teach teams
+  agentic/AI-assisted engineering, and any technical role with "agentic" or "AI"
+  in the title.
+- Hand-coding roles score 4 or lower, even when they name Claude Code, Cursor or
+  Copilot, unless the posting says outright that a coding background is not
+  needed: a role whose core requirement is professional hand-written software
+  engineering -- "N+ years of professional software engineering/development",
+  "strong/expert/production Python (or Java, Go, ...)", CS fundamentals, data
+  structures and algorithms, live-coding or system-design interviews -- or a
+  plain Software/Backend/Python/Platform/ML Engineer or Developer title. Applied
+  AI engineer and ML engineer postings are usually this kind; read the text.
 - Do not penalize seniority: Senior, Staff, Lead and engineering-manager titles
-  and stated years of experience are fine -- he applies to them.
-- The tech stack is NEVER a gap. He builds with AI tools, so a required
-  programming language, framework or database (Go, Golang, GraphQL, Rust, Java,
-  TypeScript, Kubernetes, ...) must not lower the score and must not be named as a
-  gap in the reason.
+  and stated years of experience are fine -- he applies to them when the role is
+  a builder role.
+- A named tool is not a gap by itself: a language, framework or database listed
+  in the stack (Go, GraphQL, Rust, Java, TypeScript, Kubernetes, ...) must not
+  lower the score of a builder or AI-native role. What lowers the score is the
+  role needing a professional hand-coder, per the rule above.
 - Specialisms outside his world score 4 or lower even when AI is mentioned:
   security engineering/research, medical or biosignal/scientific algorithms,
   data engineering and data pipelines, MLOps infrastructure/versioning, embedded, and

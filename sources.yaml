@@ -128,13 +128,14 @@ sources:
     query: "AI automation engineer remote"
     country: gb
     max_days_old: 7
-  # measured 0 at both 7d and 30d on 2026-08-17
+  # Was "python developer remote" (nl, pl) until 2026-09-29: hand-coding
+  # roles are not his kind (Teodor: he builds with Claude Code). Same quota.
   - kind: adzuna
-    query: "python developer remote"
+    query: "AI automation remote"
     country: nl
     max_days_old: 7
   - kind: adzuna
-    query: "python developer remote"
+    query: "AI automation remote"
     country: pl
     max_days_old: 7
   # JSearch (OpenWebNinja). Needs JSEARCH_API_KEYS in .env -- NEVER here.
@@ -157,10 +158,12 @@ sources:
     query: "AI engineer remote UK"
   - kind: jsearch
     query: "AI automation engineer remote UK"
+  # Were "machine learning engineer" / "python developer" until 2026-09-29
+  # (hand-coding roles, see the adzuna note). Same quota.
   - kind: jsearch
-    query: "machine learning engineer remote UK"
+    query: "AI solutions consultant remote UK"
   - kind: jsearch
-    query: "python developer remote UK"
+    query: "AI automation specialist remote UK"
   - kind: jsearch
     query: "forward deployed engineer remote UK"
   # SerpAPI google_jobs rejects continent locations ("Europe") and city locations
@@ -216,8 +219,10 @@ sources:
   # the free harvested boards win Gate 3's in-batch dedup race, so a paid
   # LinkedIn duplicate is the copy dropped.
   - kind: apify_linkedin
-    label: "mon-applied-solutions-eu"
-    keywords: ["Applied AI Engineer", "AI Solutions Engineer"]
+    label: "mon-ai-solutions-eu"
+    # "Applied AI Engineer" swapped out 2026-09-29: it usually means a
+    # hand-coding role; solutions consultants build with the client instead.
+    keywords: ["AI Solutions Consultant", "AI Solutions Engineer"]
     locations: ["European Union"]
     cadence: "weekly"
     weekday: 0
@@ -247,8 +252,9 @@ sources:
     max_items: 150
     job_title_exclude: ["Sales", "Recruiter", "Account Executive", "Intern"]
   - kind: apify_linkedin
-    label: "thu-forward-deployed-genai-eu"
-    keywords: ["Forward Deployed Engineer", "Generative AI Engineer"]
+    label: "thu-forward-deployed-builder-eu"
+    # "Generative AI Engineer" swapped for builder titles 2026-09-29.
+    keywords: ["Forward Deployed Engineer", "AI Builder"]
     locations: ["European Union"]
     cadence: "weekly"
     weekday: 3
@@ -286,7 +292,7 @@ sources:
   # name the tool. Sunday slot: +~$0.44/month.
   - kind: apify_linkedin
     label: "sun-ai-native-builders"
-    keywords: ["Claude Code", "AI Product Engineer", "AI-native Engineer"]
+    keywords: ["Claude Code", "AI Product Engineer", "AI-native Engineer", "AI Prototyper"]
     locations: ["European Union"]
     cadence: "weekly"
     weekday: 6

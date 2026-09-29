@@ -271,3 +271,48 @@ def test_a_capped_time_abroad_perk_means_residency_is_required():
     up to 90 days per year' -- you must live in Canada. He marked it No."""
     desc = "Agentic AI. 90 days away: work outside Canada for up to 90 days per year."
     assert passes_gate1_tracks(_job("AI Engineer", "Remote - Anywhere", desc), TRACKS) is None
+
+
+# --- Hand-coding roles (Teodor, 2026-09-29) ---------------------------------
+# He builds with Claude Code, not by hand. A plain software/backend/python/ML
+# engineer title is dropped at Gate 1 unless the posting names an AI-native
+# way of working, which is what makes such a role his kind.
+
+from cv_tailor.gates import is_hand_coding_role  # noqa: E402
+
+REMOTE_EU = "Remote - Europe"
+
+
+def test_hand_coding_titles_without_ai_native_signal_are_dropped():
+    desc = "You will build our payments backend. 5+ years of professional Python."
+    for title in ("Senior Python Software Engineer - AI", "Principal Backend Engineer - Core",
+                  "Staff Software Engineer, Product", "Machine Learning Engineer",
+                  "Senior Software Engineer (Python/TypeScript)", "Backend Developer",
+                  "DevOps & AI/ML Infrastructure Engineer", "Software Development Engineer"):
+        assert is_hand_coding_role(title, desc) is True, title
+        assert passes_gate1_tracks(_job(title, REMOTE_EU, desc + " agentic"), TRACKS) is None, title
+
+
+def test_ai_tool_mentions_do_not_rescue_a_hand_coding_title():
+    # Real 2026 postings list Claude Code / Cursor as engineers' tooling.
+    desc = ("Remote. Proficiency with AI-assisted development tools such as Cursor, "
+            "Claude Code or GitHub Copilot. Strong Computer Science fundamentals.")
+    assert is_hand_coding_role("Senior Backend Engineer", desc) is True
+
+
+def test_explicit_no_coding_background_keeps_a_coding_title():
+    for desc in ("This is not a traditional coding role: you ship with Claude Code.",
+                 "No prior coding experience required; we value builders.",
+                 "Coding experience is not required.",
+                 "We welcome people from a non-traditional background who vibe-code."):
+        assert is_hand_coding_role("Software Engineer", desc) is False, desc
+        assert passes_gate1_tracks(_job("Software Engineer", REMOTE_EU, "Remote, agentic. " + desc),
+                                   TRACKS) == "ai", desc
+
+
+def test_builder_and_ambiguous_titles_are_never_hand_coding_by_title():
+    desc = "5+ years of professional Python."
+    for title in ("AI Engineer", "AI Automation Specialist", "Forward Deployed Engineer",
+                  "AI Solutions Consultant", "GTM Engineer", "AI Prototyper",
+                  "Full Stack AI Engineer", "Product Engineer", "Agentic Solution Architect"):
+        assert is_hand_coding_role(title, desc) is False, title
