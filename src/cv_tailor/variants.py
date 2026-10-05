@@ -31,6 +31,9 @@ DESIGNED_PDF = "cv_designed.pdf"
 DESIGNED_ATS_PDF = "cv_designed_ats.pdf"
 DESIGNED_ATS_DOCX = "cv_designed_ats.docx"
 
+# Skill-group display names; mirrors the skill_labels map in the templates.
+SKILL_LABELS = {"languages": "Builds with (via AI tools)", "ai": "AI", "devops": "DevOps"}
+
 MAX_TILES = 4
 DESIGNED_MAX_PAGES = 2
 
@@ -281,7 +284,7 @@ def build_docx(profile: dict, fields: dict, out_path: Path | str,
         if group not in skills:
             continue
         para = doc.add_paragraph()
-        para.add_run(f"{group.title()}: ").bold = True
+        para.add_run(f"{SKILL_LABELS.get(group, group.title())}: ").bold = True
         items = skills[group]
         for i, item in enumerate(items):
             run = para.add_run(item)

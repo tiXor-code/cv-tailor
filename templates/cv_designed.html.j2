@@ -90,11 +90,14 @@
 
 <section>
   <h2>Skills</h2>
+  {# Same labels as cv.html.j2 (and variants.SKILL_LABELS for the DOCX):
+     "languages" reads as what he builds with through AI tools. #}
+  {% set skill_labels = {"languages": "Builds with (via AI tools)", "ai": "AI", "devops": "DevOps"} %}
   {% set group_names = fields.skills_groups if fields.get('skills_groups') else profile.skills.keys() %}
   {% for group in group_names %}
     {% if group in profile.skills %}
     <p class="skill-row">
-      <span class="skill-group">{{ group | title }}:</span>
+      <span class="skill-group">{{ skill_labels.get(group, group | title) }}:</span>
       {% for item in profile.skills[group] %}
         {% if item in fields.skills_emphasis %}<strong>{{ item }}</strong>{% else %}{{ item }}{% endif %}{% if not loop.last %}, {% endif %}
       {% endfor %}

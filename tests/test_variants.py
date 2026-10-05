@@ -253,6 +253,17 @@ def test_docx_is_plain_ats_safe(package, name):
     assert "python-docx" not in (cp.comments or "") + (cp.subject or "") + (cp.keywords or "")
 
 
+def test_skill_labels_match_across_variants(package):
+    from docx import Document
+
+    pkg, _ = package
+    docx_text = "\n".join(p.text for p in Document(str(pkg / "cv.docx")).paragraphs)
+    assert "Builds with (via AI tools): Python, Go" in docx_text
+    if HAS_POPPLER:
+        for name in ("cv.pdf", "cv_designed.pdf", "cv_designed_ats.pdf"):
+            assert "Builds with (via AI tools)" in _pdftotext(pkg / name), name
+
+
 def test_docx_bullets_carry_every_tile_number(package):
     from docx import Document
 
