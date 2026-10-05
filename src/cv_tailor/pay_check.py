@@ -169,7 +169,7 @@ def _infer_period(amount: float, currency: str) -> str:
     return "hour"
 
 
-def extract_pay(text: str) -> list[dict]:
+def extract_pay(text: str, *, sane_max: int = _SANE_MONTHLY_MAX) -> list[dict]:
     """Every stated pay amount in `text`, normalised to EUR gross per month.
 
     Each item: {"text", "currency", "period", "period_inferred",
@@ -227,7 +227,7 @@ def extract_pay(text: str) -> list[dict]:
         factor = PERIOD_TO_MONTH[period] * EUR_RATES[cur]
         lo_m = round(lo * factor)
         hi_m = round((hi if hi is not None else lo) * factor)
-        if lo_m < _SANE_MONTHLY_MIN or hi_m > _SANE_MONTHLY_MAX:
+        if lo_m < _SANE_MONTHLY_MIN or hi_m > sane_max:
             continue
         key = (lo_m, hi_m)
         if key in seen:

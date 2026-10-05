@@ -301,7 +301,8 @@ def test_backfill_enriches_only_his_list_within_budget(listed_queue, monkeypatch
     assert q["job-1"]["listing_fitness"]["band"] == "high_risk"
     assert q["job-1"]["listing_warning"].startswith("High-risk listing")
     assert q["job-1"]["status"] == "handed_off"  # never moved off his list
-    assert q["job-1"]["company_check"]["verdict"] == "avoid"
+    # "avoid" with no evidence from the results is downgraded (2026-10-05)
+    assert q["job-1"]["company_check"]["verdict"] == "proceed with caution"
     assert "company_check" not in q["job-2"]  # score 6
     assert q["job-2"]["pay"]["verdict"] == "skip: below floor" or q["job-2"]["pay"]["verdict"] is None
     assert "pay" not in q["job-3"]  # not on his list

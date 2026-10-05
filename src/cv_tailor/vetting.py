@@ -177,7 +177,8 @@ def vet_listing(text: str) -> dict:
         if m:
             add(fid, "red", pts, _snippet(text, m))
 
-    stated = extract_pay(text)
+    # no upper sanity cap here: an absurd figure IS the signal
+    stated = extract_pay(text, sane_max=10**9)
     if stated:
         top = max(s["max_eur_month"] for s in stated)
         if top > IMPLAUSIBLE_MONTHLY_EUR and not any(f["id"] == "too_good_to_be_true" for f in flags):
