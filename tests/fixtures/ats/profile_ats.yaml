@@ -1,0 +1,36 @@
+contact:
+  name: Jane Example
+  email: jane.example@example.com
+  phone: "+1 555 010 0199"
+  location: Springfield
+  linkedin: linkedin.com/in/jane-example
+  github: github.com/jane-example
+summary_pool:
+  - id: default
+    text: Automation engineer who builds internal tools for small teams.
+experiences:
+  - id: studio
+    role: Founder
+    company: Example Studio
+    location: Springfield
+    dates: Mar 2025 – Present
+    bullets:
+      - Ran weekly delivery reviews for client projects.
+      - Built a retrieval-augmented generation service over client documents with large language models.
+  - id: acme
+    role: Content Producer
+    company: Acme Widgets
+    location: Remote
+    dates: Jun 2023 – Present
+    bullets:
+      - Produced product walkthrough videos.
+projects: []
+skills:
+  languages: [Python, SQL]
+  tools: [Docker, PostgreSQL]
+education:
+  - degree: BSc Computing
+    institution: Example University
+    year: 2020
+languages_spoken:
+  - { language: English, level: native }

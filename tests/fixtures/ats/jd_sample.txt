@@ -1,0 +1,13 @@
+Acme Robotics is hiring an AI Automation Engineer.
+
+You will build RAG pipelines and LLM agents for our support desk. Our RAG stack
+runs on Kubernetes, and you will own the RAG evaluation harness. Experience with
+Kubernetes and Terraform is required; Kubernetes on-call is shared.
+
+What you will do:
+- Ship LLM agents that triage support tickets.
+- Build data pipelines in Python and PostgreSQL.
+- Write clear documentation for every LLM workflow.
+- Improve the document search service and its data pipelines.
+
+We offer a competitive salary, great benefits and a strong team culture.
