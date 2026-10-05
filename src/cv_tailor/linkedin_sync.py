@@ -136,6 +136,13 @@ def _sim(a: str, b: str) -> float:
     return SequenceMatcher(None, a, b).ratio()
 
 
+def _ratio(a: str, b: str) -> float:
+    """Title similarity with no substring shortcut: "Founder" is not
+    "Co-Founder & Head of AI"."""
+    a, b = _fold(a), _fold(b)
+    return SequenceMatcher(None, a, b).ratio() if a and b else 0.0
+
+
 def compare(profile: dict, export: dict) -> dict:
     contact = profile.get("contact") or {}
     issues = []
@@ -165,25 +172,33 @@ def compare(profile: dict, export: dict) -> dict:
         cand = next((ln for ln in export["lines"] if _person_name(ln)), None)
         issue("name", name, cand, f"Use the same name on both: {name}")
 
-    matched = set()
-    for exp in profile.get("experiences") or []:
-        best, best_score = None, 0.0
+    # Pair positions globally, best pair first, on the COMPANY (a role word like
+    # "Producer" appears in several titles: pairing on it sent his video role to
+    # ARDEN, 2026-10-05). The role only breaks ties between same-company rows.
+    exps = list(profile.get("experiences") or [])
+    pairs = []
+    for i, exp in enumerate(exps):
         for j, pos in enumerate(export["positions"]):
-            if j in matched:
-                continue
-            score = max(_sim(exp.get("company", ""), pos.get("company") or ""),
-                        0.9 * _sim(exp.get("role", ""), pos.get("role") or ""))
-            if score > best_score:
-                best, best_score = j, score
+            company = _sim(exp.get("company", ""), pos.get("company") or "")
+            if company >= 0.6:
+                pairs.append((company + 0.1 * _ratio(exp.get("role", ""), pos.get("role") or ""), i, j))
+    pairing, used = {}, set()
+    for _, i, j in sorted(pairs, reverse=True):
+        if i not in pairing and j not in used:
+            pairing[i] = j
+            used.add(j)
+    matched = set()
+    for i, exp in enumerate(exps):
+        best = pairing.get(i)
         label = f"{exp.get('role')} at {exp.get('company')}"
-        if best is None or best_score < 0.6:
+        if best is None:
             issue(f"experience:{exp.get('id')}", label, None,
                   "Not on LinkedIn: add the position, or drop it from the CV if it should not show",
                   "missing")
             continue
         matched.add(best)
         pos = export["positions"][best]
-        if _sim(exp.get("role", ""), pos["role"]) < 0.85:
+        if _ratio(exp.get("role", ""), pos["role"]) < 0.85:
             issue(f"experience:{exp.get('id')}.role", exp.get("role"), pos["role"],
                   f"Pick one title for both (CV says {exp.get('role')!r})")
         if pos.get("company") and _sim(exp.get("company", ""), pos["company"]) < 0.6:

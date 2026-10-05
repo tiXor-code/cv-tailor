@@ -88,3 +88,21 @@ def test_script_reads_a_txt_export_and_never_writes_the_profile(tmp_path, monkey
     assert json.loads(out.read_text())["positions_found"] == 4
     assert prof.read_text() == before
     assert m.main([str(tmp_path / "missing.pdf")]) == 2
+
+
+def test_pairs_on_company_not_on_a_shared_role_word():
+    """His real export, 2026-10-05: a freelance "Video Producer" row was paired
+    with ARDEN's "Producer", and "Founder" passed as "Co-Founder & Head of AI"."""
+    prof = {"contact": {}, "experiences": [
+        {"id": "own", "role": "Founder", "company": "Fixture Studio", "dates": "Mar 2026 – Present"},
+        {"id": "video", "role": "AI Video Producer", "company": "Freelance", "dates": "Jan 2026 – Apr 2026"},
+        {"id": "game", "role": "Game Producer", "company": "Play Fixture — Beta", "dates": "Sep 2023 – Aug 2024"},
+    ]}
+    export = {"emails": [], "phones": [], "lines": [], "positions": [
+        {"company": "Fixture Studio", "role": "Co-Founder & Head of AI", "start": (2026, 3), "end": None},
+        {"company": "BETA", "role": "Producer", "start": (2023, 9), "end": (2024, 8)},
+    ]}
+    fields = {i["field"]: i for i in ls.compare(prof, export)["issues"]}
+    assert fields["experience:video"]["severity"] == "missing"
+    assert "experience:own.role" in fields
+    assert "experience:game.company" not in fields and "experience:game.start" not in fields
