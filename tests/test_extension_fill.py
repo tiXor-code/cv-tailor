@@ -7,9 +7,10 @@ patched only to also run on 127.0.0.1 and to talk to a stand-in admin -- into
 headless Chromium against the same live-shaped form fixtures the automated
 adapters are tested on.
 
-The invariant above everything: the extension NEVER submits. Only after the
-test (standing in for Teodor) clicks Submit and the page confirms does it
-record "applied".
+With autopilot OFF (how the tests below the autopilot section run), the
+extension never submits: only after the test (standing in for Teodor) clicks
+Submit and the page confirms does it record "applied". Autopilot (0.8.0,
+Teodor 2026-10-05) submits only when every check passes, and parks otherwise.
 """
 from __future__ import annotations
 
@@ -42,14 +43,15 @@ ANSWERS = {
 }
 
 
-def _answer_for(q):
+def _answer_for(q, extra=None):
     label = q["label"].lower()
     if "notice period" in label:
         return None
+    known = {**ANSWERS, **(extra or {})}
     # longest key first, so "first name" wins over "name"
-    for key in sorted(ANSWERS, key=len, reverse=True):
+    for key in sorted(known, key=len, reverse=True):
         if key in label:
-            return ANSWERS[key]
+            return known[key]
     if q["kind"] == "radio" and set(q["options"]) >= {"Yes", "No"}:
         return "Yes"
     return None
@@ -67,6 +69,9 @@ class _Admin:
         self.adopted = []
         self.cv_requests = []
         self.adopt_ok = True
+        self.extra_answers = {}
+        self.queue = []      # GET /api/scout/ext/queue
+        self.parked = []     # POST /api/scout/ext/park
 
     @contextmanager
     def serve(self):
@@ -92,6 +97,8 @@ class _Admin:
                     hit = any(url.startswith(k) for k in admin.known_urls)
                     return self._json(200, {"job": {"date": "2026-09-25", "id": "job-1", "company": "Fixture Co",
                                                     "title": "AI Engineer"} if hit else None})
+                if self.path == "/api/scout/ext/queue":
+                    return self._json(200, {"jobs": admin.queue})
                 if self.path.startswith("/api/scout/ext/cv"):
                     admin.cv_requests.append(self.path)
                     self.send_response(200)
@@ -123,8 +130,9 @@ class _Admin:
                 if self.path == "/api/scout/ext/answer":
                     admin.questions.extend(body["questions"])
                     admin.answer_refs.append({k: body[k] for k in ("date", "id") if k in body})
-                    answers = [{"label": q["label"], "value": _answer_for(q),
-                                "needs_you": _answer_for(q) is None and q["required"]} for q in body["questions"]]
+                    extra = admin.extra_answers
+                    answers = [{"label": q["label"], "value": _answer_for(q, extra),
+                                "needs_you": _answer_for(q, extra) is None and q["required"]} for q in body["questions"]]
                     return self._json(200, {"ok": True, "cover_letter": "I build fixture agents.", "answers": answers})
                 if self.path == "/api/scout/ext/adopt":
                     admin.adopted.append(body)
@@ -138,6 +146,9 @@ class _Admin:
                 if self.path == "/api/scout/ext/save-answers":
                     admin.saved.extend(body["answers"])
                     return self._json(200, {"saved": len(body["answers"])})
+                if self.path == "/api/scout/ext/park":
+                    admin.parked.append(body)
+                    return self._json(200, {"ok": True})
                 if self.path == "/api/scout/ext/applied":
                     admin.applied.append(body)
                     return self._json(200, {"ok": True, "status": "applied_by_hand"})
@@ -177,7 +188,8 @@ def _test_copy(tmp_path, linkedin=False, extra_hosts=()) -> Path:
 
 
 @contextmanager
-def _browser(tmp_path, base, token="fixture-key-0123456789abcdef0123456789abcdef", linkedin=False, extra_hosts=()):
+def _browser(tmp_path, base, token="fixture-key-0123456789abcdef0123456789abcdef", linkedin=False, extra_hosts=(),
+             autopilot=False, run_pause=(1, 1)):
     ext = _test_copy(tmp_path, linkedin=linkedin, extra_hosts=extra_hosts)
     with sync_playwright() as p:
         ctx = p.chromium.launch_persistent_context(
@@ -185,7 +197,10 @@ def _browser(tmp_path, base, token="fixture-key-0123456789abcdef0123456789abcdef
             args=[f"--disable-extensions-except={ext}", f"--load-extension={ext}"])
         try:
             sw = ctx.service_workers[0] if ctx.service_workers else ctx.wait_for_event("serviceworker", timeout=15000)
-            sw.evaluate("([t, b]) => chrome.storage.local.set({token: t, adminBase: b})", [token, base])
+            # Autopilot ships ON; the older tests below pin the no-submit behaviour, so
+            # they run with it OFF. run_pause: seconds between jobs of a run.
+            sw.evaluate("([t, b, a, lo, hi]) => chrome.storage.local.set({token: t, adminBase: b, autopilot: a,"
+                        " runPauseMin: lo, runPauseMax: hi})", [token, base, autopilot, *run_pause])
             yield ctx
         finally:
             ctx.close()
@@ -657,3 +672,152 @@ def test_heading_question_over_an_unlabelled_box_is_the_question(tmp_path):
         page = _open(ctx, f"{base}/question_step.html#scout-fill=2026-09-25~job-1")
         _wait_filled(page)
         assert [q["label"] for q in admin.questions] == ["What city do you currently live in?"]
+
+
+# --- Autopilot and "Run my list" (Scout Fill 0.8.0; Teodor, 2026-10-05: "I'd
+# want anything to be fully automatised as much as possible, I don't want to
+# click anything"). It submits ONLY when every check passes; otherwise it
+# stops on that step and parks the job with the reason and questions. --------
+
+JOB1 = {"date": "2026-09-25", "id": "job-1"}
+
+
+def _wait_state(page, state, timeout=30000):
+    page.wait_for_selector(f"#scout-fill-panel[data-state={state}]", state="attached", timeout=timeout)
+
+
+def _ext_worker(ctx):
+    return next(w for w in ctx.service_workers if w.url.startswith("chrome-extension://"))
+
+
+def _run_state(ctx):
+    return _ext_worker(ctx).evaluate("async () => (await chrome.storage.local.get('scoutRun')).scoutRun || null")
+
+
+def _start_run(ctx):
+    """Press "Run my list" on the options page; returns (options page, run tab)."""
+    ext_id = _ext_worker(ctx).url.split("/")[2]
+    options = _open(ctx, f"chrome-extension://{ext_id}/options.html")
+    with ctx.expect_page(timeout=15000) as tab:
+        options.click("#run")
+    return options, tab.value
+
+
+@pytest.mark.parametrize("variant", ["", "&badge=1"])
+def test_autopilot_submits_a_complete_form_and_records_applied(tmp_path, variant):
+    admin = _Admin([])
+    with admin.serve() as base, _browser(tmp_path, base, autopilot=True) as ctx:
+        page = _open(ctx, f"{base}/autopilot_form.html?n=1{variant}#scout-fill=2026-09-25~job-1")
+        _wait_state(page, "recorded")
+        assert page.evaluate("() => window.__submits") == 1
+        assert page.eval_on_selector("#resume", "e => e.files[0].name") == "Teodor-Lutoiu-CV.pdf"
+        assert admin.applied == [JOB1]
+        assert admin.parked == []
+        assert "Autopilot on" in _panel_text(page)
+
+
+def test_autopilot_parks_with_the_question_when_a_required_answer_is_missing(tmp_path):
+    admin = _Admin([])
+    with admin.serve() as base, _browser(tmp_path, base, autopilot=True) as ctx:
+        page = _open(ctx, f"{base}/autopilot_form.html?ask=1#scout-fill=2026-09-25~job-1")
+        _wait_state(page, "parked")
+        page.wait_for_timeout(4000)  # longer than the human delay: still nothing pressed
+        assert page.evaluate("() => window.__submits") == 0
+        assert admin.applied == []
+        assert len(admin.parked) == 1
+        parked = admin.parked[0]
+        assert {k: parked[k] for k in ("date", "id")} == JOB1
+        assert parked["reason"].startswith("needs-answers")
+        assert parked["questions"] == ["What is your notice period?"]
+        assert "solid" in page.evaluate("() => document.querySelector('#np').style.outline")
+        assert "What is your notice period?" in _panel_text(page)
+
+
+@pytest.mark.parametrize("variant,reason", [("captcha=1", "captcha"), ("password=1", "login-required")])
+def test_autopilot_never_submits_past_a_captcha_or_a_password_box(tmp_path, variant, reason):
+    admin = _Admin([])
+    with admin.serve() as base, _browser(tmp_path, base, autopilot=True) as ctx:
+        page = _open(ctx, f"{base}/autopilot_form.html?{variant}#scout-fill=2026-09-25~job-1")
+        _wait_state(page, "parked")
+        page.wait_for_timeout(4000)
+        assert page.evaluate("() => window.__submits") == 0
+        assert page.input_value("#name") == "Ada Lovelace"   # filled, just not sent
+        assert admin.applied == []
+        assert [p["reason"].split(":")[0] for p in admin.parked] == [reason]
+
+
+def test_autopilot_off_fills_but_never_submits(tmp_path):
+    admin = _Admin([])
+    with admin.serve() as base, _browser(tmp_path, base, autopilot=False) as ctx:
+        page = _open(ctx, f"{base}/autopilot_form.html#scout-fill=2026-09-25~job-1")
+        _wait_filled(page)
+        page.wait_for_timeout(4500)
+        assert page.evaluate("() => window.__submits") == 0
+        assert admin.applied == [] and admin.parked == []
+        assert "Autopilot off" in _panel_text(page)
+
+
+def test_autopilot_walks_linkedin_easy_apply_next_review_submit(tmp_path):
+    admin = _Admin([])                                      # the link says which job
+    admin.extra_answers = {"years of work experience": "3"}
+    with admin.serve() as base, _browser(tmp_path, base, linkedin=True, autopilot=True) as ctx:
+        page = _open(ctx, f"{base}/linkedin_easyapply.html#scout-fill=2026-09-25~job-1")
+        _wait_state(page, "recorded", timeout=60000)
+        assert page.evaluate("() => window.__clicks") == ["Next", "Review", "Submit application"]
+        assert admin.applied == [JOB1]
+        assert admin.parked == []
+        assert any("kind=cover" not in r for r in admin.cv_requests)   # the tailored CV went in on step 2
+
+
+def test_run_my_list_applies_parks_and_summarises(tmp_path):
+    admin = _Admin([])
+    with admin.serve() as base, _browser(tmp_path, base, autopilot=False) as ctx:  # a run uses autopilot anyway
+        admin.queue = [
+            {"date": "2026-09-25", "id": "job-1", "company": "Fixture Co", "title": "AI Engineer",
+             "form_url": f"{base}/autopilot_form.html?n=1", "source": "ashby"},
+            {"date": "2026-09-25", "id": "job-2", "company": "Example Ltd", "title": "ML Engineer",
+             "form_url": f"{base}/autopilot_form.html?ask=1", "source": "lever"},
+            {"date": "2026-09-25", "id": "job-3", "company": "Sample GmbH", "title": "AI Builder",
+             "form_url": f"{base}/autopilot_form.html?n=3", "source": "greenhouse"},
+        ]
+        options, run_tab = _start_run(ctx)
+        options.wait_for_function("() => document.getElementById('run-status').textContent.includes('Run finished')",
+                                  timeout=90000)
+        assert admin.applied == [JOB1, {"date": "2026-09-25", "id": "job-3"}]
+        assert [(p["id"], p["questions"]) for p in admin.parked] == [("job-2", ["What is your notice period?"])]
+        assert "applied 2, parked 1" in options.inner_text("#run-status")
+        assert "What is your notice period?" in options.inner_text("#run-results")
+        # one dedicated tab did all three, and its panel shows the same summary
+        assert len([p for p in ctx.pages if "autopilot_form" in p.url]) == 1
+        run_tab.wait_for_function("() => document.querySelector('#scout-fill-panel').shadowRoot"
+                                  ".querySelector('.box').innerText.includes('applied 2, parked 1')", timeout=10000)
+        assert _run_state(ctx)["active"] is False
+
+
+def test_pause_stops_the_run_and_resume_carries_on(tmp_path):
+    admin = _Admin([])
+    with admin.serve() as base, _browser(tmp_path, base, autopilot=True, run_pause=(8, 8)) as ctx:
+        admin.queue = [
+            {"date": "2026-09-25", "id": "job-1", "company": "Fixture Co", "title": "AI Engineer",
+             "form_url": f"{base}/autopilot_form.html?n=1", "source": "ashby"},
+            {"date": "2026-09-25", "id": "job-2", "company": "Example Ltd", "title": "ML Engineer",
+             "form_url": f"{base}/autopilot_form.html?n=2", "source": "ashby"},
+        ]
+        _, page = _start_run(ctx)
+        page.wait_for_selector("#scout-fill-panel", state="attached", timeout=15000)
+        _shadow_click(page, "Pause")                           # before the fill has even finished
+        page.wait_for_selector("#scout-fill-panel[data-autopilot=paused]", state="attached", timeout=6000)
+        _wait_filled(page)
+        page.wait_for_timeout(6000)
+        assert page.evaluate("() => window.__submits") == 0    # paused: nothing pressed
+        assert admin.applied == []
+        state = _run_state(ctx)
+        assert state["active"] and state["paused"] and state["index"] == 0
+        _shadow_click(page, "Resume")
+        _wait_state(page, "recorded")
+        assert admin.applied == [JOB1]
+        _shadow_click(page, "Stop run")                        # ends the run before job 2 starts
+        page.wait_for_timeout(3000)
+        state = _run_state(ctx)
+        assert state["active"] is False and state["stopped"] is True
+        assert admin.applied == [JOB1]

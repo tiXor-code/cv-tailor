@@ -1,12 +1,13 @@
 {
   "manifest_version": 3,
   "name": "Scout Fill",
-  "version": "0.7.2",
-  "description": "Fills job applications (and LinkedIn Easy Apply steps) with Scout's answers and your tailored CV. You review and press Submit.",
+  "version": "0.8.0",
+  "description": "Fills job applications (and LinkedIn Easy Apply steps) with Scout's answers and your tailored CV. Autopilot submits only when every check passes; anything else is parked with the questions for you.",
   "permissions": [
     "storage",
     "activeTab",
-    "scripting"
+    "scripting",
+    "alarms"
   ],
   "host_permissions": [
     "https://admin.teodorlutoiu.com/*"

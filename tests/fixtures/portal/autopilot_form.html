@@ -1,0 +1,57 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Fixture Co - AI Engineer - Apply</title></head>
+<body>
+<!--
+  Scout Fill autopilot fixture (0.8.0). Fictional. A complete application the
+  stub admin can answer in full: name, email, CV upload, a required consent box
+  and one Submit button. Submitting swaps in a "Thank you for applying!" panel
+  and counts the submissions in window.__submits.
+  Variants (query string):
+  - ?ask=1      adds a required question only he can answer (notice period)
+  - ?captcha=1  adds a visible checkbox-style reCAPTCHA widget (about:blank src,
+                same trick as blocked_form.html: never leaves localhost)
+  - ?badge=1    adds only the invisible reCAPTCHA badge, which must NOT stop it
+  - ?password=1 adds an account password box (a sign-up wall)
+-->
+<h1>Apply: AI Engineer at Fixture Co</h1>
+<form id="f">
+  <label for="name">Full name *</label>
+  <input id="name" name="name" required>
+  <label for="email">Email *</label>
+  <input id="email" name="email" type="email" required>
+  <label for="resume">Resume/CV *</label>
+  <input id="resume" name="resume" type="file" required>
+  <div id="extra"></div>
+  <label><input id="consent" type="checkbox" required> I agree to the privacy policy</label>
+  <button type="submit">Submit application</button>
+</form>
+<p id="thanks" hidden>Thank you for applying!</p>
+<script>
+  window.__submits = 0;
+  const q = new URLSearchParams(location.search);
+  const extra = document.getElementById("extra");
+  if (q.has("ask")) {
+    extra.insertAdjacentHTML("beforeend",
+      '<label for="np">What is your notice period? *</label><input id="np" name="np" required>');
+  }
+  if (q.has("captcha")) {
+    extra.insertAdjacentHTML("beforeend",
+      '<div class="g-recaptcha"><iframe src="about:blank?recaptcha=checkbox" title="reCAPTCHA" width="304" height="78"></iframe></div>');
+  }
+  if (q.has("badge")) {
+    document.body.insertAdjacentHTML("beforeend",
+      '<div class="grecaptcha-badge" style="width:256px;height:60px;position:fixed;right:-186px;bottom:14px">'
+      + '<iframe src="about:blank?recaptcha=anchor" title="reCAPTCHA" width="256" height="60"></iframe></div>');
+  }
+  if (q.has("password")) {
+    extra.insertAdjacentHTML("beforeend",
+      '<label for="pw">Create a password *</label><input id="pw" name="pw" type="password" required>');
+  }
+  document.getElementById("f").addEventListener("submit", (e) => {
+    e.preventDefault();
+    window.__submits += 1;
+    document.getElementById("f").hidden = true;
+    document.getElementById("thanks").hidden = false;
+  });
+</script>
+</body></html>
