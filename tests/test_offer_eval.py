@@ -150,3 +150,12 @@ def test_script(tmp_path, monkeypatch, capsys):
     assert "# Offer evaluation" in capsys.readouterr().out
     assert m.main([], stdin=io.StringIO("")) == 2
     assert m.main([], stdin=io.StringIO("{not json")) == 2
+
+
+def test_hybrid_wording_breaks_a_full_remote_must_have():
+    """His real must-have (2026-10-05) is full remote: 'hybrid, 2 days in office'
+    must read as 60% remote, not as unknown."""
+    from cv_tailor.offer_eval import parse_offer
+    assert parse_offer("Base: 4000\nRemote: hybrid, 2 days in office")["remote_pct"] == 60.0
+    assert parse_offer("Base: 4000\nWork model: hybrid")["remote_pct"] == 50.0
+    assert parse_offer("Base: 4000\nRemote: fully remote")["remote_pct"] == 100.0

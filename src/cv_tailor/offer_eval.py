@@ -137,6 +137,12 @@ def parse_offer(raw: str) -> dict:
                 offer["remote_pct"] = 100.0
             elif "on-site" in low or "onsite" in low:
                 offer["remote_pct"] = 0.0
+            elif "hybrid" in low or re.search(r"\bin (the )?office\b", low):
+                # "hybrid, 2 days in office" is not full remote: 3 of 5 days
+                days = re.search(r"(\d)\s*days?\b[^.]*\boffice\b", low)
+                offer["remote_pct"] = round(100 * (5 - int(days.group(1))) / 5, 1) if days and int(days.group(1)) <= 5 else 50.0
+            elif re.search(r"full(y)?[- ]remote|remote[- ]first|remote only|remote-only", low):
+                offer["remote_pct"] = 100.0
             else:
                 matched = False
         elif re.search(r"\b(pto|vacation|holiday|leave|days off)\b", low) and n is not None:
