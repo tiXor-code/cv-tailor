@@ -55,6 +55,14 @@ _PARKED = ("needs_review", "needs_human", "ready")
 # applied nor failed -- without its own bucket it was filed under Failed.
 _HANDED_OFF = ("handed_off",)
 _DAY_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+# A high-risk listing (vetting.vet_listing band "high_risk") is never applied
+# to unattended. At or above this score it still goes on his list -- assembled,
+# with a warning -- because a great fit is worth his 2 minutes of checking;
+# below it, it is rejected with the reason recorded.
+HIGH_RISK_LIST_MIN_SCORE = 9
+# Set on the entry at approval; scripts/apply_approved.py reads it and hands the
+# job to him instead of submitting.
+HOLD_HIGH_RISK = "high_risk_listing"
 _ROOT = Path(__file__).resolve().parents[2]
 _ORCHESTRATOR = _ROOT / "scripts" / "apply_approved.py"
 DEFAULT_DB_PATH = _ROOT / "data" / "jobs.db"
@@ -90,11 +98,12 @@ class AutopilotReport:
     stranded: list = field(default_factory=list)
     handed_off: list = field(default_factory=list)
     deferred: list = field(default_factory=list)
+    risky: list = field(default_factory=list)       # high-risk listings rejected unapplied
 
     def has_activity(self) -> bool:
         return bool(self.applied or self.parked or self.failed
                     or self.queued_new or self.expired or self.stranded
-                    or self.handed_off or self.deferred)
+                    or self.handed_off or self.deferred or self.risky)
 
 
 def _day_dirs(queue_dir=None) -> list[tuple[str, Path]]:
@@ -144,17 +153,64 @@ def run_orchestrator(scan_date: str, job_id: str) -> int:
         return 1
 
 
-def _approve(scan_date: str, job_id: str, *, queue_dir=None) -> dict | None:
+def _approve(scan_date: str, job_id: str, *, queue_dir=None, hold: str | None = None) -> dict | None:
     now = datetime.now(timezone.utc).isoformat()
 
     def _mut(e: dict) -> None:
         e["status"] = "approved"
         e["decided_at"] = now
         e["approved_by"] = "autopilot"
+        if hold:
+            e["apply_hold"] = hold
 
     try:
         return update_entry(scan_date, job_id, _mut, queue_dir=queue_dir,
                              expect_status="pending")
+    except (StatusConflict, KeyError):
+        return None
+
+
+def _listing_fitness(scan_date: str, entry: dict, *, queue_dir=None) -> dict | None:
+    """The entry's listing_fitness, computed from descriptions.json (and
+    stored) for entries queued before vetting existed. None when there is no
+    description to judge -- unknown is not high risk."""
+    fitness = entry.get("listing_fitness")
+    if fitness:
+        return fitness
+    from cv_tailor.scout_queue import read_description
+    from cv_tailor.vetting import vet_listing
+    try:
+        desc = read_description(scan_date, entry["id"], queue_dir=queue_dir)
+    except (ValueError, KeyError):
+        return None
+    if not desc:
+        return None
+    fitness = vet_listing(desc)
+    try:
+        update_entry(scan_date, entry["id"], lambda e: e.update(listing_fitness=fitness),
+                     queue_dir=queue_dir)
+    except (KeyError, OSError, ValueError):
+        pass
+    return fitness
+
+
+def _reject_high_risk(scan_date: str, entry: dict, fitness: dict, *, queue_dir=None) -> dict | None:
+    """pending -> rejected for a high-risk listing below HIGH_RISK_LIST_MIN_SCORE,
+    with the reason recorded on the entry. CAS, like _approve."""
+    from cv_tailor.vetting import red_flag_summary
+    now = datetime.now(timezone.utc).isoformat()
+    reason = (f"high_risk_listing: fitness {fitness.get('score')}/100 "
+              f"({red_flag_summary(fitness)})")
+
+    def _mut(e: dict) -> None:
+        e["status"] = "rejected"
+        e["error"] = reason
+        e["decided_at"] = now
+        e["decided_by"] = "autopilot"
+
+    try:
+        return update_entry(scan_date, entry["id"], _mut, queue_dir=queue_dir,
+                            expect_status="pending")
     except (StatusConflict, KeyError):
         return None
 
@@ -491,6 +547,8 @@ def build_digest(report: AutopilotReport) -> str | None:
     _section("Waiting for tomorrow's list slots", report.deferred,
              lambda e: f" [{e.get('score')}/10]")
     _section("Failed", report.failed, lambda e: f": {e.get('error') or '?'}")
+    _section("Not applied: high-risk listing", report.risky,
+             lambda e: f" [{e.get('score')}/10] ({e.get('error')})")
     _section("Queued for review", report.queued_new,
              lambda e: f" [{e.get('score')}/10]")
     _section("Auto-expired", report.expired, lambda e: "")
@@ -539,7 +597,22 @@ def run_autopilot(now: datetime | None = None, *, queue_dir=None,
 
     for scan_date, entry in candidates:
         job_id = entry["id"]
-        if _approve(scan_date, job_id, queue_dir=queue_dir) is None:
+        # A high-risk listing is never applied to unattended. A very high
+        # score still earns it a place on his list (approved with a hold, so
+        # the orchestrator assembles the package and hands it over with a
+        # warning instead of submitting); anything lower is rejected here,
+        # reason recorded.
+        hold = None
+        from cv_tailor.listing_enrich import is_high_risk
+        fitness = _listing_fitness(scan_date, entry, queue_dir=queue_dir)
+        if is_high_risk(fitness):
+            if int(entry.get("score") or 0) < HIGH_RISK_LIST_MIN_SCORE:
+                rejected = _reject_high_risk(scan_date, entry, fitness, queue_dir=queue_dir)
+                if rejected is not None:
+                    report.risky.append((scan_date, rejected))
+                continue
+            hold = HOLD_HIGH_RISK
+        if _approve(scan_date, job_id, queue_dir=queue_dir, hold=hold) is None:
             continue  # lost the race to a manual tap; its spawn owns the job now
         try:
             runner(scan_date, job_id)

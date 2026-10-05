@@ -160,6 +160,32 @@ def _min_monthly_eur() -> int | None:
         return None
 
 
+def attach_vetting(scored, floors: dict | None = None) -> None:
+    """Give every job about to be queued its `listing_fitness` and stated
+    `pay` (no network: regex only). The paid LLM pay estimate and the company
+    check run later, only for jobs that get approved or reach his list (see
+    cv_tailor.listing_enrich). A failure here costs the fields, never the scan."""
+    from cv_tailor import listing_enrich, pay_check
+    try:
+        floors = floors if floors is not None else pay_check.load_floors()
+    except Exception:  # noqa: BLE001
+        floors = {"fte": None, "contractor": None}
+    risky = 0
+    for item in scored:
+        try:
+            item.update(listing_enrich.scan_fields(
+                getattr(item["job"], "description", "") or "", floors))
+        except Exception as exc:  # noqa: BLE001
+            org = getattr(item.get("job"), "org", "?")
+            print(f"  vetting failed for {_log_safe(org)}: {type(exc).__name__}", file=sys.stderr)
+            continue
+        if item["listing_fitness"]["band"] == "high_risk":
+            risky += 1
+    if risky:
+        print(f"  {risky} queued job(s) read as high-risk listings (autopilot will not apply)",
+              file=sys.stderr)
+
+
 def run_gates(jobs, tracks, conn, stats=None):
     """Gate 1 (track-aware rules) -> Gate 2 (SMB) -> Gate 3 (dedup). Each
     survivor gains a `.track` attribute set to its winning track id (see
@@ -400,6 +426,7 @@ def main(argv=None):
 
     scored.sort(key=lambda s: s["score"], reverse=True)
     scored = scored[: args.max_results]
+    attach_vetting(scored)
 
     today = date.today()
     scans_dir = ROOT / "scans"

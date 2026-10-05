@@ -108,7 +108,10 @@ def test_adopts_once_onto_his_list_tailored(script, monkeypatch, tmp_path):
     assert e["status"] == "handed_off" and e["source"] == "extension"
     assert e["apply_target"] == "https://jobs.example.com/companies/fixture/99/apply/cv?t=1"
     assert e["cv_path"].endswith("cv.pdf")
-    desc = json.loads((tmp_path / out["date"] / "descriptions.json").read_text())[out["id"]]
+    # Vetted on the way in (no network: SCOUT_ENRICH_DISABLED in conftest).
+    assert e["listing_fitness"]["band"] in ("healthy", "mixed", "high_risk")
+    assert set(e["pay"]) >= {"stated", "estimate", "basis", "verdict"}
+    desc =json.loads((tmp_path / out["date"] / "descriptions.json").read_text())[out["id"]]
     assert "fixture agents" in desc
     rc, again = _run(script, monkeypatch, payload, fetcher=fetcher, assembler=assembler)
     assert rc == 0 and again["reused"] is True and again["id"] == out["id"]

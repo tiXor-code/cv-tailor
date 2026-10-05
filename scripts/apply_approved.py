@@ -56,6 +56,7 @@ from cv_tailor.apply_policy import (
 )
 from cv_tailor.ats_resolve import resolve_ats_url
 from cv_tailor import linkedin_handoff
+from cv_tailor import listing_enrich
 from cv_tailor.assemble import AssembleError, assemble_package
 from cv_tailor.cache import (
     application_exists,
@@ -204,6 +205,43 @@ def _handoff_linkedin(args, entry: dict, meta: dict, profile: dict, answers: dic
         answer_sheet=linkedin_handoff.answer_sheet(profile, answers)))
     print(f"linkedin handoff: on his list ({entry.get('company')} / {entry.get('title')})",
           file=sys.stderr)
+    _enrich_listed(args)
+    return 0
+
+
+def _enrich_listed(args) -> None:
+    """Pay estimate, high-risk warning and company check for a job that just
+    landed on his list. Best-effort by construction (listing_enrich never
+    raises); the extra guard keeps even an import-time surprise from turning a
+    finished handoff into a failed run."""
+    try:
+        listing_enrich.enrich_listed(args.scan_date, args.job_id)
+    except Exception as exc:  # noqa: BLE001
+        print(f"enrich after handoff failed: {type(exc).__name__}", file=sys.stderr)
+
+
+HOLD_HIGH_RISK = "high_risk_listing"  # autopilot.HOLD_HIGH_RISK
+
+
+def _hand_over_held(args, entry: dict) -> int:
+    """Autopilot approved this job with a high-risk hold: the package is
+    assembled, but the job goes to his list with a warning instead of being
+    submitted. Nothing is sent and no ledger row is written."""
+    fitness = entry.get("listing_fitness") or {}
+    sheet = None
+    try:
+        profile_path = Path(os.environ.get("CV_TAILOR_PROFILE", ROOT / "profile.yaml"))
+        sheet = linkedin_handoff.answer_sheet(load_profile(profile_path, strict=True), load_answers())
+    except Exception:  # noqa: BLE001 -- the list works without the sheet
+        pass
+    extra = {"handed_off_at": datetime.now(timezone.utc).isoformat(),
+             "handoff_reason": "Risky listing: Scout did not apply. Check it before you do",
+             "listing_warning": listing_enrich.high_risk_warning(fitness)}
+    if sheet:
+        extra["answer_sheet"] = sheet
+    update_entry(args.scan_date, args.job_id, _status_mut("handed_off", **extra))
+    print("high-risk listing -> his list, not submitted", file=sys.stderr)
+    _enrich_listed(args)
     return 0
 
 
@@ -473,6 +511,7 @@ def _handle_portal(args, entry: dict, meta: dict) -> int:
                 handoff_reason=why, evidence_dir=result.evidence_dir,
                 answer_sheet=linkedin_handoff.answer_sheet(profile, answers)))
             print(f"portal wall -> his list: {why}", file=sys.stderr)
+            _enrich_listed(args)
             return 0
 
         def _needs_human(e: dict) -> None:
@@ -566,6 +605,13 @@ def main(argv=None) -> int:
         print(f"status conflict, another spawn already claimed this job: {exc}", file=sys.stderr)
         return 2
 
+    # Approved: price it (stated pay, else one LLM estimate). Best-effort and
+    # status-neutral, so it can never stop the application.
+    try:
+        listing_enrich.enrich_approved(args.scan_date, args.job_id)
+    except Exception as exc:  # noqa: BLE001
+        print(f"pay enrichment failed: {type(exc).__name__}", file=sys.stderr)
+
     try:
         meta = assemble_package(entry, args.scan_date)
     except Exception as exc:  # noqa: BLE001 -- AssembleError or any other assembly
@@ -581,6 +627,12 @@ def main(argv=None) -> int:
         e["cover_letter_path"] = meta["cover_letter_path"]
 
     entry = update_entry(args.scan_date, args.job_id, _write_paths)
+
+    # Autopilot never applies to a high-risk listing; a high-scoring one is
+    # approved with this hold so he gets the assembled package on his list.
+    # Only an unforced, non-handoff run honours it: --force/--handoff are him.
+    if entry.get("apply_hold") == HOLD_HIGH_RISK and not args.force and not args.handoff:
+        return _hand_over_held(args, entry)
 
     warnings = meta.get("cover_letter_warnings") or []
     if warnings and not args.force:
