@@ -80,7 +80,14 @@ def main(argv=None, *, fetcher=None, assembler=None) -> int:
 
     day = found[0] if found else date.today().isoformat()
     now = datetime.now(timezone.utc).isoformat()
+    vetting: dict = {}
+    try:
+        from cv_tailor import listing_enrich, pay_check
+        vetting = listing_enrich.scan_fields(posting["description"], pay_check.load_floors())
+    except Exception as exc:  # noqa: BLE001 -- vetting is a bonus, adoption is the job
+        print(f"vetting skipped: {type(exc).__name__}", file=sys.stderr)
     entry = add_entry(day, {
+        **vetting,
         "id": job_id, "source": "extension", "title": posting["title"], "company": posting["company"],
         "location": posting["location"], "url": posting["url"], "score": None,
         "why": "Opened by you in Scout Fill", "matched": [], "apply_options": [], "track": "ai",
@@ -107,6 +114,14 @@ def main(argv=None, *, fetcher=None, assembler=None) -> int:
         e["cover_letter_path"] = meta["cover_letter_path"]
 
     update_entry(day, job_id, _write_back)
+    # On his list now: price it (LLM estimate when no pay is stated) and flag a
+    # high-risk listing. The company check needs a score >= 8, which an adopted
+    # job (score None) never has, so it costs no searches here.
+    try:
+        from cv_tailor import listing_enrich
+        listing_enrich.enrich_listed(day, job_id)
+    except Exception as exc:  # noqa: BLE001
+        print(f"enrich skipped: {type(exc).__name__}", file=sys.stderr)
     print(json.dumps({"date": day, "id": job_id, "company": posting["company"], "title": posting["title"],
                       "tailored": True, "reused": False}))
     return 0

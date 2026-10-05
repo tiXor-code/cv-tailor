@@ -63,7 +63,7 @@ def _to_entry(item) -> dict:
     job = item["job"]
     method, target = detect_apply_channel(
         getattr(job, "description", "") or "", company_domain(job))
-    return {
+    entry = {
         "id": _job_id(job),
         "source": job.source,
         "title": job.title,
@@ -90,6 +90,12 @@ def _to_entry(item) -> dict:
         "email_subject": requested_subject(getattr(job, "description", "") or "")
         if method == "email" else None,
     }
+    # Vetting fields (listing_enrich.scan_fields), copied only when the scan
+    # computed them, so a caller that never vets gets the same entry as before.
+    for key in ("listing_fitness", "pay"):
+        if item.get(key) is not None:
+            entry[key] = item[key]
+    return entry
 
 
 def _job_description(item) -> str:
