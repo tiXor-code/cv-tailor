@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import sys
 from collections import Counter
@@ -27,7 +28,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "src"))
 
-from cv_tailor.jd_terms import extract_terms, profile_text, term_present
+from cv_tailor.jd_terms import extract_terms, judge_support, profile_text, term_present
 from cv_tailor.profile import load_profile
 from cv_tailor.scout_queue import queue_root
 
@@ -57,8 +58,13 @@ def _key(term: str) -> str:
     return low[:-1] if low.endswith("s") and len(low) > 3 and not low.endswith("ss") else low
 
 
+# Frequent in postings but not a skill anyone can lack.
+NOT_SKILLS = {"location", "need", "needs", "feature", "features", "team", "teams", "work", "working",
+              "time", "year", "years", "world", "product", "products", "business", "customer", "customers"}
+
+
 def market_gap(descriptions: dict[str, str], profile: dict, *, top_n: int = 40,
-               per_jd: int = 40) -> dict:
+               per_jd: int = 40, client=None) -> dict:
     # Count each posting once per term; "API"/"APIs"/"api" share one key and
     # report under their most common spelling.
     df: Counter = Counter()
@@ -80,6 +86,16 @@ def market_gap(descriptions: dict[str, str], profile: dict, *, top_n: int = 40,
             "share_pct": round(100 * n / total) if total else 0,
             "supported": term_present(term, truth),
         })
+    # Literal misses the profile supports in meaning (verbatim evidence only),
+    # and words that are not skills at all ("location", "need") drop out.
+    if client is not None:
+        unsupported = [r["term"] for r in ranked if not r["supported"]]
+        support = judge_support(unsupported, profile, client=client)
+        for r in ranked:
+            if r["term"] in support:
+                r["supported"] = True
+                r["evidence"] = support[r["term"]]
+    ranked = [r for r in ranked if r["term"].lower() not in NOT_SKILLS]
     return {
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "postings": total,
@@ -98,6 +114,17 @@ def summary(report: dict) -> str:
     return "\n".join(lines)
 
 
+def _load_dotenv(path: Path = ROOT / ".env") -> None:
+    try:
+        for line in path.read_text().splitlines():
+            line = line.strip()
+            if line and not line.startswith("#") and "=" in line:
+                k, _, v = line.partition("=")
+                os.environ.setdefault(k.strip(), v.strip().strip('"').strip("'"))
+    except OSError:
+        pass
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--top", type=int, default=40, help="terms to report (default 40)")
@@ -106,6 +133,8 @@ def main(argv=None) -> int:
     ap.add_argument("--out", type=Path, default=None,
                     help="report path (default <queue-root>/market_gap.json)")
     ap.add_argument("--profile", type=Path, default=ROOT / "profile.yaml")
+    ap.add_argument("--no-judge", action="store_true",
+                    help="literal matching only (no LLM check of near misses)")
     args = ap.parse_args(argv)
 
     root = queue_root()
@@ -117,7 +146,15 @@ def main(argv=None) -> int:
         print(f"no descriptions.json content under {root}", file=sys.stderr)
         return 1
     profile = load_profile(args.profile)
-    report = market_gap(descriptions, profile, top_n=args.top, per_jd=args.per_jd)
+    client = None
+    if not args.no_judge:
+        try:
+            _load_dotenv()
+            from cv_tailor.tailor_llm import build_azure_client
+            client = build_azure_client()
+        except Exception as exc:  # noqa: BLE001 -- the literal report still stands
+            print(f"llm unavailable ({type(exc).__name__}); literal matching only", file=sys.stderr)
+    report = market_gap(descriptions, profile, top_n=args.top, per_jd=args.per_jd, client=client)
     out = args.out or root / "market_gap.json"
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(report, indent=2, ensure_ascii=False))
