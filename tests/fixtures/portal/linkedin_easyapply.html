@@ -53,6 +53,7 @@
   ];
   let step = 0;
   window.__step = () => step;
+  window.__clicks = []; // footer buttons pressed, in order
   function render(modal) {
     const form = modal.querySelector("form");
     form.innerHTML = steps[step];
@@ -69,7 +70,8 @@
     modal.innerHTML = '<h2 id="jobs-apply-header">Apply to Fixture Co</h2><form></form><footer><button type="button" id="next"></button></footer>';
     document.body.append(modal);
     render(modal);
-    modal.querySelector("#next").addEventListener("click", () => {
+    modal.querySelector("#next").addEventListener("click", (e) => {
+      window.__clicks.push(e.currentTarget.textContent);
       if (step === 2) {
         modal.innerHTML = '<h2>Application sent</h2><p>Your application was sent to Fixture Co!</p>';
         return;

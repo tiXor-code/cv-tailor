@@ -5,9 +5,15 @@
 // (via the background worker -> admin -> the mini) for its answers, fill them,
 // attach the tailored CV, and highlight whatever only he can answer.
 //
-// It NEVER presses Submit. He reviews and submits from his own browser, which
-// is what the sites' spam filters want to see. Only after HE submits and the
-// site shows its confirmation does it tick "applied" on his list.
+// Autopilot (Teodor, 2026-10-05: "I don't want to click anything"; ON by
+// default, Pause in the panel): after a fill it presses the form's own Next /
+// Continue / Submit -- after a 1-3 s human pause -- ONLY when every check
+// passes: each required field has a value, no answer needs him, the CV (and
+// cover letter where asked) is attached, no CAPTCHA, password or sign-in wall,
+// and it is this job's form. Any failed check stops it on that step: the
+// fields are outlined and the job is parked on his list with the reason and
+// the questions. With autopilot off, he presses Submit himself.
+// Either way, "applied" is ticked only after the site shows its confirmation.
 //
 // Page text is untrusted: everything shown in the panel goes through
 // textContent, never innerHTML.
@@ -33,6 +39,79 @@
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   const clean = (s) => String(s || "").replace(/\s+/g, " ").trim();
   const norm = (s) => clean(s).toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+
+  // ---------------------------------------------------------- autopilot ----
+  // on: his setting; paused: the panel's Pause; inRun: this tab is "Run my
+  // list"'s tab (a run always uses autopilot); current: on the run's job.
+  const auto = { on: true, paused: false, inRun: false, current: false, runHost: "", run: null };
+  const autoEnabled = () => auto.on || auto.inRun;
+  let renderAutoUi = () => {};
+  let pendingAuto = null; // the step it held back while paused
+  let autoStopped = false; // parked (or the run was stopped): no more clicks on this page
+  const loadAuto = () => new Promise((resolve) => {
+    try {
+      chrome.storage.local.get(["autopilot", "autopilotPaused", "scoutRun"], (got) => {
+        const g = got || {};
+        auto.on = g.autopilot !== false;
+        auto.paused = Boolean(g.autopilotPaused);
+        auto.run = g.scoutRun || null;
+        resolve();
+      });
+    } catch {
+      resolve();
+    }
+  });
+  try {
+    chrome.storage.onChanged.addListener((changes, area) => {
+      if (area !== "local") return;
+      if (changes.autopilot) auto.on = changes.autopilot.newValue !== false;
+      if (changes.scoutRun) {
+        auto.run = changes.scoutRun.newValue || null;
+        if (auto.inRun && auto.run && auto.run.stopped && !autoStopped) {
+          autoStopped = true;
+          pendingAuto = null;
+          if (panel) panel.status("Run stopped. Nothing more is pressed on this page.");
+        }
+      }
+      if (changes.autopilotPaused) {
+        auto.paused = Boolean(changes.autopilotPaused.newValue);
+        if (!auto.paused && pendingAuto) {
+          const go = pendingAuto;
+          pendingAuto = null;
+          go();
+        }
+      }
+      renderAutoUi();
+    });
+  } catch {}
+  async function hello(job) {
+    const res = await send({ type: "run-hello", ...(job ? { date: job.date, id: job.id } : {}) });
+    if (res.ok && res.data) {
+      auto.inRun = Boolean(res.data.inRun);
+      auto.current = Boolean(res.data.current);
+      auto.runHost = String(res.data.host || "");
+    }
+  }
+  const humanDelay = () => sleep(1000 + Math.random() * 2000);
+  function runText(r) {
+    if (!r) return "";
+    if (r.active) {
+      const n = `Run: job ${Math.min(r.index + 1, r.jobs.length)} of ${r.jobs.length}`;
+      if (r.paused) return `${n} (paused)`;
+      if (r.phase === "pause") return `${n}. Next job in ${Math.max(0, Math.round((r.nextAt - Date.now()) / 1000))} s`;
+      return n;
+    }
+    if (!r.finished || !auto.inRun) return "";
+    const applied = r.results.filter((x) => x.outcome === "applied").length;
+    const parked = r.results.length - applied;
+    const left = r.jobs.length - r.results.length;
+    return `Run ${r.stopped ? "stopped" : "finished"}: applied ${applied}, parked ${parked}${left ? `, ${left} not started` : ""}.`;
+  }
+  function runDetails(r) {
+    if (!r || r.active || !r.finished || !auto.inRun) return [];
+    return r.results.filter((x) => x.outcome === "parked").map((x) =>
+      `Parked ${x.company || x.id}${x.title ? ` - ${x.title}` : ""}: ${x.reason}${x.questions.length ? ` (${x.questions.join("; ")})` : ""}`);
+  }
 
   // ---------------------------------------------------------------- job ----
   async function resolveJob() {
@@ -87,6 +166,8 @@
       button[disabled]{opacity:.5;cursor:default}
       ul{margin:6px 0 0;padding-left:18px;max-height:140px;overflow:auto}
       .muted{color:#5b6865}
+      .auto{margin:2px 0 4px;font-size:12px}
+      button.small{margin:0 4px 0 0;padding:1px 8px;font-size:12px;font-weight:600;background:#fff;color:#0f6b5c}
       .head{display:flex;align-items:center;gap:6px;margin-bottom:4px;cursor:move;user-select:none;touch-action:none}
       .head .t{flex:1;margin:0}
       .owl{width:20px;height:20px;flex:none;display:block}
@@ -140,7 +221,52 @@
     mark.style.cssText = "display:block";
     mark.hidden = true;
     mark.addEventListener("click", () => { if (markHandler) markHandler(); });
-    box.append(head, line, status, list, btn, save, mark, report);
+    // autopilot state + Pause, and "Run my list" (static labels only)
+    const autoRow = document.createElement("div");
+    autoRow.className = "auto";
+    const autoText = document.createElement("span");
+    const pauseBtn = document.createElement("button");
+    pauseBtn.type = "button";
+    pauseBtn.className = "small";
+    const runBtn = document.createElement("button");
+    runBtn.type = "button";
+    runBtn.className = "small";
+    runBtn.textContent = "Run my list";
+    const stopBtn = document.createElement("button");
+    stopBtn.type = "button";
+    stopBtn.className = "small";
+    stopBtn.textContent = "Stop run";
+    const runLine = document.createElement("div");
+    runLine.className = "muted";
+    const runList = document.createElement("ul");
+    autoRow.append(autoText, pauseBtn, runBtn, stopBtn);
+    pauseBtn.addEventListener("click", () => send({ type: "run-pause", paused: !auto.paused }));
+    stopBtn.addEventListener("click", () => send({ type: "run-stop" }));
+    runBtn.addEventListener("click", async () => {
+      runBtn.disabled = true;
+      const res = await send({ type: "run-start" });
+      runBtn.disabled = false;
+      if (!res.ok) status.textContent = `Could not start the run: ${res.error}`;
+      else if (!res.data || !res.data.jobs || !res.data.jobs.length) status.textContent = "Your Scout list has nothing to apply to right now.";
+    });
+    renderAutoUi = () => {
+      const on = autoEnabled();
+      const r = auto.run;
+      autoText.textContent = !on ? "Autopilot off: you press Submit. " : auto.paused ? "Autopilot paused. " : "Autopilot on. ";
+      host.dataset.autopilot = !on ? "off" : auto.paused ? "paused" : "on";
+      pauseBtn.hidden = !on;
+      pauseBtn.textContent = auto.paused ? "Resume" : "Pause";
+      runBtn.hidden = Boolean(r && r.active);
+      stopBtn.hidden = !(r && r.active);
+      runLine.textContent = runText(r);
+      runList.replaceChildren(...runDetails(r).map((t) => {
+        const li = document.createElement("li");
+        li.textContent = t;
+        return li;
+      }));
+    };
+    setInterval(() => { if (auto.run && auto.run.active && host.isConnected) renderAutoUi(); }, 1000);
+    box.append(head, line, autoRow, runLine, runList, status, list, btn, save, mark, report);
     root.append(style, box, pill);
     document.documentElement.append(host);
 
@@ -199,6 +325,7 @@
     drag(pill);
     pill.addEventListener("click", () => { if (!moved) setMin(false); });
     addEventListener("resize", apply);
+    renderAutoUi();
     return {
       host,
       btn,
@@ -543,6 +670,11 @@
         fields = scan();
       }
     }
+    if (!fields.length && root === document && job && autoEnabled() && !autoStopped
+        && !root.querySelector("input[type=file]") && !dropZoneOf(root)) {
+      await sleep(3000); // a single-page form still rendering
+      fields = scan();
+    }
     if (!fields.length && job && (root.querySelector("input[type=file]") || dropZoneOf(root))) {
       // an upload-only step (join.com "Upload your CV")
       const input = root.querySelector("input[type=file]");
@@ -557,12 +689,14 @@
       panel.btn.disabled = false;
       filled = true;
       panel.host.dataset.state = "filled";
+      await autoStep(root, job, { questions: [], uploads: cv ? [] : [`${what} upload`] });
       return;
     }
     if (!fields.length) {
       panel.status(LINKEDIN ? "Nothing to fill on this step. Press Next." : "No form found on this page yet. Open the application form, then press Fill.");
       panel.btn.disabled = false;
       panel.report.hidden = false;
+      if (job && root === document && autoEnabled()) await autoPark(job, { reason: "no-form: Scout found no application form on this page" });
       return;
     }
     panel.status(`Asking Scout about ${fields.length} fields...`);
@@ -577,6 +711,7 @@
     }
     const { answers = [], cover_letter: letter = "" } = res.data || {};
     const needs = [];
+    const doubts = []; // answered, but Scout said only he can be sure
     let done = 0;
     for (let i = 0; i < fields.length; i++) {
       const f = fields[i];
@@ -586,17 +721,30 @@
       if (value) {
         try { ok = await f.set(value); } catch { ok = false; }
       }
-      if (ok) done += 1;
-      else if (f.required || (answers[i] && answers[i].needs_you)) {
-        needs.push(f.label.replace(/\s*\*\s*$/, ""));
+      if (ok) {
+        done += 1;
+        if (answers[i] && answers[i].needs_you) {
+          doubts.push(fieldLabel(f));
+          flag(f.el);
+        }
+      } else if (f.required || (answers[i] && answers[i].needs_you)) {
+        needs.push(fieldLabel(f));
         flag(f.el);
       }
     }
-    pending = pending.concat(fields.filter((f) => needs.includes(f.label.replace(/\s*\*\s*$/, ""))));
+    pending = pending.concat(fields.filter((f) => needs.includes(fieldLabel(f))));
+    const questions = [...needs, ...doubts.filter((d) => !needs.includes(d))];
+    const uploads = [];
     const cv = await attachCv(job, root, "cv");
-    if (cv === false) needs.push("CV upload (download it from your Scout list)");
+    if (cv === false) {
+      needs.push("CV upload (download it from your Scout list)");
+      uploads.push("CV upload");
+    }
     if (job && [...root.querySelectorAll("input[type=file]")].some((i) => fileKind(i) === "cover")) {
-      if (await attachCv(job, root, "cover") === false) needs.push("Cover letter upload");
+      if (await attachCv(job, root, "cover") === false) {
+        needs.push("Cover letter upload");
+        uploads.push("Cover letter upload");
+      }
     }
     if (cv === null && !job && root.querySelector("input[type=file]")) needs.push("CV upload (not on your Scout list, so attach your own)");
     panel.needs(needs);
@@ -609,6 +757,151 @@
     panel.btn.disabled = false;
     filled = true;
     panel.host.dataset.state = "filled"; // observable finish line (tests, and future tooling)
+    await autoStep(root, job, { questions, uploads });
+  }
+  const fieldLabel = (f) => f.label.replace(/\s*\*\s*$/, "");
+
+  // ------------------------------------------- autopilot: check, press ----
+  // The checks are re-run on the live page right before every click, never
+  // trusted from the fill: a site can add a CAPTCHA or an error at any time.
+  const SUBMIT_RE = /^(submit|send|apply)\b|\b(submit|send) (my |your |the )?application\b/i;
+  const NEXT_RE = /^(next|continue|review|proceed|save (and|&) continue|go to next step)\b/i;
+  const LOGIN_RE = /\b(sign ?in|log ?in|sign ?up|create (an |your )?account|register)\b/i;
+  const OTHER_RE = /\bwith (linkedin|indeed|google|seek|xing|facebook|github)\b|easy apply|^(yes|no)$/i;
+  const CAPTCHA_SEL = ["iframe[src*='bframe']", "iframe[src*='recaptcha']", ".g-recaptcha", "iframe[src*='hcaptcha']",
+    ".h-captcha", "iframe[src*='turnstile']", "iframe[src*='challenges.cloudflare.com']", ".cf-turnstile"].join(", ");
+
+  function captchaShown() {
+    return [...document.querySelectorAll(CAPTCHA_SEL)].some((el) => {
+      // the invisible reCAPTCHA badge resolves on submit by itself
+      if (el.closest(".grecaptcha-badge, .g-recaptcha[data-size=invisible]")) return false;
+      if (!visible(el)) return false;
+      const r = el.getBoundingClientRect();
+      return r.top > -3000 && r.left > -3000; // parked off-screen = not shown to anyone
+    });
+  }
+  const passwordShown = () => [...document.querySelectorAll("input[type=password]")].some(visible);
+  const controlText = (b) => clean(b.innerText || b.value || b.getAttribute("aria-label") || "");
+  function controls(root) {
+    return [...root.querySelectorAll("button, input[type=submit], input[type=button], [role=button]")]
+      .filter((b) => visible(b) && !b.disabled && b.getAttribute("aria-disabled") !== "true" && !b.closest("#scout-fill-panel"));
+  }
+  // The form's own Submit (or Next/Continue on a step). Buttons inside the
+  // filled form win over page chrome ("Apply for this job" in a header).
+  function stepControl(root) {
+    const all = controls(root);
+    const forms = new Set(scan(root).map((f) => f.el.closest("form")).filter(Boolean));
+    const inForm = all.filter((b) => (b.form && forms.has(b.form)) || [...forms].some((f) => f.contains(b)));
+    for (const list of [inForm, all]) {
+      const usable = list.filter((b) => !OTHER_RE.test(controlText(b)));
+      const sub = usable.find((b) => SUBMIT_RE.test(controlText(b)));
+      if (sub) return { el: sub, kind: "submit", login: LOGIN_RE.test(controlText(sub)) };
+      const next = usable.find((b) => NEXT_RE.test(controlText(b)));
+      if (next) return { el: next, kind: "next", login: false };
+      const typed = usable.find((b) => b.type === "submit" && b.form && forms.has(b.form));
+      if (typed) return { el: typed, kind: "submit", login: LOGIN_RE.test(controlText(typed)) };
+    }
+    // no way forward, but a sign-in/sign-up button in the form: an account wall
+    if (inForm.some((b) => LOGIN_RE.test(controlText(b)))) return { el: null, kind: "none", login: true };
+    return null;
+  }
+  function hasValue(f) {
+    if (f.kind === "consent") return f.el.checked;
+    if (f.el.tagName === "BUTTON") {
+      const box = containerOf(f.el) || document;
+      return [...box.querySelectorAll("button")].some((b) => b.getAttribute("aria-pressed") === "true"
+        || /\b(selected|active)\b/.test(b.className)) || [...box.querySelectorAll("input[type=checkbox]")].some((c) => c.checked);
+    }
+    return currentValue(f) !== "";
+  }
+  const siteOf = (host) => host.split(".").slice(-2).join(".");
+  function stepKey(root) {
+    return `${location.href}|${scan(root).map((f) => f.label).join("|")}|${controls(root).map(controlText).join("|")}`;
+  }
+
+  function checkStep(root, report) {
+    if (captchaShown()) return { reason: "captcha: the site shows a CAPTCHA only you can solve" };
+    if (passwordShown()) return { reason: "login-required: the site asks for an account password" };
+    const ctl = stepControl(root);
+    if (ctl && ctl.login) return { reason: "login-required: the form wants you to sign in or create an account" };
+    if (auto.inRun && auto.current && auto.runHost && siteOf(location.hostname) !== siteOf(auto.runHost)) {
+      return { reason: `wrong-page: the job link led to ${location.hostname}, not its application form` };
+    }
+    const questions = [...report.questions];
+    for (const f of scan(root)) {
+      if (!f.required || hasValue(f)) continue;
+      const l = fieldLabel(f) || "An unlabelled required field";
+      if (!questions.includes(l)) questions.push(l);
+      flag(f.el);
+    }
+    if (questions.length) {
+      return { reason: `needs-answers: ${questions.length} question${questions.length === 1 ? "" : "s"} only you can answer`, questions };
+    }
+    const uploads = [...report.uploads];
+    for (const i of root.querySelectorAll("input[type=file][required]")) {
+      if (!i.files || !i.files.length) uploads.push(fileKind(i) === "cover" ? "Cover letter upload" : "CV upload");
+    }
+    if (uploads.length) return { reason: `upload-failed: ${[...new Set(uploads)].join(", ")}` };
+    if (!ctl) return { reason: "no-submit: Scout found no Submit, Next or Continue button on the form" };
+    return null;
+  }
+
+  let autoClicks = 0;
+  async function autoStep(root, job, report) {
+    if (!job || !autoEnabled() || autoStopped || submitted) return;
+    if (auto.paused) {
+      pendingAuto = () => autoStep(root, job, report);
+      panel.status("Filled. Autopilot is paused: press Resume, or Submit yourself.");
+      return;
+    }
+    pendingAuto = null;
+    let problem = checkStep(root, report);
+    if (problem) return autoPark(job, problem);
+    let ctl = stepControl(root);
+    panel.status(ctl.kind === "submit" ? "Every check passed. Submitting in a moment..." : "Every check passed. Going to the next step...");
+    await humanDelay();
+    if (autoStopped || submitted) return;
+    if (auto.paused) {
+      pendingAuto = () => autoStep(root, job, report);
+      panel.status("Filled. Autopilot is paused: press Resume, or Submit yourself.");
+      return;
+    }
+    problem = checkStep(root, report); // the page may have changed during the pause
+    if (problem) return autoPark(job, problem);
+    ctl = stepControl(root);
+    if ((autoClicks += 1) > 25) return autoPark(job, { reason: "stuck: more than 25 steps on one application" });
+    const before = stepKey(root);
+    panel.host.dataset.auto = ctl.kind;
+    ctl.el.click();
+    if (ctl.kind === "submit") {
+      panel.status("Submitted by autopilot. Waiting for the site to confirm...");
+      setTimeout(() => {
+        if (!submitted && !autoStopped) {
+          autoPark(job, { reason: "no-confirmation: autopilot pressed Submit but the site showed no confirmation; check the page" });
+        }
+      }, 30000);
+    } else {
+      setTimeout(() => {
+        if (!submitted && !autoStopped && !pendingAuto && stepKey(root) === before) {
+          autoPark(job, { reason: "stuck: the form did not move on after Next (it may show an error)" });
+        }
+      }, 20000);
+    }
+  }
+
+  // Stop on this step, outline what needs him, and park the job on his list.
+  async function autoPark(job, problem) {
+    if (autoStopped || submitted) return;
+    autoStopped = true;
+    pendingAuto = null;
+    if (!panel) panel = makePanel(job);
+    const questions = (problem.questions || []).map((q) => String(q).slice(0, 500)).slice(0, 30);
+    const why = problem.reason.replace(/^[a-z-]+: /, "");
+    if (questions.length) panel.needs(questions);
+    panel.status(`Autopilot stopped: ${why}. ${auto.inRun ? "Parked; the run moves on." : "Parked on your Scout list; finish it here if you like."}`);
+    panel.host.dataset.state = "parked";
+    const res = await send({ type: "park", date: job.date, id: job.id, reason: problem.reason, questions });
+    if (!res.ok) panel.status(`Autopilot stopped: ${why}. Could not park it on your list: ${res.error}`);
   }
 
   // ---------------------------------------- saving what HE typed ----
@@ -751,9 +1044,11 @@
 
   // ------------------------------------------------------------ LinkedIn ----
   // Easy Apply is a multi-step window over the job page. The panel exists only
-  // while that window is open; nothing runs until he clicks "Fill this step".
-  // After that each new step is filled ONCE as it appears. It never clicks
-  // Next, Review or Submit -- he moves through the steps himself.
+  // while that window is open. With autopilot off, nothing runs until he
+  // clicks "Fill this step"; after that each new step is filled ONCE as it
+  // appears and he presses Next / Review / Submit himself. With autopilot on
+  // and a job from his list, it opens Easy Apply (a run's link) and walks the
+  // steps: fill, check, press Next / Review / Submit application -- or park.
   function easyApplyWindow() {
     return document.querySelector(".jobs-easy-apply-modal, [data-test-modal-id='easy-apply-modal']")
       || [...document.querySelectorAll("[role=dialog]")].find((d) =>
@@ -763,12 +1058,47 @@
   function stepSignature(win) {
     return scan(win).map((f) => f.label).join("|");
   }
-  function bootLinkedIn() {
+  const footerText = (w) => controls(w).map(controlText).join("|");
+  // A run's LinkedIn link: press Easy Apply for him (he would have).
+  async function openEasyApply(job) {
+    for (let i = 0; i < 20 && !easyApplyWindow() && !autoStopped; i++) {
+      if (passwordShown()) return autoPark(job, { reason: "login-required: LinkedIn wants you to sign in" });
+      const b = [...document.querySelectorAll("button, a")].find((n) => visible(n) && !n.closest("#scout-fill-panel")
+        && /^easy apply\b/i.test(controlText(n)));
+      if (!b) {
+        await sleep(1000);
+        continue;
+      }
+      await humanDelay();
+      if (auto.paused) {
+        pendingAuto = () => openEasyApply(job);
+        return;
+      }
+      if (!easyApplyWindow()) b.click();
+      await sleep(3000);
+    }
+    if (!easyApplyWindow() && !autoStopped) {
+      autoPark(job, { reason: "no-easy-apply: this LinkedIn job has no Easy Apply window (it applies on the company site)" });
+    }
+  }
+  async function bootLinkedIn() {
     let win = null;
     let following = false;
     let job = null;
     let filledSteps = new Set();
+    let stepping = false;
+    // autopilot also walks steps with nothing to fill (Review), so its step
+    // key includes the footer buttons
+    const liStepKey = (w) => {
+      const sig = stepSignature(w);
+      const walking = Boolean(job) && autoEnabled() && !autoStopped && !submitted;
+      return walking && controls(w).length ? `${sig}#${footerText(w)}` : sig;
+    };
+    const m = location.href.match(HASH_RE);
+    const linkJob = m ? { date: m[1], id: m[2] } : null; // opened from his list / a run
     watchSubmission(() => job);
+    await hello(linkJob);
+    if (linkJob && autoEnabled()) openEasyApply(linkJob);
     setInterval(async () => {
       const w = easyApplyWindow();
       if (w && w !== win) {
@@ -777,19 +1107,30 @@
         filledSteps = new Set();
         pending = [];
         lastTyped.clear();
-        const res = await send({ type: "lookup", url: location.href });
-        job = res.ok && res.data && res.data.job ? res.data.job : null;
+        if (linkJob) job = linkJob;
+        else {
+          const res = await send({ type: "lookup", url: location.href });
+          job = res.ok && res.data && res.data.job ? res.data.job : null;
+        }
         if (panel) panel.host.remove();
         panel = makePanel(job, {
-          line: job ? `${job.company} - ${job.title} (on your Scout list)` : "Easy Apply - filled from your profile and saved answers",
+          line: job ? `${job.company || "Job"} - ${job.title || ""} (on your Scout list)` : "Easy Apply - filled from your profile and saved answers",
           button: "Fill this step",
         });
-        panel.status(job ? "Tailored CV ready. Click Fill on each step you want filled." : "Click Fill to fill this step.");
+        following = Boolean(job) && autoEnabled() && !autoStopped;
+        panel.status(following ? "Autopilot: filling each step, then pressing Next."
+          : job ? "Tailored CV ready. Click Fill on each step you want filled." : "Click Fill to fill this step.");
         panel.btn.addEventListener("click", async () => {
           following = true;
           if (!job) job = await adoptThisJob();
-          filledSteps.add(stepSignature(win));
-          await fill(job, win);
+          if (stepping) return;
+          stepping = true; // one fill (and one autopilot press) per step at a time
+          try {
+            filledSteps.add(liStepKey(win));
+            await fill(job, win);
+          } finally {
+            stepping = false;
+          }
         });
         panel.save.addEventListener("click", () => saveTyped(false));
         panel.report.hidden = false;
@@ -797,11 +1138,17 @@
       } else if (!w && win) {
         win = null;
         if (panel) { panel.host.remove(); panel = null; }
-      } else if (w && following && !(panel && panel.btn.disabled)) {
+      } else if (w && following && !stepping && !(panel && panel.btn.disabled)) {
         const sig = stepSignature(w);
-        if (sig && !filledSteps.has(sig)) {
-          filledSteps.add(sig);
-          await fill(job, w);
+        const key = liStepKey(w);
+        if (!key || filledSteps.has(key)) return;
+        filledSteps.add(key);
+        stepping = true;
+        try {
+          if (sig) await fill(job, w);
+          else await autoStep(w, job, { questions: [], uploads: [] });
+        } finally {
+          stepping = false;
         }
       }
     }, 1000);
@@ -891,13 +1238,33 @@
   });
 
   // --------------------------------------------------------------- boot ----
+  // A run moving to the next job on the same page (only the #scout-fill link
+  // differs) does not reload it: reload, so the new job starts clean.
+  const bootLink = (location.href.match(HASH_RE) || [])[0] || "";
+  addEventListener("hashchange", () => {
+    const m = location.href.match(HASH_RE);
+    if (m && m[0] !== bootLink && window.top === window) location.reload();
+  });
+
   (async () => {
+    await loadAuto();
     if (LINKEDIN) {
       if (window.top === window) bootLinkedIn();
       return;
     }
     if (window.top !== window && !document.querySelector("form, input, textarea")) return;
     const job = await resolveJob();
+    if (job && job.auto) {
+      // a fresh link: a "pressed Submit" mark left by ANOTHER job is stale
+      const a = armedFromTab();
+      if (a && (a.date !== job.date || a.id !== job.id)) {
+        try { sessionStorage.removeItem(ARMED_KEY); } catch {}
+      }
+    }
+    if (window.top === window) await hello(job);
+    // in a run, the run's job counts as opened from its link even if the
+    // site dropped the #scout-fill part -- but never on its thank-you page
+    if (job && !job.auto && auto.current && !armedFromTab()) job.auto = true;
     if (!job && armedFromTab() && window.top === window) {
       // the thank-you page after a Submit he pressed on this tab's form
       filled = true;
