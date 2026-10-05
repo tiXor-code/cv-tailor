@@ -155,12 +155,12 @@ def test_backfill_misreads_are_not_pay():
     assert extract_pay("Backed by €1.2M from top investors and €8 per seat pricing.") == []
     assert extract_pay("Annual development allowance: €3,000 per year.") == []
     assert extract_pay("Revenue grew to $380,895 last quarter") == []
-    got = extract_pay("Salary: €60,000 - €75,000 per year")
-    assert got and got[0]["min_eur_month"] == 5000
+    got = extract_pay("Salary: €72,000 - €84,000 per year")
+    assert got and got[0]["min_eur_month"] == 6000
     assert extract_pay("Rate: €45 per hour")[0]["period"] == "hour"
 
 
 def test_anchor_ignores_a_range_that_spans_several_levels():
     from cv_tailor.pay_check import _judge
-    v = _judge(4000, 31000, 5000)
+    v = _judge(4400, 31000, 6100)
     assert v.startswith("apply, anchor at") and int(v.split()[3]) < 8000
