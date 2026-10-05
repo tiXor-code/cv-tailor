@@ -44,8 +44,11 @@ from cv_tailor.scout_queue import queue_root
 VERDICTS = ("proceed", "proceed with caution", "avoid")
 CACHE_DAYS = 30
 SEARCHES_PER_CHECK = 3
-DEFAULT_DAILY_CAP = 10
-DEFAULT_MONTHLY_CAP = 90
+# SerpAPI plan is 250 searches/month and the scan (~90) plus norina-jobs
+# (~120) already use ~210 of it: company checks get what is left, about
+# one company a day (3 searches) and 12 a month (2026-10-05).
+DEFAULT_DAILY_CAP = 3
+DEFAULT_MONTHLY_CAP = 36
 RESULTS_PER_QUERY = 6
 SNIPPET_CHARS = 300
 
