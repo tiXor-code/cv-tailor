@@ -2,7 +2,8 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <title>{{ profile.contact.name }} — CV</title>
+  <title>{{ profile.contact.name }} - CV</title>
+  <meta name="author" content="{{ profile.contact.name }}">
   <link rel="stylesheet" href="cv.css">
 </head>
 <body>
@@ -21,7 +22,7 @@
 
 <section>
   <h2>Summary</h2>
-  <p>{{ fields.summary_rewrite }}</p>
+  <p>{{ fields.summary_rewrite | expand_acronyms }}</p>
 </section>
 
 <section>
@@ -33,7 +34,7 @@
       <p class="meta">{{ exp.dates }} &middot; {{ exp.location }}</p>
       <ul>
         {% for idx in fields.experience_bullets.get(exp_id, []) %}
-          <li>{{ exp.bullets[idx] }}</li>
+          <li>{{ exp.bullets[idx] | expand_acronyms }}</li>
         {% endfor %}
       </ul>
     </article>
@@ -47,10 +48,10 @@
     {% set proj = projects_by_id[pid] %}
     <article class="project">
       <h3>{{ proj.name }} &mdash; <span class="tech">{{ proj.tech | join(', ') }}</span></h3>
-      <p class="meta">{{ proj.tagline }}{% if proj.link %} &middot; <a href="https://{{ proj.link }}">{{ proj.link }}</a>{% endif %}</p>
+      <p class="meta">{{ proj.tagline | expand_acronyms }}{% if proj.link %} &middot; <a href="https://{{ proj.link }}">{{ proj.link }}</a>{% endif %}</p>
       <ul>
         {% for b in proj.bullets %}
-          <li>{{ b }}</li>
+          <li>{{ b | expand_acronyms }}</li>
         {% endfor %}
       </ul>
     </article>

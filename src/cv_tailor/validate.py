@@ -50,3 +50,38 @@ def validate(profile: dict, fields: dict) -> list[str]:
             errors.append(f"skills_emphasis '{s}' not in profile.skills")
 
     return errors
+
+
+def _profile_number_corpus(profile: dict) -> list[str]:
+    """Normalized bullets and taglines: the only text a metric tile may quote."""
+    texts: list[str] = []
+    for kind in ("experiences", "projects"):
+        for item in profile.get(kind, []) or []:
+            if item.get("tagline"):
+                texts.append(" ".join(str(item["tagline"]).split()))
+            for b in item.get("bullets", []) or []:
+                texts.append(" ".join(str(b).split()))
+    return texts
+
+
+def validate_tiles(profile: dict, tiles: list[dict], rendered_bullets: list[str]) -> list[str]:
+    """Honesty guard for the designed CV's metric tiles. Each tile's number
+    must appear verbatim in a profile.yaml bullet or tagline, and the number
+    and its label must also appear in one bullet that renders below the
+    band, so stripping the band loses nothing. Empty list = valid."""
+    errors: list[str] = []
+    corpus = _profile_number_corpus(profile)
+    rendered = [" ".join(str(b).split()) for b in rendered_bullets]
+    for tile in tiles:
+        value = " ".join(str(tile.get("value", "")).split())
+        label = " ".join(str(tile.get("label", "")).split())
+        if not any(c.isdigit() for c in value):
+            errors.append(f"tile value {value!r} has no number")
+            continue
+        if not any(value in t for t in corpus):
+            errors.append(f"tile value {value!r} not found verbatim in profile bullets/taglines")
+            continue
+        phrase = " ".join(str(tile.get("phrase", "")).split())
+        if not any(value in b and label in b and phrase in b for b in rendered):
+            errors.append(f"tile {value!r} ({label!r}) does not appear in any rendered bullet")
+    return errors

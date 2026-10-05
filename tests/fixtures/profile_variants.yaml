@@ -1,0 +1,51 @@
+# Fictional profile for the CV-variant tests. Every person, company and number
+# here is invented; nothing mirrors the real profile.yaml.
+contact:
+  name: Alex Example
+  email: alex@example.com
+  phone: "+1 555 010 0199"
+  location: Springfield, Exampleland
+  website: alex.example.com
+  linkedin: linkedin.com/in/alex-example
+  github: github.com/alex-example
+summary_pool:
+  - id: default
+    text: Platform engineer who ships automation.
+experiences:
+  - id: acme
+    role: Platform Engineer
+    company: Acme Widgets
+    location: Remote
+    dates: Jan 2023 – Present
+    bullets:
+      - Cut onboarding time by 35% across three regional teams.
+      - Shipped 48 releases with zero rollbacks.
+      - Built an LLM triage step and a RAG lookup for the support desk.
+      - Launched in 2022 for the first pilot customers.
+  - id: globex
+    role: Junior Developer
+    company: Globex Labs
+    location: Springfield
+    dates: Jun 2020 – Dec 2022
+    bullets:
+      - Raised 18 of 20 audited pages to passing accessibility scores.
+      - Ran the 4-person on-call rota on 24GB build agents.
+      - Unselected bullet with 777 widgets that must never become a tile.
+projects:
+  - id: widgetctl
+    name: widgetctl
+    tagline: Command-line tool for widget fleets
+    link: github.com/alex-example/widgetctl
+    tech: [Python, Click]
+    bullets:
+      - Maintains 212 tests across 7 modules.
+      - Serves 2,400 daily users; the LLM prompts are versioned in git.
+skills:
+  languages: [Python, Go]
+  tools: [Git, Docker]
+education:
+  - degree: BSc Example Studies
+    institution: Example University
+    year: 2020
+languages_spoken:
+  - { language: English, level: native }
