@@ -15,6 +15,7 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
+from cv_tailor.ats_pass import run_pass as run_ats_pass
 from cv_tailor.cover_llm import check_cover, cover_letter
 from cv_tailor.profile import load_profile
 from cv_tailor.render import render_html, render_pdf
@@ -190,6 +191,21 @@ def assemble_package(entry: dict, scan_date: str, *, queue_dir=None, client=None
     cv_pdf = pkg_dir / "cv.pdf"
     render_pdf(html, css_path=templates_dir / "cv.css", out_path=cv_pdf)
 
+    # --- ATS simulation + JD-coverage pass (cv_tailor.ats_pass) ----------
+    # Scores every CV file in pkg_dir, and if profile-supported JD terms are
+    # missing, re-tailors ONCE with them as a hint (honesty guard re-applied,
+    # re-rendered via _rerender). Never raises; results land in meta below.
+    def _rerender(f: dict) -> None:
+        h = render_html(profile, f, template_dir=templates_dir)
+        (pkg_dir / "cv.html").write_text(h)
+        render_pdf(h, css_path=templates_dir / "cv.css", out_path=cv_pdf)
+
+    fields, ats_meta = run_ats_pass(
+        profile=profile, tailor_profile=tailor_profile, fields=fields, jd_text=jd_text,
+        jd_body=jd_body, company=company, role=role, pkg_dir=pkg_dir, client=client,
+        tailor_fn=tailor, validate_fn=validate, render_fn=_rerender)
+    # --- end ATS pass ------------------------------------------------------
+
     letter = cover_letter(profile, jd_text, fields, client=client)
     cover_warnings = check_cover(letter)
     cover_letter_path = pkg_dir / "cover_letter.md"
@@ -207,6 +223,7 @@ def assemble_package(entry: dict, scan_date: str, *, queue_dir=None, client=None
         "skills_dropped": skills_dropped,
         "cover_letter_warnings": cover_warnings,
         "cover_letter_words": len(re.findall(r"\b[\w'-]+\b", letter)),
+        **ats_meta,  # ats, jd_match_pct, jd_missing_*, ats_refine (ATS pass above)
     }
 
     # --- CV variants (begin) ------------------------------------------------
