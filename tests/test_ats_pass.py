@@ -148,3 +148,25 @@ def test_real_pdf_is_simulated(tmp_path, monkeypatch):
     assert statuses["text layer"] == "PASS"
     assert statuses["layout: reading order"] == "PASS"
     assert statuses["contact: email"] == "PASS"
+
+
+def test_second_pass_applies_first_pass_post_processing():
+    from cv_tailor.ats_pass import _second_pass
+    from cv_tailor.validate import validate
+    profile = {
+        "summary_pool": [{"id": "default", "text": "x"}],
+        "experiences": [{"id": "studio", "bullets": ["a"]}],
+        "projects": [{"id": "done", "tagline": "Shipped tool", "bullets": []},
+                     {"id": "wip", "tagline": "Still in development", "bullets": []}],
+        "skills": {"languages": ["Python"], "tools": ["Docker"]},
+    }
+    hinted = dict(FIRST, project_ids=["done", "wip"], skills_emphasis=["python", "docker", "Cobol"],
+                  experience_bullets={"studio": [0]})
+    new, dropped, reason = _second_pass(
+        profile, profile, dict(FIRST, skills_groups=["tools"]), "jd", ["RAG"], client=None,
+        tailor_fn=lambda p, j, client=None: json.loads(json.dumps(hinted)), validate_fn=validate)
+    assert reason == ""
+    assert new["project_ids"] == ["done"]          # unfinished project dropped
+    assert new["skills_emphasis"] == ["Docker"]    # languages never bolded, invented dropped
+    assert dropped == ["Cobol"]
+    assert new["skills_groups"] == ["tools"]

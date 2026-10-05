@@ -126,9 +126,13 @@ def run_pass(
 
 def _second_pass(profile, tailor_profile, fields, jd_text, terms, *, client, tailor_fn,
                  validate_fn) -> tuple[dict | None, list, str]:
-    """One hinted re-tailor, post-processed like the first pass (job_meta and
-    skills_groups carried over, non-profile skills dropped) and validated.
+    """One hinted re-tailor, post-processed like the first pass in
+    assemble_package (job_meta and skills_groups carried over, unfinished
+    projects dropped, non-profile skills dropped, programming languages never
+    bolded) and validated. Keep this in step with assemble_package.
     Returns (fields, skills_dropped, "") or (None, [], why it was rejected)."""
+    from cv_tailor.assemble import drop_unfinished_projects  # lazy: assemble imports us
+
     try:
         new = tailor_fn(tailor_profile, jd_text + HINT_TEMPLATE.format(terms=", ".join(terms)),
                         client=client)
@@ -137,11 +141,14 @@ def _second_pass(profile, tailor_profile, fields, jd_text, terms, *, client, tai
     if not isinstance(new, dict):
         return None, [], "second-pass tailor returned no JSON object"
     new["job_meta"] = dict(fields.get("job_meta", {}))
+    new["project_ids"] = drop_unfinished_projects(profile, new.get("project_ids", []))
     if "skills_groups" in fields:
         new["skills_groups"] = list(fields["skills_groups"])
     canon = {s.lower(): s for grp in profile.get("skills", {}).values() for s in grp}
     emphasis = [canon.get(str(s).lower(), s) for s in new.get("skills_emphasis", [])]
-    new["skills_emphasis"] = [s for s in emphasis if str(s).lower() in canon]
+    coding = {s.lower() for s in (profile.get("skills", {}) or {}).get("languages", []) or []}
+    new["skills_emphasis"] = [s for s in emphasis
+                              if str(s).lower() in canon and str(s).lower() not in coding]
     errors = validate_fn(profile, new)
     if errors:
         return None, [], "second pass failed the honesty guard: " + "; ".join(errors)
