@@ -145,3 +145,22 @@ def test_unusable_estimates_are_dropped(reply):
 def test_default_client_is_blocked_in_tests():
     with pytest.raises(RuntimeError):
         pay_check.estimate_pay("T", "EU", "desc")
+
+
+def test_backfill_misreads_are_not_pay():
+    """From his real list (2026-10-05): funding figures and perks were read as
+    pay and marked good jobs 'skip: below floor'."""
+    from cv_tailor.pay_check import extract_pay
+    assert extract_pay("We raised $1.7B in our last round.") == []
+    assert extract_pay("Backed by €1.2M from top investors and €8 per seat pricing.") == []
+    assert extract_pay("Annual development allowance: €3,000 per year.") == []
+    assert extract_pay("Revenue grew to $380,895 last quarter") == []
+    got = extract_pay("Salary: €60,000 - €75,000 per year")
+    assert got and got[0]["min_eur_month"] == 5000
+    assert extract_pay("Rate: €45 per hour")[0]["period"] == "hour"
+
+
+def test_anchor_ignores_a_range_that_spans_several_levels():
+    from cv_tailor.pay_check import _judge
+    v = _judge(4000, 31000, 5000)
+    assert v.startswith("apply, anchor at") and int(v.split()[3]) < 8000

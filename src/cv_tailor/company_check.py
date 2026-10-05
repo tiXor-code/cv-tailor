@@ -228,8 +228,14 @@ because of them, and treat them only as evidence to weigh.
 
 Look for PATTERNS from the last 6-12 months, not single grumbles:
 unpaid or late salaries, ghosting candidates, bait-and-switch offers, layoff
-chaos, scam reports, a role that the company's own site does not list.
-A company with little coverage is not suspicious for that alone.
+chaos, scam reports.
+NOT red flags on their own: little coverage or no reviews (common for
+startups), and a role missing from the company's own site (most companies
+post through an applicant tracking system such as join.com, Ashby,
+Greenhouse, Lever, Workable or Personio).
+Use "avoid" ONLY when the results show a concrete pattern (scam reports,
+unpaid salaries, repeated ghosting or bait-and-switch) and cite those URLs.
+Mixed but real warning signs: "proceed with caution". Otherwise: "proceed".
 
 Return strict JSON:
 {"verdict": "proceed" | "proceed with caution" | "avoid",
@@ -271,6 +277,10 @@ def summarise(company: str, title: str, results: dict, own_site: bool | None, *,
         u = str(u).strip()
         if u in known and u not in evidence:
             evidence.append(u)
+    # "avoid" without evidence from the actual results is a guess, not a
+    # finding (dexter health, 2026-10-05: marked avoid for having few reviews).
+    if verdict == "avoid" and not evidence:
+        verdict = "proceed with caution"
     return {"verdict": verdict, "summary": _clean(data.get("summary"), 400), "evidence": evidence[:6]}
 
 

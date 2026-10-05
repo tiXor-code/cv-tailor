@@ -67,8 +67,11 @@ COMFORT_MARGIN = 1.10
 
 # Monthly EUR outside this band is not a salary (a funding round, a benefit
 # budget read as monthly pay, a typo) and is dropped from the stated list.
-_SANE_MONTHLY_MIN = 150
-_SANE_MONTHLY_MAX = 100_000
+# A monthly-equivalent outside this band is not a salary for these roles: a
+# funding figure or a perk misread ("€1.2M raised" as €1.2 an hour, a "€3,000"
+# budget as a 250/month salary, 2026-10-05 backfill).
+_SANE_MONTHLY_MIN = 1_000
+_SANE_MONTHLY_MAX = 40_000
 
 SKIP = "skip: below floor"
 APPLY = "apply"
@@ -105,7 +108,7 @@ _NOT_PAY = re.compile(
     r"budget|bonus|stipend|allowance|equity|relocation|learning|training|home[- ]office|"
     r"signing|sign-on|referral|funding|raised|series\s+[a-e]\b|revenue|\barr\b|valuation|"
     r"investment|invest|fees?\b|deposit|kit\b|discount|voucher|credits?\b|"
-    r"million|billion|^\s?(?:m|bn|mn)\b",
+    r"million|billion|^\s?(?:m|b|bn|mn|mil|mio)\b",
     re.I,
 )
 
@@ -215,6 +218,10 @@ def extract_pay(text: str) -> list[dict]:
 
         period = _period_near(text, m.end())
         inferred = period is None
+        # With no period stated, a small bare figure ("$1.7", "€8") is far more
+        # often a funding round, a price or a percentage than an hourly rate.
+        if inferred and (hi or lo) < 1000:
+            continue
         if inferred:
             period = _infer_period(hi or lo, cur)
         factor = PERIOD_TO_MONTH[period] * EUR_RATES[cur]
@@ -261,7 +268,10 @@ def _judge(lo: float, hi: float, floor: float) -> str:
         return SKIP
     if lo >= floor * COMFORT_MARGIN:
         return APPLY
-    anchor = _round_up(max(floor * COMFORT_MARGIN, hi * 0.9))
+    # A stated "range" spanning several levels or locations ($48k-$380k,
+    # Hospitable 2026-10-05) says nothing about the top: anchor off the low end.
+    top = hi if hi <= 2 * lo else lo * 1.3
+    anchor = _round_up(max(floor * COMFORT_MARGIN, top * 0.9))
     return f"apply, anchor at {anchor} EUR/month"
 
 

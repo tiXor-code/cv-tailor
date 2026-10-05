@@ -186,3 +186,14 @@ def test_real_search_is_blocked_in_tests(tmp_path, monkeypatch):
     rec, note = cc.check_company("Alpha", "Engineer", client=FakeClient(GOOD_REPLY),
                                  budget=budget, cache=cache, now=NOW)
     assert (rec, note) == (None, "search-failed")  # conftest's blocker raised for every search
+
+
+def test_avoid_without_evidence_from_the_results_is_downgraded():
+    """dexter health, 2026-10-05: 'avoid' for having few reviews, citing nothing."""
+    import json
+    from types import SimpleNamespace as NS
+    reply = json.dumps({"verdict": "avoid", "summary": "Few reviews.", "evidence": ["https://made.up/x"]})
+    client = NS(chat=NS(completions=NS(create=lambda **kw: NS(choices=[NS(message=NS(content=reply))]))))
+    out = cc.summarise("Fixture Co", "AI Engineer", {"reviews": [{"url": "https://reviews.example/fixture", "title": "t", "snippet": "s"}]},
+                       None, client=client)
+    assert out["verdict"] == "proceed with caution" and out["evidence"] == []
