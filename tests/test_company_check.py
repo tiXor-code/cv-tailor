@@ -127,9 +127,9 @@ def test_monthly_cap_is_enforced(tmp_path):
     assert budget.used() == 3
 
 
-def test_caps_come_from_env_with_spec_defaults(tmp_path, monkeypatch):
+def test_caps_come_from_env_with_plan_defaults(tmp_path, monkeypatch):
     b = cc.CompanyCheckBudget(tmp_path / "b.json")
-    assert (b.daily_cap, b.monthly_cap) == (10, 90)
+    assert (b.daily_cap, b.monthly_cap) == (3, 36)  # what the 250/month SerpAPI plan leaves
     monkeypatch.setenv("SCOUT_COMPANY_CHECK_DAILY_CAP", "4")
     monkeypatch.setenv("SCOUT_COMPANY_CHECK_MONTHLY_CAP", "30")
     b = cc.CompanyCheckBudget(tmp_path / "b.json")
