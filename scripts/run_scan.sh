@@ -54,6 +54,14 @@ LOG="$LOG_DIR/$(date +%F).log"
   python "$REPO/scripts/autopilot.py"
   echo "=== autopilot exit code: $? ==="
 
+  # Reports for admin /scout/insights (2026-10-05): response rates and
+  # follow-ups due, and the skills postings ask for that the profile lacks.
+  # Read-only over the queue; a failure never touches the day's scan.
+  python "$REPO/scripts/tracker_report.py" >/dev/null
+  echo "=== tracker_report exit code: $? ==="
+  python "$REPO/scripts/market_gap.py" >/dev/null
+  echo "=== market_gap exit code: $? ==="
+
   DIGEST="$REPO/scans/$(date +%F).md"
   if [[ $RC -eq 0 && -f "$DIGEST" ]]; then
     COUNT=$(grep -cE "^## [0-9]+" "$DIGEST" || echo 0)
