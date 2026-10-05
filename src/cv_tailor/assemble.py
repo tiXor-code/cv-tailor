@@ -208,6 +208,17 @@ def assemble_package(entry: dict, scan_date: str, *, queue_dir=None, client=None
         "cover_letter_warnings": cover_warnings,
         "cover_letter_words": len(re.findall(r"\b[\w'-]+\b", letter)),
     }
+
+    # --- CV variants (begin) ------------------------------------------------
+    # cv.docx + cv_designed.pdf + cv_designed_ats.pdf/.docx from the SAME
+    # tailored fields (no extra LLM call). cv.pdf above stays the default
+    # upload; meta["variants"]["default"] records the portal/email choice.
+    # Variant failures are recorded, never fatal. See cv_tailor/variants.py.
+    from cv_tailor.variants import render_variants
+    meta["variants"] = render_variants(profile, fields, entry, pkg_dir, templates_dir,
+                                       pdf_renderer=render_pdf)
+    # --- CV variants (end) --------------------------------------------------
+
     (pkg_dir / "meta.json").write_text(json.dumps(meta, indent=2, ensure_ascii=False))
 
     result = dict(meta)

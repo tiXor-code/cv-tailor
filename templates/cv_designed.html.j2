@@ -1,12 +1,18 @@
 <!DOCTYPE html>
+{# One template, two housings of the same content.
+   ats=False -> human-facing designed CV (cv_designed.pdf): metric tile band.
+   ats=True  -> designed-ATS twin (cv_designed_ats.pdf): no band; the tiles
+                arrive as `highlights` sentences in a linear section.
+   Tiles are chosen and honesty-checked in cv_tailor.variants; every tile
+   number also appears in a bullet below. #}
 <html lang="en">
 <head>
   <meta charset="utf-8">
   <title>{{ profile.contact.name }} - CV</title>
   <meta name="author" content="{{ profile.contact.name }}">
-  <link rel="stylesheet" href="cv.css">
+  <link rel="stylesheet" href="cv_designed.css">
 </head>
-<body>
+<body class="{{ 'ats' if ats else 'designed' }}{{ ' compact' if compact else '' }}">
 
 <header class="contact">
   <h1>{{ profile.contact.name }}</h1>
@@ -14,16 +20,39 @@
     {{ profile.contact.location }}
     &middot; <a href="mailto:{{ profile.contact.email }}">{{ profile.contact.email }}</a>
     &middot; {{ profile.contact.phone }}
-    {% if profile.contact.website %}&middot; <a href="https://{{ profile.contact.website }}">{{ profile.contact.website }}</a>{% endif %}
-    &middot; <a href="https://{{ profile.contact.linkedin }}">{{ profile.contact.linkedin }}</a>
-    &middot; <a href="https://{{ profile.contact.github }}">{{ profile.contact.github }}</a>
+    {% if profile.contact.website %} &middot; <a href="https://{{ profile.contact.website }}">{{ profile.contact.website }}</a>{% endif %}
+    {% if profile.contact.linkedin %} &middot; <a href="https://{{ profile.contact.linkedin }}">{{ profile.contact.linkedin }}</a>{% endif %}
+    {% if profile.contact.github %} &middot; <a href="https://{{ profile.contact.github }}">{{ profile.contact.github }}</a>{% endif %}
   </p>
 </header>
 
+{% if tiles and not ats %}
+<div class="tiles">
+  {% for t in tiles %}
+  <div class="tile">
+    <span class="tile-value">{{ t.value }}</span>
+    <span class="tile-label">{{ t.label }}</span>
+    <span class="tile-source">{{ t.source }}</span>
+  </div>
+  {% endfor %}
+</div>
+{% endif %}
+
 <section>
   <h2>Summary</h2>
-  <p>{{ fields.summary_rewrite | expand_acronyms }}</p>
+  <p>{% if ats %}{{ fields.summary_rewrite | expand_acronyms }}{% else %}{{ fields.summary_rewrite }}{% endif %}</p>
 </section>
+
+{% if highlights %}
+<section>
+  <h2>Selected Results</h2>
+  <ul>
+    {% for h in highlights %}
+    <li>{{ h }}</li>
+    {% endfor %}
+  </ul>
+</section>
+{% endif %}
 
 <section>
   <h2>Experience</h2>
@@ -34,7 +63,7 @@
       <p class="meta">{{ exp.dates }} &middot; {{ exp.location }}</p>
       <ul>
         {% for idx in fields.experience_bullets.get(exp_id, []) %}
-          <li>{{ exp.bullets[idx] | expand_acronyms }}</li>
+          <li>{% if ats %}{{ exp.bullets[idx] | expand_acronyms }}{% else %}{{ exp.bullets[idx] }}{% endif %}</li>
         {% endfor %}
       </ul>
     </article>
@@ -48,10 +77,10 @@
     {% set proj = projects_by_id[pid] %}
     <article class="project">
       <h3>{{ proj.name }} &mdash; <span class="tech">{{ proj.tech | join(', ') }}</span></h3>
-      <p class="meta">{{ proj.tagline | expand_acronyms }}{% if proj.link %} &middot; <a href="https://{{ proj.link }}">{{ proj.link }}</a>{% endif %}</p>
+      <p class="meta">{% if ats %}{{ proj.tagline | expand_acronyms }}{% else %}{{ proj.tagline }}{% endif %}{% if proj.link %} &middot; <a href="https://{{ proj.link }}">{{ proj.link }}</a>{% endif %}</p>
       <ul>
         {% for b in proj.bullets %}
-          <li>{{ b | expand_acronyms }}</li>
+          <li>{% if ats %}{{ b | expand_acronyms }}{% else %}{{ b }}{% endif %}</li>
         {% endfor %}
       </ul>
     </article>
@@ -61,17 +90,11 @@
 
 <section>
   <h2>Skills</h2>
-  {# fields.skills_groups (optional) selects AND orders the groups shown, so a
-     role-specific CV can lead with what matters (e.g. content before devops).
-     Absent -> every profile group renders, as before. #}
-  {# "languages" is framed as what he builds with through AI tools: he does
-     not hand-write code (Teodor, 2026-09-29). #}
-  {% set skill_labels = {"languages": "Builds with (via AI tools)", "ai": "AI", "devops": "DevOps"} %}
   {% set group_names = fields.skills_groups if fields.get('skills_groups') else profile.skills.keys() %}
   {% for group in group_names %}
     {% if group in profile.skills %}
     <p class="skill-row">
-      <span class="skill-group">{{ skill_labels.get(group, group | title) }}:</span>
+      <span class="skill-group">{{ group | title }}:</span>
       {% for item in profile.skills[group] %}
         {% if item in fields.skills_emphasis %}<strong>{{ item }}</strong>{% else %}{{ item }}{% endif %}{% if not loop.last %}, {% endif %}
       {% endfor %}

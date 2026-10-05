@@ -1,0 +1,146 @@
+/* Designed CV (cv_designed.pdf) and its linear ATS twin (cv_designed_ats.pdf).
+   body.designed gets the metric tile band; body.ats is single column, plain
+   flow, no positioned or multi-column boxes. body.compact is the fallback
+   when the designed CV would exceed two pages. */
+@page {
+  size: A4;
+  margin: 14mm 16mm;
+}
+
+:root {
+  --ink: #16202b;
+  --muted: #5b6672;
+  --accent: #1f5f8b;
+  --tile-bg: #eef4f8;
+}
+
+body {
+  font-family: Inter, Arial, Helvetica, sans-serif;
+  font-size: 10pt;
+  line-height: 1.4;
+  color: var(--ink);
+  margin: 0;
+}
+
+body.compact { font-size: 9.4pt; line-height: 1.33; }
+
+h1 {
+  font-size: 21pt;
+  margin: 0 0 2pt 0;
+  font-weight: 700;
+  color: var(--ink);
+}
+
+.contact {
+  border-bottom: 2pt solid var(--accent);
+  padding-bottom: 5pt;
+}
+
+.contact-line {
+  font-size: 9pt;
+  color: var(--muted);
+  margin: 0;
+}
+
+/* ---- metric tile band (designed only) ---- */
+.tiles {
+  display: flex;
+  gap: 6pt;
+  margin: 9pt 0 2pt 0;
+}
+
+.tile {
+  flex: 1 1 0;
+  background: var(--tile-bg);
+  border-left: 2.5pt solid var(--accent);
+  padding: 5pt 7pt 6pt 7pt;
+}
+
+.tile-value {
+  display: block;
+  font-size: 16pt;
+  font-weight: 700;
+  color: var(--accent);
+  line-height: 1.1;
+}
+
+.tile-label {
+  display: block;
+  font-size: 8.6pt;
+  font-weight: 600;
+  margin-top: 2pt;
+}
+
+.tile-source {
+  display: block;
+  font-size: 7.6pt;
+  color: var(--muted);
+  margin-top: 1pt;
+}
+
+/* ---- body ---- */
+h2 {
+  font-size: 11.5pt;
+  margin: 12pt 0 4pt 0;
+  font-weight: 700;
+  /* no text-transform or letter-spacing: parsers read the glyphs, and
+     "EXPERIENCE" or "E x p e r i e n c e" breaks section matching */
+  color: var(--accent);
+  border-bottom: 0.5pt solid #c9d4dd;
+  padding-bottom: 2pt;
+}
+
+h3 {
+  font-size: 10.3pt;
+  margin: 7pt 0 1pt 0;
+  font-weight: 700;
+}
+
+p { margin: 2pt 0; }
+
+.meta {
+  font-size: 8.8pt;
+  color: var(--muted);
+  margin: 0 0 3pt 0;
+}
+
+.tech {
+  font-weight: 400;
+  color: var(--muted);
+  font-size: 9pt;
+}
+
+ul {
+  margin: 2pt 0 0 0;
+  padding-left: 13pt;
+}
+
+li { margin: 1pt 0; }
+
+li::marker { color: var(--accent); }
+
+.skill-group {
+  font-weight: 700;
+  display: inline-block;
+  min-width: 70pt;
+}
+
+.skill-row { margin: 2pt 0; }
+
+strong { color: var(--accent); }
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+article.experience,
+article.project {
+  margin-bottom: 5pt;
+  break-inside: avoid;
+}
+
+/* ATS twin: same palette, but nothing a parser could reorder. */
+body.ats .contact { border-bottom-width: 1pt; }
+body.ats li::marker { color: var(--ink); }
+body.ats strong { color: var(--ink); }
