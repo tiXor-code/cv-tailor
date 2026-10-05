@@ -35,6 +35,7 @@ from pathlib import Path
 
 from cv_tailor.apply_policy import proves_no_submission
 from cv_tailor.scout_queue import StatusConflict, queue_root, update_entry
+from cv_tailor.tracker import follow_ups_due
 
 AUTO_APPROVE_MIN = 6  # hard floor; SCOUT_AUTO_APPROVE_MIN may raise it, never lower it
 EXPIRE_DAYS = 7
@@ -67,6 +68,7 @@ _ROOT = Path(__file__).resolve().parents[2]
 _ORCHESTRATOR = _ROOT / "scripts" / "apply_approved.py"
 DEFAULT_DB_PATH = _ROOT / "data" / "jobs.db"
 SCOUT_URL = "https://admin.teodorlutoiu.com/scout"
+FOLLOW_UPS_IN_DIGEST = 5
 
 
 def auto_approve_min() -> int:
@@ -99,6 +101,12 @@ class AutopilotReport:
     handed_off: list = field(default_factory=list)
     deferred: list = field(default_factory=list)
     risky: list = field(default_factory=list)       # high-risk listings rejected unapplied
+    # Applications with no reply after tracker.FOLLOW_UP_AFTER_DAYS (dicts from
+    # tracker.follow_ups_due), capped at FOLLOW_UPS_IN_DIGEST, plus the total.
+    # Shown in the digest but never a reason on its own to send one: the list
+    # changes slowly, and a daily message that only repeats it is noise.
+    follow_ups: list = field(default_factory=list)
+    follow_ups_total: int = 0
 
     def has_activity(self) -> bool:
         return bool(self.applied or self.parked or self.failed
@@ -556,6 +564,15 @@ def build_digest(report: AutopilotReport) -> str | None:
     # the ledger is the one row here that wants a human within the hour.
     _section("Recovered after a crash", report.stranded,
              lambda e: f" -> {e.get('status')} ({e.get('error')})")
+    if report.follow_ups:
+        shown = len(report.follow_ups)
+        total = max(report.follow_ups_total, shown)
+        lines.append("")
+        lines.append(f"Follow up? ({shown} of {total}):" if total > shown
+                     else f"Follow up? ({shown}):")
+        for f in report.follow_ups:
+            lines.append(f"- {f.get('company')} / {f.get('title')}: "
+                         f"{f.get('days_since_applied')} days since applied, no reply")
     lines.append("")
     lines.append(f"Review: {SCOUT_URL}")
     return "\n".join(lines)
@@ -645,6 +662,13 @@ def run_autopilot(now: datetime | None = None, *, queue_dir=None,
                 report.queued_new.append((scan_date, entry))
 
     report.expired = _sweep_expired(now, queue_dir=queue_dir)
+
+    try:
+        due = follow_ups_due(now, queue_dir=queue_dir)
+        report.follow_ups = due[:FOLLOW_UPS_IN_DIGEST]
+        report.follow_ups_total = len(due)
+    except Exception:  # noqa: BLE001 - a reminder list must never fail the run
+        pass
 
     text = build_digest(report)
     if text is not None and notify is not None:

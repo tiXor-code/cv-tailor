@@ -45,6 +45,12 @@ _SEEN_JOBS_ADDED_COLUMNS = (
     ("url", "TEXT"),
     ("description", "TEXT"),
 )
+# Outcome mirror on the ledger (scripts/mark_outcome.py). The queue entry is
+# the record of truth; these columns let a plain SQL query see results too.
+_APPLICATIONS_ADDED_COLUMNS = (
+    ("outcome", "TEXT"),
+    ("outcome_at", "TEXT"),
+)
 _IDENTIFIER_RE = re.compile(r"^[a-z_][a-z0-9_]*$")
 
 # score is NULL for a job whose scoring response carried no score at all. Kept
@@ -59,7 +65,12 @@ DESCRIPTION_CAP = 20_000
 
 
 def _migrate_seen_jobs(conn: sqlite3.Connection) -> None:
-    """Add any missing _SEEN_JOBS_ADDED_COLUMNS. Idempotent: the PRAGMA guard
+    _add_columns(conn, "seen_jobs", _SEEN_JOBS_ADDED_COLUMNS)
+    _add_columns(conn, "applications", _APPLICATIONS_ADDED_COLUMNS)
+
+
+def _add_columns(conn: sqlite3.Connection, table: str, columns) -> None:
+    """Add any missing columns from `columns` to `table`. Idempotent: the PRAGMA guard
     means a second run adds nothing (a bare ALTER TABLE would raise "duplicate
     column name" and take the whole scan down). Additive only -- no data is
     rewritten, moved or dropped.
@@ -67,12 +78,14 @@ def _migrate_seen_jobs(conn: sqlite3.Connection) -> None:
     The column name is interpolated because SQLite cannot parameterize DDL
     identifiers; it is a module-level literal, never caller input, and the
     identifier check below fails loudly if that ever stops being true."""
-    have = {row[1] for row in conn.execute("PRAGMA table_info(seen_jobs)")}
-    for name, decl in _SEEN_JOBS_ADDED_COLUMNS:
+    if table not in ("seen_jobs", "applications"):
+        raise ValueError(f"refusing to ALTER unknown table: {table}")
+    have = {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
+    for name, decl in columns:
         if not (_IDENTIFIER_RE.match(name) and _IDENTIFIER_RE.match(decl.lower())):
             raise ValueError(f"refusing to ALTER with unsafe column spec: {name} {decl}")
         if name not in have:
-            conn.execute(f"ALTER TABLE seen_jobs ADD COLUMN {name} {decl}")
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {decl}")
     conn.commit()
 
 
@@ -226,3 +239,14 @@ def applications_sent_today(conn: sqlite3.Connection) -> int:
         (today, MANUAL_CHANNEL),
     ).fetchone()
     return row[0] if row else 0
+
+
+def set_application_outcome(conn: sqlite3.Connection, *, job_id: str, outcome: str,
+                            at: str) -> bool:
+    """Mirror an outcome onto this job's ledger row. False when the job has no
+    row (an older application, or a ledger on another machine): the queue
+    entry stays the record of truth, so that is not an error."""
+    cur = conn.execute("UPDATE applications SET outcome=?, outcome_at=? WHERE job_id=?",
+                       (outcome, at, job_id))
+    conn.commit()
+    return cur.rowcount > 0
