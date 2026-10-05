@@ -72,3 +72,42 @@ def test_profile_text_flattens_nested_values():
     text = profile_text(PROFILE)
     assert "retrieval-augmented generation" in text
     assert "Example University" in text
+
+
+class _FakeLLM:
+    def __init__(self, rows):
+        import json
+        from types import SimpleNamespace as NS
+        payload = json.dumps({"terms": rows})
+        self.chat = NS(completions=NS(create=lambda **kw: NS(choices=[NS(message=NS(content=payload))])))
+
+
+def test_judge_accepts_only_verbatim_profile_evidence():
+    profile = {"summary": "Builds agents with Claude Code every day for client automation."}
+    rows = [
+        {"term": "ai development tools", "supported": True, "evidence": "Claude Code every day"},
+        {"term": "kubernetes", "supported": True, "evidence": "ran Kubernetes clusters at scale"},  # not in profile
+        {"term": "healthcare", "supported": False, "evidence": ""},
+        {"term": "evals", "supported": True, "evidence": "agents"},  # too short to count
+    ]
+    from cv_tailor.jd_terms import judge_support, apply_judgement
+    got = judge_support(["ai development tools", "kubernetes", "healthcare", "evals"], profile,
+                        client=_FakeLLM(rows))
+    assert got == {"ai development tools": "Claude Code every day"}
+    cov = {"missing_supported": ["rag"], "missing_unsupported": ["ai development tools", "kubernetes"]}
+    moved = apply_judgement(cov, got)
+    assert moved["missing_supported"] == ["rag", "ai development tools"]
+    assert moved["missing_unsupported"] == ["kubernetes"]
+
+
+def test_judge_failure_keeps_the_literal_answer():
+    from cv_tailor.jd_terms import judge_support
+
+    class Boom:
+        class chat:
+            class completions:
+                @staticmethod
+                def create(**kw):
+                    raise RuntimeError("down")
+    assert judge_support(["x y"], {"a": "b"}, client=Boom()) == {}
+    assert judge_support(["x y"], {"a": "b"}, client=None) == {}

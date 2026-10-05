@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import Callable
 
 from cv_tailor.ats_sim import package_result, simulate_file
-from cv_tailor.jd_terms import coverage
+from cv_tailor.jd_terms import apply_judgement, coverage, judge_support
 
 HINT_TEMPLATE = """
 
@@ -91,6 +91,10 @@ def run_pass(
         print(f"ats pass failed: {type(exc).__name__}: {exc}", file=sys.stderr)
         return fields, {"ats": {"error": f"{type(exc).__name__}: {exc}"}}
 
+    # literal misses the LLM finds the profile supports (verbatim evidence only)
+    support = judge_support(cov["missing_unsupported"], profile, client=client)
+    cov = apply_judgement(cov, support)
+
     refine = {"attempted": False, "adopted": False, "first_pass_match_pct": cov["match_pct"]}
     if cov["missing_supported"]:
         refine["attempted"] = True
@@ -107,6 +111,8 @@ def run_pass(
             except Exception as exc:  # noqa: BLE001
                 new_ats, new_cov = None, None
                 refine["reason"] = f"second-pass render failed: {type(exc).__name__}: {exc}"
+            if new_cov is not None:
+                new_cov = apply_judgement(new_cov, support)
             if new_cov is not None and new_cov["match_pct"] >= cov["match_pct"]:
                 fields, ats, cov = new_fields, new_ats, new_cov
                 refine["adopted"] = True
@@ -120,6 +126,7 @@ def run_pass(
         "jd_match_pct": cov["match_pct"],
         "jd_missing_supported": cov["missing_supported"],
         "jd_missing_unsupported": cov["missing_unsupported"],
+        "jd_support_evidence": support,
         "ats_refine": refine,
     }
 
