@@ -20,6 +20,27 @@ sources:
   - kind: ashby
     slug: n8n
     name: n8n
+  # AI-native startups and scale-ups that hire remotely in Europe (Teodor,
+  # 2026-10-07: target startups). Each board was probed that day and returned
+  # live postings; the ones marked * had a remote EU/EMEA/global builder-type
+  # role open (solutions, forward deployed, GTM, AI operations); Lovable and
+  # Attio had none but list EU-remote product roles. Probed and NOT added, as
+  # every open role was onsite (NYC/SF/Stockholm/Paris): LangChain, Legora,
+  # Dust, Photoroom. First scan: ~100 extra Gate 1 survivors to score; after
+  # that Gate 3 only lets new postings through.
+  - {kind: ashby, slug: elevenlabs, name: ElevenLabs}      # *
+  - {kind: ashby, slug: cohere, name: Cohere}              # * FDE Europe
+  - {kind: ashby, slug: cursor, name: Cursor}              # * remote solutions
+  - {kind: ashby, slug: synthesia, name: Synthesia}        # *
+  - {kind: ashby, slug: posthog, name: PostHog}            # * remote global
+  - {kind: ashby, slug: supabase, name: Supabase}          # * remote global
+  - {kind: ashby, slug: pencil, name: Pencil}              # * Agent Architect EMEA
+  - {kind: ashby, slug: linear, name: Linear}              # *
+  - {kind: ashby, slug: dash0, name: Dash0}                # * EMEA remote
+  - {kind: ashby, slug: oyster, name: Oyster}              # * Romania listed
+  - {kind: ashby, slug: kraken.com, name: Kraken}          # * Romania listed
+  - {kind: ashby, slug: lovable, name: Lovable}
+  - {kind: ashby, slug: attio, name: Attio}
   # Curated EU-startup ATS list (replaces the greenhouse:anthropic + lever:lever
   # placeholders -- those were smoke-test entries, not real targets).
   - kind: greenhouse

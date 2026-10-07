@@ -254,3 +254,11 @@ def test_a_requested_email_subject_is_captured_at_queue_time():
     assert requested_subject('email us with the subject line "HN - Founding Engineer" please') == \
         "HN - Founding Engineer"
     assert requested_subject("Email jobs@x.example with your CV.") is None
+
+
+def test_company_stage_persisted_and_defaults_to_unknown(tmp_path):
+    scored = [{"job": _job(raw_id="a"), "score": 8, "reason": "", "keywords": [], "stage": "startup"},
+              {"job": _job(raw_id="b", url="https://j/2"), "score": 8, "reason": "", "keywords": []}]
+    out = write_jobs_queue(scored, date(2026, 10, 7), queue_dir=tmp_path)
+    stages = [e["company_stage"] for e in json.loads(out.read_text())]
+    assert stages == ["startup", "unknown"]

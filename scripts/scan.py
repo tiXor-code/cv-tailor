@@ -27,7 +27,7 @@ import yaml
 from cv_tailor.profile import load_profile
 from cv_tailor.tailor_llm import build_azure_client
 from cv_tailor.job_sources import fetch_all
-from cv_tailor.match import rank_ai_native, score_job
+from cv_tailor.match import company_stage, rank_ai_native, rank_stage, score_job
 from cv_tailor.digest import format_digest
 from cv_tailor.telegram import format_digest_for_telegram, send_text
 from cv_tailor.scout_queue import write_jobs_queue
@@ -381,8 +381,9 @@ def main(argv=None):
             r = score_job(profile, j.title, f"{j.location} [{hint}]", j.description,
                           client=client, track=track, min_monthly_eur=min_pay)
             s = _score_from(r)
+            stage = company_stage(r)
             if s is not None:
-                s = rank_ai_native(s, j.description)
+                s = rank_stage(rank_ai_native(s, j.description), stage)
             mark_seen(conn, j, score=s)
             if s is None:
                 unscored += 1
@@ -392,7 +393,7 @@ def main(argv=None):
             if s >= args.min_score:
                 scored.append({"job": j, "score": s, "reason": r.get("reason", ""),
                                "keywords": r.get("key_keywords_matched", []),
-                               "track": track})
+                               "track": track, "stage": stage})
         except Exception as e:
             # A bad/expired credential fails EVERY job identically. Abort loudly instead
             # of grinding through the whole list and writing an empty queue.

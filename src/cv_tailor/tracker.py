@@ -238,7 +238,8 @@ def build_report(now: datetime | None = None, *, queue_dir=None,
     statuses: Counter = Counter()
     outcomes: Counter = Counter()
     by: dict = {"variant": defaultdict(list), "source": defaultdict(list),
-                "channel": defaultdict(list), "score_band": defaultdict(list)}
+                "channel": defaultdict(list), "score_band": defaultdict(list),
+                "company_stage": defaultdict(list)}
     stale = []
     for scan_date, e in iter_entries(queue_dir):
         statuses[e.get("status") or "unknown"] += 1
@@ -249,6 +250,7 @@ def build_report(now: datetime | None = None, *, queue_dir=None,
             by["source"][e.get("source") or "unknown"].append(out)
             by["channel"][channel(e)].append(out)
             by["score_band"][score_band(e.get("score"))].append(out)
+            by["company_stage"][e.get("company_stage") or "unknown"].append(out)
         elif e.get("status") in WAITING_STATUSES:
             days = (now - last_change(e, scan_date)).days
             if days >= stale_days:

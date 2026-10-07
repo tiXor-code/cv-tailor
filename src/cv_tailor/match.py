@@ -65,8 +65,12 @@ What he wants (calibrated 2026-09-24 against 40 postings he rated himself):
   recruiting, design) score 2 or lower.
 - Product manager, program manager, producer and data analyst roles score 4 or
   lower: he passed on them when asked (2026-09-24), even on AI products.
-- Startups win ties: seed to Series B, small teams, founding roles -- score a
-  startup 1 point above an otherwise equal larger company.
+- Company stage (Teodor, 2026-10-07: target startups): classify the employer as
+  "startup" (a product company at seed to Series C, or roughly under 250 people,
+  including founding roles), "established" (a larger or public company, or an IT
+  services/outsourcing firm), "recruiter" (a staffing agency or job platform
+  posting for an unnamed client) or "unknown". Do not change the score for
+  stage: the startup boost is applied after scoring.
 - Any industry is fine, including iGaming, gambling, forex and fintech. The one
   exception: games-industry development roles (he is leaving games) score 3 or lower.
 - Pure ML research roles needing a PhD or model training from scratch score 3 or lower.
@@ -106,7 +110,8 @@ Return strict JSON:
 {
   "score": 0-10 integer,
   "reason": "one-sentence reason (under 30 words)",
-  "key_keywords_matched": ["..."]
+  "key_keywords_matched": ["..."],
+  "company_stage": "startup" | "established" | "recruiter" | "unknown"
 }
 
 Return ONLY the JSON, no prose."""
@@ -199,3 +204,25 @@ def rank_ai_native(score: int, description: str) -> int:
     if score < AI_NATIVE_MIN_FIT:
         return score
     return min(10, score + min(n, 2))
+
+
+# --- Startup targeting (Teodor, 2026-10-07: "did we target startups?" -> yes).
+# The scorer only classifies the stage; the boost is applied here, after
+# rank_ai_native, so it is deterministic, testable and can lift a startup
+# above the no-AI-native-signal cap of 7.
+COMPANY_STAGES = ("startup", "established", "recruiter", "unknown")
+STARTUP_BOOST = 1
+
+
+def company_stage(response: dict) -> str:
+    """The scorer's stage label, normalised; anything unexpected is 'unknown'."""
+    raw = str((response or {}).get("company_stage") or "").strip().lower()
+    return raw if raw in COMPANY_STAGES else "unknown"
+
+
+def rank_stage(score: int, stage: str) -> int:
+    """A startup that is already a decent fit (>= AI_NATIVE_MIN_FIT) gains
+    STARTUP_BOOST, up to 10. Poor fits are never lifted by stage alone."""
+    if stage != "startup" or score < AI_NATIVE_MIN_FIT:
+        return score
+    return min(10, score + STARTUP_BOOST)

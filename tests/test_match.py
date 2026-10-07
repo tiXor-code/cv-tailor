@@ -1,4 +1,6 @@
 import json
+
+import pytest
 from unittest.mock import MagicMock
 
 from cv_tailor.match import score_job, SCORER_SYSTEM_PROMPT, CONTENT_TRACK_ADDENDUM
@@ -241,3 +243,49 @@ def test_copilot_as_a_product_name_is_not_an_ai_native_signal():
     assert "copilot" not in ai_native_signals("We return ChatGPT, Gemini and Copilot results as JSON.")
     assert "copilot" in ai_native_signals("Engineers use GitHub Copilot every day.")
     assert "copilot" in ai_native_signals("You code with Copilot and Cursor.")
+
+
+# --- startup targeting (Teodor, 2026-10-07) ------------------------------------
+
+from cv_tailor.match import (  # noqa: E402
+    AI_NATIVE_CAP_WITHOUT_SIGNAL, STARTUP_BOOST, company_stage, rank_ai_native, rank_stage,
+)
+
+
+def test_scorer_prompt_asks_for_company_stage_and_leaves_the_boost_to_code():
+    low = " ".join(SCORER_SYSTEM_PROMPT.lower().split())
+    assert '"company_stage"' in low
+    for stage in ("startup", "established", "recruiter", "unknown"):
+        assert f'"{stage}"' in low, stage
+    assert "do not change the score for stage" in low
+    assert "startups win ties" not in low, "the +1 moved out of the LLM into rank_stage"
+
+
+@pytest.mark.parametrize("raw,expected", [
+    ({"company_stage": "startup"}, "startup"),
+    ({"company_stage": " Startup "}, "startup"),
+    ({"company_stage": "recruiter"}, "recruiter"),
+    ({"company_stage": "unicorn"}, "unknown"),
+    ({"company_stage": None}, "unknown"),
+    ({}, "unknown"),
+    (None, "unknown"),
+])
+def test_company_stage_normalises_the_label(raw, expected):
+    assert company_stage(raw) == expected
+
+
+def test_rank_stage_boosts_decent_startup_fits_only():
+    assert rank_stage(7, "startup") == 7 + STARTUP_BOOST
+    assert rank_stage(10, "startup") == 10
+    assert rank_stage(4, "startup") == 4          # a poor fit is not lifted by stage
+    for stage in ("established", "recruiter", "unknown"):
+        assert rank_stage(7, stage) == 7
+
+
+def test_startup_boost_lifts_past_the_no_signal_cap():
+    # rank_stage runs after rank_ai_native, so a startup builder role with no
+    # AI-native signal can outrank the same role at a larger company.
+    capped = rank_ai_native(9, "Build automations with n8n for our clients.")
+    assert capped == AI_NATIVE_CAP_WITHOUT_SIGNAL
+    assert rank_stage(capped, "startup") == AI_NATIVE_CAP_WITHOUT_SIGNAL + 1
+    assert rank_stage(capped, "established") == AI_NATIVE_CAP_WITHOUT_SIGNAL

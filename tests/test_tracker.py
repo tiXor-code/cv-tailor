@@ -145,6 +145,8 @@ def test_report_breakdowns(q, tmp_path):
     assert rr["channel"]["by_hand"]["responded"] == 0
     assert rr["source"]["linkedin"]["applied"] == 1
     assert set(rr["score_band"]) == {"9-10", "7-8", "5-6"}
+    # Entries written before 2026-10-07 carry no stage: they count as unknown.
+    assert rr["company_stage"]["unknown"]["applied"] == 3
     assert [s["id"] for s in r["stale_waiting"]] == ["job-4"]
     assert r["stale_waiting"][0]["reason"] == "captcha"
     assert "Follow-ups due (1)" in format_report(r)
@@ -255,3 +257,15 @@ def test_follow_ups_alone_do_not_send_a_digest():
     r = AutopilotReport(follow_ups=[{"company": "A", "title": "B", "days_since_applied": 9}],
                         follow_ups_total=1)
     assert build_digest(r) is None
+
+
+def test_report_breaks_response_rate_down_by_company_stage(q):
+    _write(q, "2026-10-07", [
+        _entry(1, company_stage="startup", outcome="interview"),
+        _entry(2, company_stage="startup"),
+        _entry(3, company_stage="established"),
+    ])
+    rr = build_report(NOW)["response_rate"]["company_stage"]
+    assert rr["startup"] == {"applied": 2, "responded": 1, "positive": 1, "response_rate": 0.5}
+    assert rr["established"]["applied"] == 1
+    assert "Response rate by company stage:" in format_report(build_report(NOW))

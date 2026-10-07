@@ -79,6 +79,9 @@ def _to_entry(item) -> dict:
         # and /scout can offer a human something better than a Google SERP link.
         "apply_options": list(getattr(job, "apply_options", []) or []),
         "track": item.get("track", "ai"),
+        # startup | established | recruiter | unknown (match.company_stage);
+        # the tracker reports response rate by it.
+        "company_stage": item.get("stage") or "unknown",
         "package_dir": None,
         "cv_path": None,
         "cover_letter_path": None,

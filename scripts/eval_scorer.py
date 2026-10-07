@@ -29,7 +29,7 @@ from cv_tailor.answers import load_answers  # noqa: E402
 from cv_tailor.autopilot import AUTO_APPROVE_MIN  # noqa: E402
 from cv_tailor.gates import passes_gate1_tracks  # noqa: E402
 from cv_tailor.job_sources import JobPosting  # noqa: E402
-from cv_tailor.match import rank_ai_native, score_job  # noqa: E402
+from cv_tailor.match import company_stage, rank_ai_native, rank_stage, score_job  # noqa: E402
 from cv_tailor.profile import load_profile  # noqa: E402
 from cv_tailor.tailor_llm import build_azure_client  # noqa: E402
 
@@ -68,7 +68,7 @@ def main(argv=None) -> int:
             r = _score(profile, row, client, int(floor) if floor else None)
             score, reason = r.get("score"), r.get("reason", "")
             if isinstance(score, int):
-                score = rank_ai_native(score, row["description"])
+                score = rank_stage(rank_ai_native(score, row["description"]), company_stage(r))
         surfaced = score is not None and score >= AUTO_APPROVE_MIN
         label = row.get("label")
         if label in ("yes", "no"):
