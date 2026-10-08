@@ -32,7 +32,7 @@ DESIGNED_ATS_PDF = "cv_designed_ats.pdf"
 DESIGNED_ATS_DOCX = "cv_designed_ats.docx"
 
 # Skill-group display names; mirrors the skill_labels map in the templates.
-SKILL_LABELS = {"languages": "Builds with (via AI tools)", "ai": "AI", "devops": "DevOps"}
+SKILL_LABELS = {"languages": "Stack", "ai": "AI", "devops": "DevOps"}
 
 MAX_TILES = 4
 DESIGNED_MAX_PAGES = 2
@@ -208,6 +208,23 @@ def pick_variant(entry: dict, channel: str, pkg_dir: Path | str | None = None) -
 
 # ---------------------------------------------------------------- DOCX
 
+def _add_emphasized(paragraph, text: str, phrases=None) -> None:
+    """Add `text` to a DOCX paragraph with the first occurrence of each
+    phrase in bold (the DOCX twin of render.emphasize)."""
+    spans = sorted({(text.find(p), text.find(p) + len(p)) for p in phrases or []
+                    if p and text.find(p) >= 0})
+    pos = 0
+    for start, end in spans:
+        if start < pos:
+            continue
+        if start > pos:
+            paragraph.add_run(text[pos:start])
+        paragraph.add_run(text[start:end]).bold = True
+        pos = end
+    if pos < len(text):
+        paragraph.add_run(text[pos:])
+
+
 def build_docx(profile: dict, fields: dict, out_path: Path | str,
                highlights: list[str] | None = None) -> Path:
     """Plain ATS-safe DOCX: real Heading styles, contact in the body (no
@@ -244,7 +261,14 @@ def build_docx(profile: dict, fields: dict, out_path: Path | str,
     cp.modified = now
 
     doc.add_heading(name, level=0)
-    parts = [contact.get(k) for k in ("location", "email", "phone", "website", "linkedin", "github")]
+    headline = fields.get("headline") or contact.get("headline")
+    if headline:
+        doc.add_paragraph(str(headline)).runs[0].bold = True
+    location = contact.get("location")
+    if location and contact.get("timezone"):
+        location = f"{location} ({contact['timezone']})"
+    parts = [location, contact.get("work_mode")] + [
+        contact.get(k) for k in ("email", "phone", "website", "linkedin", "github")]
     doc.add_paragraph(" | ".join(str(p) for p in parts if p))
 
     doc.add_heading("Summary", level=1)
@@ -258,23 +282,27 @@ def build_docx(profile: dict, fields: dict, out_path: Path | str,
     doc.add_heading("Experience", level=1)
     for exp_id in fields.get("experience_ids_ordered", []):
         exp = exps[exp_id]
-        doc.add_heading(f"{exp.get('company', '')} - {exp.get('role', '')}", level=2)
+        doc.add_heading(f"{exp.get('company', '')} | {exp.get('role', '')}", level=2)
         doc.add_paragraph(" | ".join(str(x) for x in (exp.get("dates"), exp.get("location")) if x))
+        if exp.get("description"):
+            doc.add_paragraph(expand(_norm(exp["description"]))).runs[0].italic = True
         for idx in fields.get("experience_bullets", {}).get(exp_id, []):
-            doc.add_paragraph(expand(_norm(exp["bullets"][idx])), style="List Bullet")
+            para = doc.add_paragraph(style="List Bullet")
+            _add_emphasized(para, expand(_norm(exp["bullets"][idx])), exp.get("emphasis"))
 
     if fields.get("project_ids"):
         doc.add_heading("Projects", level=1)
         for pid in fields["project_ids"]:
             proj = projs[pid]
-            doc.add_heading(f"{proj.get('name', '')} - {', '.join(proj.get('tech', []))}", level=2)
+            doc.add_heading(str(proj.get("name", "")), level=2)
             meta = expand(_norm(proj.get("tagline", "")))
             if proj.get("link"):
                 meta = f"{meta} | {proj['link']}" if meta else proj["link"]
             if meta:
                 doc.add_paragraph(meta)
             for b in proj.get("bullets", []):
-                doc.add_paragraph(expand(_norm(b)), style="List Bullet")
+                para = doc.add_paragraph(style="List Bullet")
+                _add_emphasized(para, expand(_norm(b)), proj.get("emphasis"))
 
     doc.add_heading("Skills", level=1)
     skills = profile.get("skills", {}) or {}
@@ -294,9 +322,25 @@ def build_docx(profile: dict, fields: dict, out_path: Path | str,
 
     doc.add_heading("Education", level=1)
     for ed in profile.get("education", []) or []:
-        doc.add_paragraph(f"{ed.get('degree', '')} - {ed.get('institution', '')} | {ed.get('year', '')}")
+        doc.add_paragraph(f"{ed.get('degree', '')}, {ed.get('institution', '')} | {ed.get('dates') or ed.get('year', '')}")
         if ed.get("notes"):
             doc.add_paragraph(_norm(ed["notes"]))
+
+    certs = profile.get("certifications") or []
+    if certs:
+        doc.add_heading("Certifications", level=1)
+        for c in certs:
+            line = str(c.get("name", ""))
+            if c.get("issuer"):
+                line += f", {c['issuer']}"
+            if c.get("year"):
+                line += f" | {c['year']}"
+            doc.add_paragraph(line)
+
+    spoken = profile.get("languages_spoken") or []
+    if spoken:
+        doc.add_heading("Languages", level=1)
+        doc.add_paragraph(" | ".join(f"{l.get('language', '')} ({l.get('level', '')})" for l in spoken))
 
     out_path = Path(out_path)
     doc.save(str(out_path))

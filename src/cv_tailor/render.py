@@ -6,6 +6,7 @@ maps here so the template stays simple.
 import re
 from pathlib import Path
 from jinja2 import Environment, FileSystemLoader, select_autoescape
+from markupsafe import Markup, escape
 
 # Acronyms an ATS keyword match (or a recruiter skimming) may search for in
 # either form. The ATS-facing templates expand each one ONCE, on its first
@@ -59,6 +60,19 @@ class AcronymExpander:
         return _ACRONYM_RE.sub(sub, text)
 
 
+def emphasize(text, phrases=None) -> Markup:
+    """Escape `text` and set the first occurrence of each phrase in bold
+    (docs/cv-rules.md R8). Phrases come from profile.yaml `emphasis` lists;
+    a phrase that is not in the text is skipped, so bolding can never add
+    words."""
+    out = str(escape(text or ""))
+    for phrase in phrases or []:
+        safe = str(escape(str(phrase)))
+        if safe and safe in out:
+            out = out.replace(safe, f"<strong>{safe}</strong>", 1)
+    return Markup(out)
+
+
 def render_html(profile: dict, fields: dict, template_dir: Path | str,
                 template_name: str = "cv.html.j2", **context) -> str:
     env = Environment(
@@ -68,6 +82,7 @@ def render_html(profile: dict, fields: dict, template_dir: Path | str,
         lstrip_blocks=True,
     )
     env.filters["expand_acronyms"] = AcronymExpander()
+    env.filters["emphasize"] = emphasize
     template = env.get_template(template_name)
     return template.render(
         profile=profile,

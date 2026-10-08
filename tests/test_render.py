@@ -28,14 +28,17 @@ def test_render_pdf_writes_a_valid_pdf(tmp_path, fixtures_dir, project_root):
     assert out.exists()
     assert out.read_bytes().startswith(b"%PDF-")
 
-def test_skill_group_labels_frame_languages_as_built_with_ai(fixtures_dir, project_root):
-    # Teodor, 2026-09-29: he builds with AI tools and does not hand-write code,
-    # so "Languages:" must not read as a claim of coding skill; "Ai" -> "AI".
+def test_skill_group_labels_frame_languages_as_stack(fixtures_dir, project_root):
+    # He builds with AI tools and does not hand-write code (Teodor,
+    # 2026-09-29), so "Languages:" must not read as a coding claim or as spoken
+    # languages. Since docs/cv-rules.md (2026-10-08, P5) the row is "Stack",
+    # with no apologetic label; the summary names Claude Code as the method.
     profile = load_profile(fixtures_dir / "profile_minimal.yaml")
     profile["skills"] = {"languages": ["Python"], "ai": ["RAG"], "devops": ["Vercel"]}
     fields = json.loads((fixtures_dir / "fields_valid.json").read_text())
     fields.pop("skills_groups", None)
     html = render_html(profile, fields, template_dir=project_root / "templates")
-    assert "Builds with (via AI tools):" in html
+    assert "Stack:" in html
+    assert "Builds with" not in html
     assert "Languages:" not in html
     assert ">AI:<" in html and ">DevOps:<" in html

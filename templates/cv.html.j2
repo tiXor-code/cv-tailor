@@ -1,4 +1,8 @@
 <!DOCTYPE html>
+{# Layout follows docs/cv-rules.md: one column, standard headings, contact in
+   the body, a target-role headline under the name (P2), role lines as
+   "Company | Role" (the ATS simulator splits on " | "), no em dashes (L3),
+   one bold result phrase per bullet from profile `emphasis` lists (R8). #}
 <html lang="en">
 <head>
   <meta charset="utf-8">
@@ -10,8 +14,11 @@
 
 <header class="contact">
   <h1>{{ profile.contact.name }}</h1>
+  {% set headline = fields.get('headline') or profile.contact.get('headline') %}
+  {% if headline %}<p class="headline">{{ headline }}</p>{% endif %}
   <p class="contact-line">
-    {{ profile.contact.location }}
+    {{ profile.contact.location }}{% if profile.contact.timezone %} ({{ profile.contact.timezone }}){% endif %}
+    {% if profile.contact.work_mode %} &middot; {{ profile.contact.work_mode }}{% endif %}
     &middot; <a href="mailto:{{ profile.contact.email }}">{{ profile.contact.email }}</a>
     &middot; {{ profile.contact.phone }}
     {% if profile.contact.website %}&middot; <a href="https://{{ profile.contact.website }}">{{ profile.contact.website }}</a>{% endif %}
@@ -30,11 +37,12 @@
   {% for exp_id in fields.experience_ids_ordered %}
     {% set exp = experiences_by_id[exp_id] %}
     <article class="experience">
-      <h3>{{ exp.company }} &mdash; {{ exp.role }}</h3>
+      <h3>{{ exp.company }} | {{ exp.role }}</h3>
       <p class="meta">{{ exp.dates }} &middot; {{ exp.location }}</p>
+      {% if exp.description %}<p class="company-line">{{ exp.description | expand_acronyms }}</p>{% endif %}
       <ul>
         {% for idx in fields.experience_bullets.get(exp_id, []) %}
-          <li>{{ exp.bullets[idx] | expand_acronyms }}</li>
+          <li>{{ exp.bullets[idx] | expand_acronyms | emphasize(exp.emphasis) }}</li>
         {% endfor %}
       </ul>
     </article>
@@ -47,11 +55,11 @@
   {% for pid in fields.project_ids %}
     {% set proj = projects_by_id[pid] %}
     <article class="project">
-      <h3>{{ proj.name }} &mdash; <span class="tech">{{ proj.tech | join(', ') }}</span></h3>
+      <h3>{{ proj.name }}</h3>
       <p class="meta">{{ proj.tagline | expand_acronyms }}{% if proj.link %} &middot; <a href="https://{{ proj.link }}">{{ proj.link }}</a>{% endif %}</p>
       <ul>
         {% for b in proj.bullets %}
-          <li>{{ b | expand_acronyms }}</li>
+          <li>{{ b | expand_acronyms | emphasize(proj.emphasis) }}</li>
         {% endfor %}
       </ul>
     </article>
@@ -64,9 +72,10 @@
   {# fields.skills_groups (optional) selects AND orders the groups shown, so a
      role-specific CV can lead with what matters (e.g. content before devops).
      Absent -> every profile group renders, as before. #}
-  {# "languages" is framed as what he builds with through AI tools: he does
-     not hand-write code (Teodor, 2026-09-29). #}
-  {% set skill_labels = {"languages": "Builds with (via AI tools)", "ai": "AI", "devops": "DevOps"} %}
+  {# "languages" holds the technologies of the systems he ships with Claude
+     Code; the label says "Stack", not "Languages", so it never reads as
+     spoken languages or as a hand-coding claim (docs/cv-rules.md P5). #}
+  {% set skill_labels = {"languages": "Stack", "ai": "AI", "devops": "DevOps"} %}
   {% set group_names = fields.skills_groups if fields.get('skills_groups') else profile.skills.keys() %}
   {% for group in group_names %}
     {% if group in profile.skills %}
@@ -83,9 +92,25 @@
 <section>
   <h2>Education</h2>
   {% for ed in profile.education %}
-    <p>{{ ed.degree }} &mdash; {{ ed.institution }} &middot; {{ ed.year }}{% if ed.notes %}<br><span class="meta">{{ ed.notes }}</span>{% endif %}</p>
+    <p>{{ ed.degree }}, {{ ed.institution }} &middot; {{ ed.get('dates') or ed.year }}{% if ed.notes %}<br><span class="meta">{{ ed.notes }}</span>{% endif %}</p>
   {% endfor %}
 </section>
+
+{% if profile.get('certifications') %}
+<section>
+  <h2>Certifications</h2>
+  {% for c in profile.certifications %}
+    <p>{{ c.name }}{% if c.get('issuer') %}, {{ c.issuer }}{% endif %}{% if c.get('year') %} &middot; {{ c.year }}{% endif %}</p>
+  {% endfor %}
+</section>
+{% endif %}
+
+{% if profile.get('languages_spoken') %}
+<section>
+  <h2>Languages</h2>
+  <p>{% for l in profile.languages_spoken %}{{ l.language }} ({{ l.level }}){% if not loop.last %} &middot; {% endif %}{% endfor %}</p>
+</section>
+{% endif %}
 
 </body>
 </html>

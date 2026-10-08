@@ -139,6 +139,7 @@ def _second_pass(profile, tailor_profile, fields, jd_text, terms, *, client, tai
     bolded) and validated. Keep this in step with assemble_package.
     Returns (fields, skills_dropped, "") or (None, [], why it was rejected)."""
     from cv_tailor.assemble import drop_unfinished_projects  # lazy: assemble imports us
+    from cv_tailor.cv_rules import apply_cv_rules
 
     try:
         new = tailor_fn(tailor_profile, jd_text + HINT_TEMPLATE.format(terms=", ".join(terms)),
@@ -148,6 +149,8 @@ def _second_pass(profile, tailor_profile, fields, jd_text, terms, *, client, tai
     if not isinstance(new, dict):
         return None, [], "second-pass tailor returned no JSON object"
     new["job_meta"] = dict(fields.get("job_meta", {}))
+    # Same headline/summary repair as the first pass (docs/cv-rules.md).
+    new["_cv_rule_fixes"] = apply_cv_rules(profile, new)
     new["project_ids"] = drop_unfinished_projects(profile, new.get("project_ids", []))
     if "skills_groups" in fields:
         new["skills_groups"] = list(fields["skills_groups"])

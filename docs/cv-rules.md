@@ -1,8 +1,9 @@
 # CV generation rules
 
-Version 1, 2026-10-08. These rules govern every CV that cv-tailor builds for Teodor: the
+Version 1.1, 2026-10-08. These rules govern every CV that cv-tailor builds for Teodor: the
 per-job tailored CVs and the general LinkedIn Easy Apply CV. Rule IDs are stable, so the
-generator prompt, the linter and reviews can cite them.
+generator prompt, the linter and reviews can cite them. Teodor approved the recommendations
+on 2026-10-08, and the rules are enforced in code (section 8).
 
 ## TLDR
 
@@ -35,7 +36,9 @@ Appendix C.
   - Tailored CV: the posting's own title when it describes work he has done.
   - The headline is a target, never a claimed past title.
 - **P3. Real titles on every role, identical to LinkedIn.** No CEO. No "Engineer" title he
-  did not hold, because those invite coding screens for work he does not do by hand.
+  did not hold, because those invite coding screens for work he does not do by hand. The
+  agency title is "Co-Founder & AI Automation Lead" (decided 2026-10-08): a specialist title
+  that matches recruiter searches for his target roles. LinkedIn must carry the same title.
 - **P4. Summary: at most 3 sentences and 70 words, no pronouns.**
   - Sentence 1: the role label and how he works (ships with Claude Code).
   - Sentence 2: one or two proof points with numbers.
@@ -122,9 +125,9 @@ Appendix C.
 - **L4. Plain verbs:** built, shipped, launched, cut, grew, automated, replaced, trained, ran,
   led, designed, measured, sold.
 - **L5. Internal product names become plain descriptions of what they do.** This covers
-  SGEO, ICP Agent, AIOS, SEO Sentinel and Agent HQ. A public product with a live URL may
-  keep its name next to the link. This extends Teodor's 2026-09-29 rule for outreach and
-  awaits his confirmation for CVs.
+  SGEO, ICP Agent, AIOS, SEO Sentinel, Agent HQ, Anvil and Aegis. A public product with a
+  live URL may keep its name next to the link. This extends Teodor's 2026-09-29 rule for
+  outreach; he confirmed it for CVs on 2026-10-08.
 - **L6. Write each acronym out once, then abbreviate:** "retrieval-augmented generation (RAG)".
   ATS keyword filters match exact terms, so both forms should appear.
 - **L7. One spelling variant per CV** (UK or US), matching the posting.
@@ -195,13 +198,32 @@ Appendix C.
 |----|-------|-------|
 | Q1 | ATS simulation scores 100 for PDF and DOCX (one column, contact, sections, roles, characters, metadata) | `ats_sim.py` (exists) |
 | Q2 | At most 2 pages | `variants.pdf_page_count` (exists) |
-| Q3 | Zero hits from the L2 list, zero em dashes | to add |
-| Q4 | At least 70% of bullets carry a result number that is not a date (warn below 70%, fail below 50%) | to add |
-| Q5 | Summary: at most 3 sentences and 70 words, no pronouns, does not open with education | to add |
-| Q6 | No internal product names (once L5 is confirmed) | to add |
-| Q7 | Every number in the CV appears in `profile.yaml` | to add |
+| Q3 | Zero hits from the L2 list, zero em dashes | `cv_rules.lint_cv_text` (report); `tests/test_profile_rules.py` (profile) |
+| Q4 | At least 70% of bullets carry a result number that is not a year | `cv_rules.lint_cv_text` (warning) |
+| Q5 | Summary: at most 3 sentences and 70 words, no pronouns, does not open with education | `cv_rules.apply_cv_rules` (replaces a breaking summary) |
+| Q6 | No internal product names | `cv_rules` (lint and profile test) |
+| Q7 | Every number in the CV appears in `profile.yaml` | `cv_rules.apply_cv_rules` checks the generated headline and summary; bullets are copied from the profile |
 | Q8 | Role titles match LinkedIn | `linkedin_sync` (exists) |
 | Q9 | Spell check passes | to add |
+
+## 8. How the rules are enforced
+
+- `profile.yaml` is held to the rules by `tests/test_profile_rules.py`. Every summary,
+  headline, bullet, description, project name and tagline must pass, and every `emphasis`
+  phrase must appear in a bullet. The generator copies bullets verbatim, so this test is
+  the main guarantee.
+- The headline and summary are the only text an LLM writes. `cv_rules.apply_cv_rules` runs
+  after every tailoring call (`assemble.py`, the ATS second pass, `scripts/tailor.py`) and
+  replaces either one with the profile's own text when it breaks a rule. It also drops
+  projects marked `status: demo` and projects already shown under a listed role
+  (`covered_by`).
+- `cv_rules.lint_cv_text` measures each rendered CV. The report goes to `meta.json`
+  (`cv_rules`) and the CLI, and it never blocks a send.
+- The templates render the headline, the agency description line, one bold result phrase
+  per bullet (`emphasis`), and Certifications and Languages sections. The `languages` skill
+  row is labelled "Stack".
+- The ATS simulator counts study years listed under Education as covered time, and tells
+  two roles at one employer apart by title.
 
 ## Appendix A. Lessons from the reference CV
 

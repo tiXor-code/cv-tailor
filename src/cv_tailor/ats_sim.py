@@ -249,6 +249,25 @@ def parse_roles(text: str) -> list[dict]:
     return roles
 
 
+def education_periods(text: str) -> list[tuple[tuple[int, int], tuple[int, int]]]:
+    """(start, end) of every date range under the Education heading."""
+    lines = (text or "").splitlines()
+    sections = find_sections(text or "")
+    if "education" not in sections:
+        return []
+    start = sections["education"] + 1
+    later = [i for i in sections.values() if i > sections["education"]]
+    stop = min(later) if later else len(lines)
+    periods = []
+    for line in lines[start:stop]:
+        m = DATE_RANGE_RE.search(line)
+        if m:
+            a, b = _ym(m.group("start"), end=False), _ym(m.group("end"), end=True)
+            if a and b and _months(a, b) >= 0:
+                periods.append((a, b))
+    return periods
+
+
 def _months(a: tuple[int, int], b: tuple[int, int]) -> int:
     return (b[0] - a[0]) * 12 + (b[1] - a[1])
 
@@ -279,6 +298,11 @@ def _timeline_checks(rep: FileReport) -> None:
 
     gaps = []
     covered_to = None
+    # Study periods listed under Education are not employment gaps.
+    for start, end in education_periods(rep.text):
+        ordered.append({"_start": start, "_end": end, "company": "", "heading": "education",
+                        "ongoing": False})
+    ordered.sort(key=lambda r: r["_start"])
     for r in ordered:
         if covered_to and _months(covered_to, r["_start"]) > GAP_WARN_MONTHS:
             gaps.append(f"{_months(covered_to, r['_start'])} months before "
@@ -548,7 +572,9 @@ def cross_file_checks(reports: list[FileReport]) -> list[Check]:
     dates: dict[str, set[str]] = {}
     for r in readable:
         for role in r.roles:
-            key = (role["company"] or role["heading"]).lower()
+            # Company AND title: two roles at one employer (e.g. a promotion or a
+            # return) have different dates by design, not a clash.
+            key = " | ".join(x for x in (role["company"] or role["heading"], role["title"]) if x).lower()
             if key:
                 dates.setdefault(key, set()).add(role["dates"].replace("—", "–"))
     clashes = [f"{k}: {sorted(v)}" for k, v in dates.items() if len(v) > 1]

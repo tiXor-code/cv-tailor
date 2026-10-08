@@ -299,4 +299,4 @@ def test_assemble_package_missing_tracks_config_no_restriction(tmp_path):
 
     assert result["track"] == "ai"
     html = (Path(result["package_dir"]) / "cv.html").read_text()
-    assert "Builds with (via AI tools):" in html
+    assert "Stack:" in html

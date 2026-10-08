@@ -36,9 +36,21 @@ p {
   margin: 2pt 0;
 }
 
+.headline {
+  font-size: 11.5pt;
+  font-weight: 600;
+  margin: 0 0 3pt 0;
+}
+
 .contact-line {
   font-size: 9pt;
   color: #1a1a1a;
+}
+
+.company-line {
+  font-size: 9.5pt;
+  font-style: italic;
+  margin: 0 0 2pt 0;
 }
 
 .meta {
@@ -80,4 +92,9 @@ a {
 article.experience,
 article.project {
   margin-bottom: 6pt;
+}
+
+/* Links never split across lines: a wrapped "linkedin.com/ in/x" is unreadable to parsers. */
+.contact-line a {
+  white-space: nowrap;
 }

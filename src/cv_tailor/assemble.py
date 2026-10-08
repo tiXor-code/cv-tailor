@@ -15,8 +15,10 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
+from cv_tailor.ats_check import extract_text
 from cv_tailor.ats_pass import run_pass as run_ats_pass
 from cv_tailor.cover_llm import check_cover, cover_letter
+from cv_tailor.cv_rules import apply_cv_rules, lint_cv_text
 from cv_tailor.profile import load_profile
 from cv_tailor.render import render_html, render_pdf
 from cv_tailor.scout_queue import queue_root, read_description
@@ -104,6 +106,15 @@ _UNFINISHED_RE = re.compile(
     re.I)
 
 
+def _cv_rules_report(cv_pdf: Path) -> dict:
+    """docs/cv-rules.md lint of the rendered CV. Reporting only: a lint
+    failure (or an unreadable PDF) must never stop a package."""
+    try:
+        return lint_cv_text(extract_text(cv_pdf))
+    except Exception as exc:  # noqa: BLE001
+        return {"warnings": [f"cv rules lint skipped: {type(exc).__name__}: {exc}"]}
+
+
 def drop_unfinished_projects(profile: dict, project_ids: list) -> list:
     by_id = {p.get("id"): p for p in profile.get("projects", []) or []}
 
@@ -146,6 +157,11 @@ def assemble_package(entry: dict, scan_date: str, *, queue_dir=None, client=None
     fields = tailor(tailor_profile, jd_text, client=client)
     fields.setdefault("job_meta", {})["company"] = company
     fields["job_meta"]["role"] = role
+
+    # docs/cv-rules.md: the headline and summary are the only LLM-written CV
+    # text. Either one that breaks a rule is replaced by the profile's own
+    # text (cv_tailor.cv_rules), which can only remove claims.
+    rule_fixes = apply_cv_rules(profile, fields, summary_id=(track_cfg or {}).get("summary_id"))
 
     # Restrict which skill groups the CV template renders/orders to the
     # track's list (templates/cv.html.j2's optional fields.skills_groups).
@@ -223,6 +239,9 @@ def assemble_package(entry: dict, scan_date: str, *, queue_dir=None, client=None
         "skills_dropped": skills_dropped,
         "cover_letter_warnings": cover_warnings,
         "cover_letter_words": len(re.findall(r"\b[\w'-]+\b", letter)),
+        # docs/cv-rules.md report for the final cv.pdf; never blocks a send.
+        "cv_rules": {"fixes": rule_fixes + list(fields.pop("_cv_rule_fixes", []) or []),
+                     **_cv_rules_report(cv_pdf)},
         **ats_meta,  # ats, jd_match_pct, jd_missing_*, ats_refine (ATS pass above)
     }
 

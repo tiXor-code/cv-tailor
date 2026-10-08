@@ -23,7 +23,8 @@ tracks:
   # which let nearly every posting past this gate.
   ai:
     summary_id: ai_automation_engineer
-    skill_groups: [ai, languages, frameworks, data, devops, tools]
+    # At most 5 skill rows on a CV (docs/cv-rules.md S7).
+    skill_groups: [ai, languages, data, devops, tools]
     keywords:
     - ai engineer
     - ai developer
@@ -75,105 +76,117 @@ tracks:
     - low-code
 contact:
   name: Teodor-Cristian Lutoiu
+  # Target-role headline under the name (docs/cv-rules.md P2). A tailored CV
+  # may replace it with the posting's own wording (fields.headline).
+  headline: AI Automation & Solutions Specialist | Agentic workflows, RAG, AI search (GEO)
   email: contact@teodorlutoiu.com
   phone: +40 725 697 859
   location: Bucharest, Romania
+  timezone: UTC+2/+3
+  work_mode: Remote
   website: teodorlutoiu.com
   linkedin: linkedin.com/in/teodorlc
   github: github.com/tiXor-code
+# Every summary must pass docs/cv-rules.md (P4, L1-L3): at most 3 sentences
+# and 70 words, no pronouns, no banned words. The track's summary is also the
+# fallback whenever a generated summary breaks a rule (cv_tailor.cv_rules).
 summary_pool:
 - id: ai_automation_engineer
-  text: 'AI automation and solutions builder, working with AI since a 2022 university dissertation on AI
-    in games, written before ChatGPT''s public release. Designs, ships and runs production AI systems end
-    to end with Claude Code and AI tools: LLM orchestration, RAG, agentic workflows and evaluation across
-    Claude, Azure OpenAI and embeddings. Runs a fleet of autonomous agents in production, including a client
-    analytics platform and SGEO, an autonomous SEO and AI-search agent.
-
-    '
+  text: >-
+    AI automation and solutions builder who ships AI systems with Claude Code, owning the spec,
+    review, testing and deployment. Builds agentic workflows, RAG pipelines, n8n automations and
+    AI-search (GEO) agents; one site is cited by an AI assistant for 51 of 55 target searches.
+    Co-founder of a 4-person creative and AI agency; Assistant Content Producer on EA FC Ultimate
+    Team, a live service with millions of players.
 - id: founder_entrepreneur
-  text: 'Founder of Ministeru'' Creativ (4-person agency, live since 2026-03-18)
-
-    and co-founder of JobMap. Builds revenue-generating systems end-to-end:
-
-    product, infra, content, sales pipeline.
-
-    '
+  text: >-
+    Co-founder of Ministeru' Creativ, a 4-person creative and AI agency launched in March 2026, and
+    of the job-search platform JobMap. Builds the systems behind the business end to end: product,
+    infrastructure, content and sales pipeline.
 - id: full_stack_engineer
-  text: 'Full-stack engineer (Python/Flask, Next.js/React, Postgres) with
-
-    production deployments on Azure App Services and Vercel. Shipped
-
-    JobMap.ro from zero to 9.3K live jobs and a paid product.
-
-    '
+  text: >-
+    Builds and ships full-stack products with Claude Code (Python/Flask, Next.js/React, Postgres),
+    deployed on Azure App Services and Vercel. Took a job-search platform from zero to 9.3K live
+    jobs and a paid product.
 - id: content_producer_pivot
-  text: 'Assistant Content Producer at EA Bucharest pivoting full-time to
-
-    AI engineering. Combines games-industry production discipline with
-
-    hands-on AI/automation shipping.
-
-    '
+  text: >-
+    Assistant Content Producer at EA Bucharest moving into AI automation and solutions roles.
+    Combines live-service production discipline with shipping AI tools and automations.
 - id: content_producer
-  text: 'Content producer at EA (EA FC 25 Ultimate Team) developing and executing content strategies for
-    a live service with millions of players, and founder of a 4-person creative agency delivering web,
-    branding, and content for clients. Deep working knowledge of AI systems (LLM pipelines, prompt engineering,
-    eval design) - understands how training data and editorial quality shape model behaviour.
-
-    '
+  text: >-
+    Content producer at EA (EA FC Ultimate Team), planning content for a live service with millions
+    of players, and co-founder of a 4-person creative agency delivering web, branding and content
+    for clients. Works hands-on with AI systems (LLM pipelines, prompt engineering, eval design) and
+    knows how training data and editorial quality shape model behaviour.
+# Bullets follow docs/cv-rules.md: verb + result + how, result first, no filler
+# words, no internal product names. `emphasis` lists the exact result phrases
+# the templates set in bold (R8); `description` is the one-line company summary
+# under the role (P6). Titles and dates match LinkedIn (Q8).
 experiences:
 - id: ministeru
-  role: Founder & Head of AI
+  role: Co-Founder & AI Automation Lead
   company: Ministeru' Creativ
+  description: Creative and AI agency (4 people, launched March 2026) building websites, content, automation and AI-search visibility (GEO) for clients.
   location: Bucharest, Romania (remote-first)
-  dates: Mar 2026 – Present
+  dates: Nov 2025 – Present
+  emphasis:
+  - 51 of 55 target searches
   bullets:
-  - Founded and run a 4-person creative agency, live since March 2026.
-  - 'Built the agency''s client analytics platform: one dashboard per client combining Instagram and Google
-    Search Console data, AI-written insights checked against the underlying data, monthly reports and
-    role-based client access.'
-  - 'Built SGEO, an autonomous SEO and AI-search (GEO) agent: tracks Google rankings and whether ChatGPT,
-    Gemini and Perplexity cite a site, then proposes and ships fixes and AI-written, fact-checked guides
-    within owner-set autonomy levels. One live site is cited by an AI assistant for 51 of 55 target searches.'
-  - Built an internal AI prospecting dashboard with an n8n side-pipeline (Q1 2026 experiment).
-  - Lead client delivery across web, branding, content, and automation.
-  - 'Own all infrastructure: domain, hosting, CI/CD, analytics.'
+  - "Built an AI-search (GEO) agent that tracks ChatGPT, Gemini and Perplexity citations and ships fixes and guides; one live site is cited by an AI assistant for 51 of 55 target searches."
+  - "Built a client analytics platform: one dashboard per client combining Instagram and Google Search Console data, monthly reports, and AI-written insights checked against the source numbers."
+  - "Built an AI prospecting agent that gathers signals on target companies, scores ideal-customer fit with Azure OpenAI and returns enriched leads to a shared sheet."
+  - "Run client delivery across websites, branding, content and automation, and own the agency's infrastructure: domains, hosting, CI/CD and analytics."
 - id: wolff
   role: AI Video Content Producer
   company: Freelance
   location: Remote
   dates: Jan 2026 – Apr 2026 (on hold)
+  emphasis:
+  - up to 40 short-form videos a week
   bullets:
-  - Produced short-form Instagram video content end-to-end, delivering up to 40 videos per week, with videos
-    regularly reaching millions of views.
-  - Owned scripting and copy, concept direction, quality review, and final selection of what is publishable.
-  - 'Ran an AI-assisted production pipeline (Higgsfield, Kling, ElevenLabs for voice creation): reference-driven
-    prompt design, batch styled variants, and an internal production web tool I built, including a fine-tuned
-    compose model.'
+  - "Produced up to 40 short-form videos a week, regularly reaching millions of views, through an AI production pipeline built on Higgsfield, Kling and ElevenLabs."
+  - "Built an internal production web tool for the pipeline, including a fine-tuned compose model, reference-driven prompts and batches of styled variants."
+  - "Owned scripting, copy, concept direction, quality review and the final call on what was publishable."
 - id: ea
   role: Assistant Content Producer
-  company: Electronic Arts Sports (EA FC — Ultimate Team)
+  company: Electronic Arts (EA)
   location: Bucharest, Romania
   dates: Aug 2024 – Present
+  emphasis:
+  - millions of players
   bullets:
-  - Developed and executed content strategies, significantly enhancing player engagement and retention.
-  - Facilitated seamless cross-functional collaboration, optimizing live service updates and content releases.
-  - Utilized data-driven insights to boost player satisfaction and key performance metrics.
+  - "Plan and deliver content for EA FC Ultimate Team, a live service with millions of players, coordinating live-service updates and content releases across departments."
+  - "Use player data and performance metrics to shape content strategy."
 - id: play_for_democracy
-  role: Game Producer
-  company: Play For Democracy — Arden
+  role: Producer
+  company: ARDEN (Play For Democracy)
   location: Bucharest, Romania
   dates: Sep 2023 – Aug 2024
+  emphasis:
+  - launch Vote It!
+  - 30%
   bullets:
-  - Transitioned from Game Designer to Producer, successfully managing project milestones and launch.
-  - Streamlined development processes through Agile methodologies, achieving a 30% reduction in project
-    timelines.
-  - Represented the project publicly, meeting all stakeholder KPIs and enhancing market visibility.
-  - Invited to Brussels by the European Commission to present the project.
+  - "Led a 7-person cross-department team to launch Vote It!, a mobile game built to strengthen democracy, after being promoted from game designer to producer."
+  - "Cut project timelines by 30% by moving the team to Agile sprints."
+  - "Presented the project to the European Commission in Brussels by invitation."
+# Source: Teodor's LinkedIn export (Profile.pdf, 2026-10-05), in his own words.
+- id: ea_tester
+  role: Game Tester/Scripter
+  company: Electronic Arts (EA)
+  location: Bucharest, Romania
+  dates: Oct 2019 – Jul 2020
+  emphasis:
+  - 63%
+  - 17%
+  bullets:
+  - "Raised tested volume per sprint by 63% by introducing and running test automation with self-taught Lua scripts."
+  - "Improved team testing times by 17% as Scrum Master by redesigning the retrospective meetings."
 projects:
 - id: icp_agent
-  name: ICP Agent
+  name: AI prospecting agent
   tagline: Ideal-customer-profile prospecting service deployed on Vercel
+  # Already a bullet of the agency role; never listed twice (cv_rules).
+  covered_by: ministeru
   link: icp-agent-ten.vercel.app
   tech:
   - Hono
@@ -183,11 +196,13 @@ projects:
   - SerpAPI
   - Google Sheets
   bullets:
-  - 'One-shot prospecting agent: scrapes signals, scores ICP fit, returns enriched leads to Sheets.'
-  - Built with Hono on Vercel; integrates Hunter and SerpAPI for enrichment and Azure OpenAI for scoring.
+  - Gathers signals on target companies, scores ideal-customer fit with Azure OpenAI and returns enriched leads to Google Sheets.
+  - Runs as a one-shot service on Vercel (Hono), with Hunter and SerpAPI for enrichment.
 - id: support_draft_agent
-  name: Customer Support Draft Agent
-  tagline: AI customer-support draft generator with self-grading verdict gate
+  name: Customer-support drafting agent
+  tagline: AI customer-support reply drafter with a self-grading quality gate
+  emphasis:
+  - 12 of 12 evaluation cases
   tech:
   - n8n
   - Azure OpenAI
@@ -195,10 +210,9 @@ projects:
   - Claude CLI
   - HMAC
   bullets:
-  - 'End-to-end pipeline: HMAC webhook -> n8n -> classify -> embed -> pgvector RAG -> Claude draft ->
-    self-grade -> multi-signal verdict gate.'
-  - 136 tests across 5 layers including verdict-gate truth table extracted from the workflow JSON.
-  - 12/12 eval agreement, 6/12 auto-rate at calibrated thresholds.
+  - Agreed with the expected verdict on 12 of 12 evaluation cases, guarded by 136 automated tests across 5 layers.
+  - 'End-to-end pipeline: HMAC-signed webhook, n8n, message classification, RAG over pgvector, a Claude
+    draft, self-grading and a multi-signal verdict gate.'
 - id: council_of_agents
   name: Council of Agents
   tagline: Multi-provider AI thinking partner for high-stakes decisions
@@ -214,7 +228,7 @@ projects:
   - Built on Mastra TypeScript agent framework with structured outputs and persona-based reasoning.
   - Active development; partial implementation shipping.
 - id: agent_hq
-  name: Agent HQ
+  name: Local multi-agent workstation
   tagline: 21-agent autonomous system designed for local-first execution on Apple Silicon
   tech:
   - Python
@@ -238,9 +252,9 @@ projects:
   bullets:
   - Single Azure OpenAI call returns structured JSON that drives a deterministic CV renderer.
   - Honesty guard in the system prompt prevents the LLM from inventing experience, projects, or skills.
-  - ATS-safety pipeline runs pdftotext extraction plus six sanity checks (headings order, contact placement,
-    mangling, etc.).
-  - Built TDD-style; 33 tests across 9 modules; full subagent-driven implementation workflow.
+  - An ATS simulation scores every PDF and DOCX it produces (text layer, reading order, contact, sections,
+    timeline, characters, metadata).
+  - Built test-first, with 1,100+ automated tests.
 - id: gepa_prompt_lab
   name: GEPA Prompt Lab
   tagline: Prompt-optimization tooling for JobMap LLM pipelines
@@ -271,6 +285,8 @@ projects:
 - id: ai_audit
   name: AI Audit Landing
   tagline: Lead-gen funnel for Ministeru' "Invisible to ChatGPT" Meta Ad campaign
+  # A landing page with a stubbed engine: a demo, never listed on a CV (R6).
+  status: demo
   tech:
   - Next.js
   - Meta Ads
@@ -314,7 +330,7 @@ projects:
   - Stripe
   bullets:
   - 9.3K jobs, 504 skills, 247 admin tests, paid corrective-protocol product live.
-  - Council Step Pipeline shipped 2026-03-09 (PR
+  - Council step pipeline shipped on 2026-03-09.
 - id: orb_trading_bot
   name: ORB Trading Bot
   tagline: Opening-range-breakout bot on IBKR micro-futures
@@ -325,8 +341,7 @@ projects:
   - backtesting
   bullets:
   - +$7,121 backtest P&L, 67.7% win rate on MNQ.
-  - Identified robust signals via pattern study (5mo + year-long datasets), filtered out small-sample
-    noise.
+  - Kept only signals that held across a 5-month and a year-long dataset, filtering out small-sample noise.
 - id: niche_sites
   name: honestcalculator.com
   tagline: AdSense content site, 15 US-finance calculators
@@ -337,7 +352,7 @@ projects:
   - IndexNow
   - Google Search Console
   bullets:
-  - 15 cornerstone calculators (auto-loan-refi, coast-fire, SBA-loan, etc.) — combined TAM ~175K/mo.
+  - 15 cornerstone calculators (auto-loan-refi, coast-fire, SBA-loan and more); combined TAM ~175K/mo.
   - Lighthouse desktop 94+/96+/100/100 across sampled pages.
 - id: portfolio
   name: teodorlutoiu.com
@@ -349,7 +364,7 @@ projects:
   - Hostinger
   - Cloudflare
   bullets:
-  - Shipped redesign 2026-05-21 — root domain live with hashed assets, 200 OK across pages.
+  - Shipped a redesign on 2026-05-21; root domain live with hashed assets, 200 OK across pages.
 - id: second_brain
   name: Second Brain / Meeting Copilot
   tagline: AI meeting copilot that transcribes, summarizes, and remembers
@@ -374,61 +389,63 @@ projects:
   - Sandboxed runner executes submitted code safely and grades it against hidden tests.
   - Open-ended answers graded instantly by an LLM judge against a rubric.
 - id: anvil_aegis
-  name: Anvil & Aegis
-  tagline: Autonomous build-proposal and security-scanning agents for a repo fleet
+  name: Autonomous build and security agents
+  tagline: Build-proposal and security-scanning agents for a fleet of repositories
   tech:
   - Claude Code
   - GitHub API
   - Python
   bullets:
-  - Anvil scans active projects daily, proposes builds, and ships approved ones unattended.
-  - Aegis continuously scans every repo for vulnerabilities and files verified GitHub issues.
-  - Adversarial verification step filters false positives before anything ships or gets filed.
+  - Scans active projects daily, proposes builds and ships approved ones unattended.
+  - Scans every repository for vulnerabilities and files verified GitHub issues.
+  - An adversarial verification step filters false positives before anything ships or gets filed.
 - id: aios_fleet
-  name: AIOS
-  tagline: Automation fleet running a dozen-plus autonomous background agents
+  name: Background AI agent fleet
+  tagline: A dozen-plus autonomous background agents, dispatched from Telegram
   tech:
   - Python
   - Telegram Bot API
   - launchd
   - SQLite
   bullets:
-  - Telegram-driven job dispatcher runs headless AI agents from a single phone message.
-  - Health sentinel monitors every agent's heartbeat and flags silent failures.
-  - Coordinates independent agents across finance, security, SEO, invoicing, and prospecting.
+  - Runs headless AI agents from a single Telegram message, across finance, security, SEO, invoicing and prospecting.
+  - A health monitor tracks every agent's heartbeat and flags silent failures.
 - id: seo_sentinel
-  name: SEO Sentinel
-  tagline: Automated SEO and AI-search-visibility monitoring across live sites
+  name: SEO and AI-search monitoring
+  tagline: Automated SEO and AI-search visibility monitoring across live sites
   tech:
   - Google Search Console API
   - DataForSEO
   - Python
   bullets:
-  - Daily ranking alerts and weekly SEO audits across four production sites.
-  - Citation report measures whether ChatGPT, Perplexity, and Gemini actually cite each site.
+  - Sends daily ranking alerts and weekly SEO audits across four production sites.
+  - Measures whether ChatGPT, Perplexity and Gemini actually cite each site.
 - id: faraapacalda
-  name: Faraapacalda.ro
-  tagline: Scraper-driven static site, 2,361 pages built and shipped
+  name: faraapacalda.ro
+  tagline: Public-data site built from scraped data, 2,361 pages
+  emphasis:
+  - 2,361 static pages
   link: faraapacalda.ro
   tech:
   - Python
   - static site generation
   bullets:
-  - Built a custom scraper to source structured data at scale.
-  - Generated and launched 2,361 static pages end to end.
+  - Generated and launched 2,361 static pages end to end from structured public data.
+  - Built the custom scraper that sources the data.
 - id: and_more
   name: "…and many more"
   tagline: 40+ additional shipped projects, tools, and automations available on request
   tech: []
   bullets: []
 skills:
+  # Rendered as "Stack": the technologies of the systems he ships with Claude
+  # Code (docs/cv-rules.md P5). Never bolded (assemble.py).
   languages:
   - Python
   - TypeScript
   - JavaScript
   - Node.js
   - SQL
-  frameworks:
   - Next.js
   - React
   - Flask
@@ -481,17 +498,22 @@ skills:
   - Editing
   - Editorial review
   - Video production
-  - Cross-functional collaboration
   - Voice creation (ElevenLabs)
 education:
 - degree: BSc Computer Games Design and Development
   institution: University of Worcester
   year: 2022
+  # Study period (LinkedIn export, 2026-10-05): shown so a reader, and the ATS
+  # simulator, can see these years are study, not a gap.
+  dates: Sep 2017 – May 2022
   notes: Dissertation "AI in Games" (2022), researching AI before ChatGPT's public release.
+# Source: LinkedIn export (2026-10-05). Course certificate; issuer not listed there.
+certifications:
+- name: "RAG Agents: Build Apps & GPTs with APIs/MCP, LangChain & n8n"
 languages_spoken:
+- language: English
+  level: C2
 - language: Romanian
   level: native
-- language: English
-  level: C2 / fluent
 - language: Spanish
   level: elementary

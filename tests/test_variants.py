@@ -240,7 +240,7 @@ def test_docx_is_plain_ats_safe(package, name):
     assert paras[0].text == "Alex Example"
     assert "alex@example.com" in paras[1].text and "+1 555 010 0199" in paras[1].text
     h1 = [p.text for p in paras if p.style.name == "Heading 1"]
-    expected = ["Summary", "Experience", "Projects", "Skills", "Education"]
+    expected = ["Summary", "Experience", "Projects", "Skills", "Education", "Languages"]
     if name == "cv_designed_ats.docx":
         expected.insert(1, "Selected Results")
     assert h1 == expected
@@ -258,10 +258,10 @@ def test_skill_labels_match_across_variants(package):
 
     pkg, _ = package
     docx_text = "\n".join(p.text for p in Document(str(pkg / "cv.docx")).paragraphs)
-    assert "Builds with (via AI tools): Python, Go" in docx_text
+    assert "Stack: Python, Go" in docx_text
     if HAS_POPPLER:
         for name in ("cv.pdf", "cv_designed.pdf", "cv_designed_ats.pdf"):
-            assert "Builds with (via AI tools)" in _pdftotext(pkg / name), name
+            assert "Stack:" in _pdftotext(pkg / name), name
 
 
 def test_docx_bullets_carry_every_tile_number(package):

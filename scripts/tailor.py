@@ -25,6 +25,8 @@ from cv_tailor.tailor_llm import tailor, build_azure_client
 from cv_tailor.validate import validate
 from cv_tailor.render import render_html, render_pdf
 from cv_tailor.ats_check import extract_text, run_checks
+from cv_tailor.assemble import drop_unfinished_projects
+from cv_tailor.cv_rules import apply_cv_rules, lint_cv_text
 from cv_tailor.slug import job_slug
 
 
@@ -64,6 +66,14 @@ def main(argv=None):
         canonical_skills.get(s.lower(), s) for s in fields.get("skills_emphasis", [])
     ]
 
+    # docs/cv-rules.md: repair the LLM-written headline and summary.
+    track = (profile.get("tracks") or {}).get("ai") or {}
+    rule_fixes = apply_cv_rules(profile, fields, summary_id=track.get("summary_id"))
+    # Same project and skill-row rules as the daily pipeline (assemble.py).
+    fields["project_ids"] = drop_unfinished_projects(profile, fields.get("project_ids", []))
+    if track.get("skill_groups"):
+        fields["skills_groups"] = list(track["skill_groups"])
+
     errors = validate(profile, fields)
     if errors:
         invalid_path = Path(args.jd_path).parent / "fields.invalid.json"
@@ -96,6 +106,8 @@ def main(argv=None):
         projects_by_id={p["id"]: p for p in profile.get("projects", [])},
     )
 
+    rules = lint_cv_text(cv_text)
+
     print(f"\n=== {slug} ===")
     print(f"PDF:     {pdf_path}")
     print(f"Pitch:   {fields.get('one_line_pitch')}")
@@ -103,6 +115,11 @@ def main(argv=None):
         print("Gaps honest:")
         for g in fields["gaps_honest"]:
             print(f"  - {g}")
+    for fix in rule_fixes:
+        print(f"CV rules fix: {fix}")
+    print(f"CV rules: {rules['bullets_with_result']} of {rules['bullets']} bullets carry a result")
+    for w in rules["warnings"]:
+        print(f"CV rules warning: {w}")
     if warnings:
         print("ATS warnings:")
         for w in warnings:

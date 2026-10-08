@@ -218,3 +218,35 @@ def test_score_formula():
     checks = [Check("a", FAIL), Check("b", WARN), Check("c", WARN), Check("d", INFO), Check("e", PASS)]
     assert score_checks(checks) == 100 - 15 - 10
     assert score_checks([Check(str(i), FAIL) for i in range(10)]) == 0
+
+
+def test_two_roles_at_one_employer_are_not_a_date_clash():
+    from cv_tailor.ats_sim import FileReport, cross_file_checks
+
+    def rep(path):
+        r = FileReport(path=path, kind="pdf")
+        r.text = "x"
+        r.contact = {"email": "a@example.com", "phone": "+1 555 0100", "name": "Alex Example"}
+        r.roles = [
+            {"company": "Fictco", "title": "Producer", "heading": "", "dates": "Aug 2024 – Present"},
+            {"company": "Fictco", "title": "Tester", "heading": "", "dates": "Oct 2019 – Jul 2020"},
+        ]
+        return r
+
+    checks = {c.name: c.status for c in cross_file_checks([rep("a.pdf"), rep("b.docx")])}
+    assert checks["cross-file: role dates"] == "PASS"
+
+
+def test_study_years_under_education_are_not_a_gap():
+    from cv_tailor.ats_sim import education_periods
+
+    text = "\n".join([
+        "Experience",
+        "Fictco | Producer",
+        "Sep 2022 – Present · Remote",
+        "Fictco | Tester",
+        "Oct 2016 – Jul 2017 · Remote",
+        "Education",
+        "BSc Example, Example University · Sep 2017 – May 2022",
+    ])
+    assert education_periods(text) == [((2017, 9), (2022, 5))]

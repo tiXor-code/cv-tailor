@@ -36,6 +36,18 @@ h1 {
   padding-bottom: 5pt;
 }
 
+.headline {
+  font-size: 11.5pt;
+  font-weight: 600;
+  margin: 0 0 3pt 0;
+}
+
+.company-line {
+  font-size: 9.5pt;
+  font-style: italic;
+  margin: 0 0 2pt 0;
+}
+
 .contact-line {
   font-size: 9pt;
   color: var(--muted);
@@ -144,3 +156,8 @@ article.project {
 body.ats .contact { border-bottom-width: 1pt; }
 body.ats li::marker { color: var(--ink); }
 body.ats strong { color: var(--ink); }
+
+/* Links never split across lines: a wrapped "linkedin.com/ in/x" is unreadable to parsers. */
+.contact-line a {
+  white-space: nowrap;
+}
