@@ -106,6 +106,21 @@ sources:
     pages: 2
     max_details: 80
     gap_seconds: 4.0
+  # StartupMap (startupmap.one, Teodor 2026-10-17): funded and
+  # accelerator-backed European startups only, so Gate 2 hints every posting
+  # as a startup. No key. One GET of its public jobs API per scan (~15,000
+  # listings, no descriptions); Scout keeps the remote ones first seen in the
+  # last `max_age_days`, drops internships and Sales/Legal/Finance/HR-only
+  # roles, and reads the description from the employer's own Ashby,
+  # Greenhouse, Lever or Workable posting (the newest `max_details`,
+  # `gap_seconds` apart; other hosts are skipped). Measured on the first live
+  # run, 2026-10-17: 14,946 listings -> 1,881 remote -> 197 first seen in 3
+  # days -> 130 in scope -> 101 on those four ATSs -> 60 looked up, all 60
+  # with a description, 27 past Gate 1 (21 of them new to Scout), in ~30 s.
+  - kind: startupmap
+    max_age_days: 3
+    max_details: 60
+    gap_seconds: 0.5
   # Adzuna. Needs ADZUNA_APP_ID + ADZUNA_APP_KEY in .env -- NEVER here; the
   # dispatch reads env only and every entry no-ops with a warning until set.
   # fetch_adzuna supports ten EU markets; four are configured below.

@@ -17,9 +17,10 @@ import urllib.error
 import urllib.request
 import json
 import xml.etree.ElementTree as ET
+from collections import Counter
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
-from urllib.parse import urlparse, quote_plus, unquote_plus
+from urllib.parse import urlparse, quote, quote_plus, unquote_plus
 
 from cv_tailor.gates import is_remote
 from cv_tailor.urlsafe import host_matches, safe_hostname
@@ -60,9 +61,33 @@ def _strip_html(html: str) -> str:
     return re.sub(r"\s+", " ", text).strip()
 
 
-def fetch_ashby_org(org_slug: str, display_name: str | None = None) -> list[JobPosting]:
-    """Fetch all open jobs for one Ashby-hosted org. Raises on network/HTTP errors."""
+def _ashby_pay_summary(compensation) -> str:
+    """One line of stated pay from an Ashby posting's `compensation` object, or "".
+
+    scrapeableCompensationSalarySummary is preferred because it is the
+    machine-readable spelling ("€70K - €90K"); compensationTierSummary uses an
+    en dash ("€70K – €90K • Offers Equity") that pay_check.extract_pay does
+    not read as a range."""
+    if not isinstance(compensation, dict):
+        return ""
+    for key in ("scrapeableCompensationSalarySummary", "compensationTierSummary"):
+        value = compensation.get(key)
+        if isinstance(value, str) and value.strip():
+            return re.sub(r"\s+", " ", value).strip()[:200]
+    return ""
+
+
+def fetch_ashby_org(org_slug: str, display_name: str | None = None, *,
+                    include_compensation: bool = False) -> list[JobPosting]:
+    """Fetch all open jobs for one Ashby-hosted org. Raises on network/HTTP errors.
+
+    `include_compensation` asks the posting API for pay data as well and adds
+    the posting's stated pay to the description as a "Compensation: ..."
+    sentence, because the pay check only ever reads description text. Off by
+    default, so existing callers get exactly the postings they always did."""
     url = f"https://api.ashbyhq.com/posting-api/job-board/{org_slug}"
+    if include_compensation:
+        url += "?includeCompensation=true"
     req = urllib.request.Request(url, headers={"Accept": "application/json", "User-Agent": "cv-tailor/0.1"})
     with urllib.request.urlopen(req, timeout=15) as resp:
         data = json.load(resp)
@@ -73,13 +98,17 @@ def fetch_ashby_org(org_slug: str, display_name: str | None = None) -> list[JobP
         secondaries = j.get("secondaryLocations") or []
         if secondaries:
             loc += " · " + ", ".join(s.get("location", "") for s in secondaries if isinstance(s, dict))
+        description = _strip_html(j.get("descriptionHtml", ""))
+        pay = _ashby_pay_summary(j.get("compensation")) if include_compensation else ""
+        if pay:
+            description = f"{description} Compensation: {pay}".strip()
         out.append(JobPosting(
             source="ashby",
             org=name,
             title=j.get("title") or "",
             location=loc,
             url=j.get("jobUrl") or "",
-            description=_strip_html(j.get("descriptionHtml", "")),
+            description=description,
             raw_id=j.get("id") or "",
         ))
     return out
@@ -1323,6 +1352,445 @@ def fetch_startupjobs(countries=_STARTUPJOBS_COUNTRIES, include_no_country: bool
     return out
 
 
+# --- StartupMap (Teodor, 2026-10-17) -----------------------------------------
+# startupmap.one maps European startups that are funded or accelerator-backed,
+# with their open roles. Its jobs page reads ONE public, keyless JSON endpoint
+# that returns every listing at once. Measured 2026-10-17 (one GET, 9.4 MB):
+#
+# * 14,946 listings from 1,629 startups, 1,881 of them remote. StartupMap
+#   re-scrapes nightly (first_seen_at clusters at 00:00-02:00 UTC), and 197
+#   remote listings had been first seen in the last 3 days.
+# * NO descriptions: title, countries, remote flags, categories, apply_url.
+#   Scout's gates and scorer need the posting text, so it is read from the
+#   employer's own ATS posting. Of the 1,881 remote apply_urls, 828 are Ashby,
+#   137 Greenhouse (116 on the EU host), 104 Workable and 91 Lever (3 EU). The
+#   rest (Teamtailor, Personio, Recruitee, career pages) are skipped.
+# * The `type` categories are reliable enough to filter on. All 666
+#   "Internship" listings are internships, apprenticeships or working-student
+#   roles, and 445 of them carry a second category too ("Internship" +
+#   "Engineering"), so Internship drops a listing on its own.
+# * boards-api.eu.greenhouse.io does not resolve. boards-api.greenhouse.io
+#   serves EU boards as well (its absolute_url points at
+#   job-boards.eu.greenhouse.io), so every Greenhouse posting is read there.
+_STARTUPMAP_URL = "https://startupmap.one/api/jobs"
+_STARTUPMAP_TIMEOUT_S = 60
+# Untrusted response sizes are bounded before they are parsed (SEC051): the
+# listing endpoint was 9.4 MB, a single ATS posting is a few KB.
+_STARTUPMAP_MAX_BYTES = 64 * 1024 * 1024
+_ATS_POSTING_MAX_BYTES = 4 * 1024 * 1024
+_ATS_POSTING_TIMEOUT_S = 20
+_STARTUPMAP_MAX_DETAILS_CEILING = 300      # bounds a sources.yaml typo
+_STARTUPMAP_MAX_AGE_CEILING_DAYS = 60
+_STARTUPMAP_MAX_GAP_S = 10.0
+# Off his track on their own (AI builder roles, not sales, legal, finance or
+# HR): a listing is dropped when EVERY category it carries is one of these...
+_STARTUPMAP_OFF_TRACK = frozenset({"sales", "legal", "finance", "people", "recruiting & hr"})
+# ...and whenever it carries this one at all (see the measurement above).
+_STARTUPMAP_VETO = "internship"
+_STARTUPMAP_HYBRID_OR_ONSITE = frozenset({"hybrid", "onsite", "on-site", "on_site"})
+_STARTUPMAP_COUNTRY_SUFFIX_RE = re.compile(r"_[a-z]{2}$")
+
+# An ATS org slug and job id lifted from an untrusted apply_url go into an API
+# request path, so each must look like a real one first ("neurons-lab.com",
+# "kraken.com" and "Deel" are real Ashby slugs). Nothing like "/", "%", "?"
+# or "#" can ride along, and the request host never comes from the URL.
+_ATS_SLUG_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,99}")
+_UUID_RE = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", re.I)
+_GREENHOUSE_ID_RE = re.compile(r"[0-9]{1,20}")
+_WORKABLE_SHORTCODE_RE = re.compile(r"[A-Za-z0-9]{4,20}")
+_GREENHOUSE_HOSTS = ("job-boards.greenhouse.io", "boards.greenhouse.io",
+                     "job-boards.eu.greenhouse.io", "boards.eu.greenhouse.io")
+_LEVER_API_HOSTS = {"jobs.lever.co": "api.lever.co", "jobs.eu.lever.co": "api.eu.lever.co"}
+
+
+class _NoPosting(Exception):
+    """A description lookup that reached the ATS and found nothing usable."""
+
+
+def _sm_text(value, width: int) -> str:
+    """An untrusted scalar as one line of at most `width` characters."""
+    if value is None or isinstance(value, (dict, list, tuple, set)):
+        return ""
+    return re.sub(r"\s+", " ", str(value)).strip()[:width]
+
+
+def _get_json_bounded(url: str, *, timeout: float, max_bytes: int):
+    """GET `url` as JSON with the board User-Agent. A body larger than
+    `max_bytes` is refused rather than read into memory, and so is one that a
+    redirect fetched off https (urllib follows redirects on its own; the plain
+    urlopen stays, because it is what every test patches to keep off the
+    network)."""
+    req = urllib.request.Request(
+        url, headers={"Accept": "application/json", "User-Agent": _BOARD_UA})
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        final = getattr(resp, "url", None)
+        if isinstance(final, str) and not final.startswith("https://"):
+            raise ValueError("redirected off https")
+        raw = resp.read(max_bytes + 1)
+    if len(raw) > max_bytes:
+        raise ValueError(f"response larger than {max_bytes} bytes")
+    return json.loads(raw)
+
+
+def _lookup_failure(exc: Exception) -> str:
+    """Short, log-safe reason for a failed request (no response text)."""
+    if isinstance(exc, urllib.error.HTTPError):
+        return f"HTTP {exc.code}"
+    return type(exc).__name__
+
+
+def _startupmap_when(value):
+    """first_seen_at as an aware UTC datetime, or None when absent/unparseable."""
+    if not isinstance(value, str) or not value.strip():
+        return None
+    try:
+        when = datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return when if when.tzinfo else when.replace(tzinfo=timezone.utc)
+
+
+def _startupmap_remote(row: dict) -> bool:
+    """Remote by StartupMap's own fields: workplace_type "remote", or is_remote
+    with no workplace_type saying otherwise. Three listings on 2026-10-17
+    carried is_remote with workplace_type hybrid/onsite; the explicit
+    workplace_type wins, because a hybrid role sent to him as remote is the
+    mistake that costs something (Teodor: "Hybrid, hard pass")."""
+    kind = _sm_text(row.get("workplace_type"), 20).lower()
+    if kind == "remote":
+        return True
+    return _flag(row.get("is_remote")) and kind not in _STARTUPMAP_HYBRID_OR_ONSITE
+
+
+def _startupmap_in_scope(categories) -> bool:
+    """False for an internship, or when every category is off his track. A
+    listing with no categories is kept: unknown is not out of scope."""
+    if isinstance(categories, str):
+        categories = [categories]
+    if not isinstance(categories, (list, tuple)):
+        categories = []
+    cats = {_sm_text(c, 60).lower() for c in categories} - {""}
+    if _STARTUPMAP_VETO in cats:
+        return False
+    return not cats or not (cats <= _STARTUPMAP_OFF_TRACK)
+
+
+def _startupmap_ats(apply_url: str):
+    """(ats, api_host, org, job_id) when `apply_url` is a posting on one of the
+    four ATSs whose public posting API this module reads, else None.
+
+    The host must be one of the exact hosts below as safe_hostname reports
+    it, so lookalikes (jobs.ashbyhq.com.evil.example) and backslash tricks
+    never match, and the request that follows goes to a fixed https API host
+    chosen here, never to the apply_url itself."""
+    if not apply_url.startswith("https://"):
+        return None
+    host = safe_hostname(apply_url)
+    parsed = urlparse(apply_url)
+    segs = [s for s in parsed.path.split("/") if s]
+    # netloc must be the bare host: no userinfo or port riding along into the
+    # apply target that /scout renders and the portal adapter opens.
+    if (not host or parsed.netloc.lower() != host or len(segs) < 2
+            or not _ATS_SLUG_RE.fullmatch(segs[0])):
+        return None
+    org = segs[0]
+    if host == "jobs.ashbyhq.com" and _UUID_RE.fullmatch(segs[1]):
+        return ("ashby", "api.ashbyhq.com", org, segs[1].lower())
+    if (host in _GREENHOUSE_HOSTS and len(segs) >= 3 and segs[1] == "jobs"
+            and _GREENHOUSE_ID_RE.fullmatch(segs[2])):
+        return ("greenhouse", "boards-api.greenhouse.io", org, segs[2])
+    if host in _LEVER_API_HOSTS and _UUID_RE.fullmatch(segs[1]):
+        return ("lever", _LEVER_API_HOSTS[host], org, segs[1].lower())
+    if (host == "apply.workable.com" and len(segs) >= 3 and segs[1] == "j"
+            and _WORKABLE_SHORTCODE_RE.fullmatch(segs[2])):
+        return ("workable", "apply.workable.com", org, segs[2])
+    return None
+
+
+def _startupmap_company(startup_id, text: str = "") -> str:
+    """Employer name for a listing whose ATS does not name the company.
+
+    startup_id is "<name>_<country code>" ("n8n_de", "tandem_health_se"); a
+    few ids carry no code ("leyden_labs") and keep every word. The company's
+    own spelling is then taken from its posting text when it appears there
+    ("ElevenLabs", "LemFi", "Protex AI"); otherwise the words are capitalised,
+    except names containing digits ("n8n"), which stay as they are."""
+    base = _STARTUPMAP_COUNTRY_SUFFIX_RE.sub("", _sm_text(startup_id, 80).lower())
+    words = [w for w in re.split(r"[_\s-]+", base) if w]
+    if not words:
+        return ""
+    name_re = re.compile(r"(?<![A-Za-z0-9])" + r"[\s_-]?".join(re.escape(w) for w in words)
+                         + r"(?![A-Za-z0-9])", re.I)
+    spellings = Counter(m.group(0) for m in name_re.finditer(text or "")
+                        if not m.group(0).islower())
+    if spellings:
+        return spellings.most_common(1)[0][0][:120]
+    return " ".join(w.capitalize() if w.isalpha() else w for w in words)[:120]
+
+
+def _startupmap_location(ats_location, row: dict) -> str:
+    """The ATS's own location when it gives one, else StartupMap's
+    location_display plus its country list. Then the "Remote - " prefix Gate 1
+    reads: every listing reaching here passed StartupMap's remote filter, so
+    the prefix reports the board's claim rather than inventing one."""
+    where = _sm_text(ats_location, _LOCATION_WIDTH)
+    if not where:
+        display = _sm_text(row.get("location_display"), 100)
+        countries = row.get("job_countries") if isinstance(row.get("job_countries"), list) else []
+        countries = [c for c in (_sm_text(c, 60) for c in countries)
+                     if c and c.lower() != display.lower()][:6]
+        if countries:
+            where = f"{display} ({', '.join(countries)})" if display else ", ".join(countries)
+        else:
+            where = display
+        where = where[:_LOCATION_WIDTH]
+    if re.search(r"\bremote\b", where, re.I):
+        return where
+    return f"Remote - {where}" if where else "Remote"
+
+
+def _plain(text) -> str:
+    return re.sub(r"\s+", " ", str(text or "")).strip()
+
+
+def _startupmap_from_ashby(org: str, job_id: str, boards: dict, gap: float) -> dict:
+    """One posting from its org's Ashby board. The board is fetched once per
+    org per run (the posting API has no single-job endpoint) and a failed
+    board fetch is remembered, so a dead org costs one request."""
+    key = org.lower()
+    board = boards.get(key)
+    if board is None:
+        time.sleep(gap)
+        try:
+            postings = fetch_ashby_org(org, include_compensation=True)
+        except Exception as exc:  # noqa: BLE001 -- recorded and re-reported per job
+            boards[key] = _lookup_failure(exc)
+            raise _NoPosting(boards[key]) from None
+        board = boards[key] = {(p.raw_id or "").lower(): p for p in postings}
+    if isinstance(board, str):
+        raise _NoPosting(board)
+    posting = board.get(job_id)
+    if posting is None:
+        raise _NoPosting("not on the board")
+    return {"org": "", "title": posting.title, "location": posting.location,
+            "description": posting.description}
+
+
+def _startupmap_from_greenhouse(api_host: str, org: str, job_id: str, gap: float) -> dict:
+    time.sleep(gap)
+    data = _get_json_bounded(
+        f"https://{api_host}/v1/boards/{quote(org)}/jobs/{job_id}?content=true",
+        timeout=_ATS_POSTING_TIMEOUT_S, max_bytes=_ATS_POSTING_MAX_BYTES)
+    if not isinstance(data, dict):
+        raise _NoPosting("unexpected payload")
+    loc = data.get("location")
+    return {"org": _sm_text(data.get("company_name"), 120),
+            "title": _sm_text(data.get("title"), 200),
+            "location": loc.get("name") if isinstance(loc, dict) else "",
+            # content is HTML-entity-encoded HTML: unescape, then strip
+            "description": _strip_html(html.unescape(str(data.get("content") or "")))}
+
+
+def _lever_salary(salary) -> str:
+    """Lever's structured salaryRange as a sentence the pay check can read."""
+    if not isinstance(salary, dict):
+        return ""
+    lo, hi = salary.get("min"), salary.get("max")
+    if not all(isinstance(v, (int, float)) and not isinstance(v, bool) for v in (lo, hi)):
+        return ""
+    lo, hi = (int(v) if float(v).is_integer() else v for v in (lo, hi))
+    return (f"Salary: {lo} - {hi} {_sm_text(salary.get('currency'), 8)} "
+            f"{_sm_text(salary.get('interval'), 30)}").strip()
+
+
+def _startupmap_from_lever(api_host: str, org: str, job_id: str, gap: float) -> dict:
+    time.sleep(gap)
+    data = _get_json_bounded(f"https://{api_host}/v0/postings/{quote(org)}/{job_id}",
+                             timeout=_ATS_POSTING_TIMEOUT_S, max_bytes=_ATS_POSTING_MAX_BYTES)
+    if not isinstance(data, dict):
+        raise _NoPosting("unexpected payload")
+    cats = data.get("categories") if isinstance(data.get("categories"), dict) else {}
+    places = cats.get("allLocations") if isinstance(cats.get("allLocations"), list) else []
+    where = ", ".join(p for p in (_sm_text(x, 80) for x in places) if p) \
+        or _sm_text(cats.get("location"), _LOCATION_WIDTH)
+    # The posting text is split across fields: the intro, the titled lists
+    # (responsibilities, requirements) and the closing section. Some postings
+    # leave descriptionPlain empty and say everything in additionalPlain.
+    parts = [_plain(data.get("descriptionPlain")) or _strip_html(str(data.get("description") or ""))]
+    for block in (data.get("lists") if isinstance(data.get("lists"), list) else []):
+        if isinstance(block, dict):
+            parts.append(f"{_sm_text(block.get('text'), 200)} "
+                         f"{_strip_html(str(block.get('content') or ''))}".strip())
+    parts.append(_plain(data.get("additionalPlain")) or _strip_html(str(data.get("additional") or "")))
+    parts.append(_sm_text(data.get("salaryDescriptionPlain"), 500))
+    parts.append(_lever_salary(data.get("salaryRange")))
+    return {"org": "", "title": _sm_text(data.get("text"), 200), "location": where,
+            "description": " ".join(p for p in parts if p)}
+
+
+def _workable_place(loc) -> str:
+    if not isinstance(loc, dict) or _flag(loc.get("hidden")):
+        return ""
+    return ", ".join(p for p in (_sm_text(loc.get("city"), 60), _sm_text(loc.get("country"), 60)) if p)
+
+
+def _startupmap_from_workable(org: str, shortcode: str, gap: float) -> dict:
+    time.sleep(gap)
+    data = _get_json_bounded(
+        f"https://apply.workable.com/api/v2/accounts/{quote(org)}/jobs/{shortcode}",
+        timeout=_ATS_POSTING_TIMEOUT_S, max_bytes=_ATS_POSTING_MAX_BYTES)
+    if not isinstance(data, dict):
+        raise _NoPosting("unexpected payload")
+    places: list[str] = []
+    for loc in (data.get("locations") if isinstance(data.get("locations"), list) else []):
+        place = _workable_place(loc)
+        if place and place not in places:
+            places.append(place)
+    if not places and _workable_place(data.get("location")):
+        places.append(_workable_place(data.get("location")))
+    return {"org": "", "title": _sm_text(data.get("title"), 200), "location": "; ".join(places),
+            "description": " ".join(
+                _strip_html(str(data.get(k) or "")) for k in ("description", "requirements", "benefits")
+            ).strip()}
+
+
+def fetch_startupmap(max_age_days: float = 3, max_details: int = 60,
+                     gap_seconds: float = 0.5) -> list[JobPosting]:
+    """Remote roles at the funded / accelerator-backed startups StartupMap lists.
+
+    One GET of the listing endpoint per call (see the measurements above).
+    A listing is kept when it is visible and remote, was first seen within
+    `max_age_days` (a listing with no first_seen_at is skipped), is not an
+    internship nor only Sales/Legal/Finance/People/Recruiting & HR, and its
+    apply_url is a posting on Ashby, Greenhouse, Lever or Workable. The newest
+    `max_details` of those get a description lookup on that ATS's public API,
+    `gap_seconds` apart; one whose description cannot be read is skipped.
+
+    The posting url is the apply_url itself, already the employer's ATS
+    posting, which is what the portal adapters drive. Never raises: a dead
+    endpoint warns and returns [], like every board above."""
+    try:
+        days, details, gap = float(max_age_days), int(max_details), float(gap_seconds)
+    except (TypeError, ValueError):
+        print(f"warning: startupmap: bad source config (max_age_days={max_age_days!r}, "
+              f"max_details={max_details!r}, gap_seconds={gap_seconds!r}); skipping",
+              file=sys.stderr)
+        return []
+    days = min(days, _STARTUPMAP_MAX_AGE_CEILING_DAYS) if days > 0 else 3.0   # also catches NaN
+    details = max(0, min(details, _STARTUPMAP_MAX_DETAILS_CEILING))
+    gap = min(gap, _STARTUPMAP_MAX_GAP_S) if gap >= 0 else 0.0
+
+    try:
+        rows = _get_json_bounded(_STARTUPMAP_URL, timeout=_STARTUPMAP_TIMEOUT_S,
+                                 max_bytes=_STARTUPMAP_MAX_BYTES)
+    except Exception as e:  # noqa: BLE001 -- one dead board never kills the scan
+        print(f"warning: startupmap fetch failed: {type(e).__name__}: {_sm_text(e, 200)}",
+              file=sys.stderr)
+        return []
+    if not isinstance(rows, list):
+        print(f"warning: startupmap answered with a {type(rows).__name__}, not a list of "
+              f"jobs; skipping", file=sys.stderr)
+        return []
+    try:
+        return _startupmap_postings(rows, days, details, gap)
+    except Exception as e:  # noqa: BLE001 -- same contract for a payload we cannot map
+        print(f"warning: startupmap mapping failed: {type(e).__name__}: {_sm_text(e, 200)}",
+              file=sys.stderr)
+        return []
+
+
+def _startupmap_postings(rows: list, days: float, details: int, gap: float) -> list[JobPosting]:
+    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+    remote = recent = in_scope = elsewhere = 0
+    candidates = []
+    for row in rows:
+        if not isinstance(row, dict) or not _flag(row.get("visible")) or not _startupmap_remote(row):
+            continue
+        remote += 1
+        seen_at = _startupmap_when(row.get("first_seen_at"))
+        if seen_at is None or seen_at < cutoff:
+            continue
+        recent += 1
+        if not _startupmap_in_scope(row.get("type")):
+            continue
+        in_scope += 1
+        url = row.get("apply_url")
+        url = url.strip() if isinstance(url, str) and len(url) <= 2000 else ""
+        ats = _startupmap_ats(url)
+        raw_id = _sm_text(row.get("jobs_id"), 300)
+        if ats is None or not raw_id:
+            elsewhere += 1
+            continue
+        candidates.append((seen_at, row, url, ats, raw_id))
+
+    # Newest first, so the lookup cap spends its requests on what is new today.
+    candidates.sort(key=lambda c: c[0], reverse=True)
+    picked, seen_ids, seen_urls = [], set(), set()
+    for cand in candidates:
+        if len(picked) >= details:
+            break
+        _, _, url, _, raw_id = cand
+        # The same posting can be listed under two startups (measured: one
+        # Lever posting under both oddin_cz and valkaai_cz).
+        if raw_id in seen_ids or url in seen_urls:
+            continue
+        seen_ids.add(raw_id)
+        seen_urls.add(url)
+        picked.append(cand)
+
+    boards: dict = {}
+    failures: Counter = Counter()
+    examples: list[str] = []
+    out: list[JobPosting] = []
+    for _, row, url, (ats, api_host, org, job_id), raw_id in picked:
+        try:
+            if ats == "ashby":
+                detail = _startupmap_from_ashby(org, job_id, boards, gap)
+            elif ats == "greenhouse":
+                detail = _startupmap_from_greenhouse(api_host, org, job_id, gap)
+            elif ats == "lever":
+                detail = _startupmap_from_lever(api_host, org, job_id, gap)
+            else:
+                detail = _startupmap_from_workable(org, job_id, gap)
+            description = _plain(detail.get("description"))[:_BOARD_TEXT_CAP]
+            if not description:
+                raise _NoPosting("empty description")
+        except Exception as e:  # noqa: BLE001 -- one bad posting never costs the rest
+            failures[str(e) if isinstance(e, _NoPosting) else _lookup_failure(e)] += 1
+            if len(examples) < 3:
+                examples.append(f"{ats}:{org}/{job_id}")
+            continue
+        title = _sm_text(detail.get("title"), 200) or _sm_text(row.get("job_title"), 200)
+        org_name = (_sm_text(detail.get("org"), 120)
+                    or _startupmap_company(row.get("startup_id"), f"{title} {description}"))
+        out.append(JobPosting(
+            source="startupmap", org=org_name or "Unknown", title=title,
+            location=_startupmap_location(detail.get("location"), row),
+            url=url, description=description, raw_id=raw_id,
+            apply_options=_apply_option_links([{"link": url, "title": "Apply"}]),
+        ))
+
+    print(f"startupmap: {len(rows)} listings -> {remote} remote -> {recent} first seen in "
+          f"the last {days:g}d -> {in_scope} in scope -> {len(candidates)} on "
+          f"Ashby/Greenhouse/Lever/Workable ({elsewhere} elsewhere, skipped) -> "
+          f"{len(picked)} looked up -> {len(out)} with a description", file=sys.stderr)
+    if failures:
+        why = ", ".join(f"{reason} x{n}" for reason, n in failures.most_common())
+        print(f"warning: startupmap: {sum(failures.values())} description lookup(s) failed "
+              f"({why}); e.g. {', '.join(examples)}", file=sys.stderr)
+    # An empty output is not evidence of an empty input (MEMORY.md).
+    if not rows:
+        print("warning: startupmap returned 0 listings (it had 14,946 on 2026-10-17); "
+              "treating as an outage, not an empty market", file=sys.stderr)
+    elif not remote:
+        print(f"warning: startupmap: none of {len(rows)} listings read as visible and "
+              f"remote -- the API's fields may have changed", file=sys.stderr)
+    if picked and not out:
+        print("warning: startupmap: every description lookup failed -- this is an outage, "
+              "not a quiet day", file=sys.stderr)
+    return out
+
+
 def fetch_all(sources: list[dict], serp_budget=None, jsearch_budget=None,
               apify_budget=None) -> list[JobPosting]:
     """sources = [{'kind': 'ashby'|'greenhouse'|'lever', 'slug': '...', 'name': '...'}, ...]
@@ -1366,6 +1834,10 @@ def fetch_all(sources: list[dict], serp_budget=None, jsearch_budget=None,
             roles=tuple(s.get("roles") or _STARTUPJOBS_ROLES),
             pages=s.get("pages", 2), max_details=s.get("max_details", 80),
             gap_seconds=s.get("gap_seconds", 4.0)),
+        "startupmap": lambda s: fetch_startupmap(
+            max_age_days=s.get("max_age_days", 3),
+            max_details=s.get("max_details", 60),
+            gap_seconds=s.get("gap_seconds", 0.5)),
         # No credentials read from `s` for either of the two below: a source
         # entry lives in the COMMITTED sources.yaml, so accepting app_id /
         # app_key / api_keys there at all would invite someone to put live

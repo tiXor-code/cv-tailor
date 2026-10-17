@@ -81,6 +81,10 @@ def classify_headcount(employees):
 
 # Boards/ATS used overwhelmingly by startups & scaleups.
 STARTUP_ATS = {"ashby", "greenhouse", "lever", "workable"}
+# Boards that list ONLY startups, by their own admission rule -- a stronger
+# claim than ATS provenance, so the hint says so. StartupMap (startupmap.one)
+# lists funded or accelerator-backed startups only.
+STARTUP_BOARDS = {"startupmap"}
 # Remote-job boards: startup-skewed but mixed; provenance is weaker (Phase 2 refines).
 REMOTE_BOARDS = {"remotive", "remoteok", "jobicy", "wwr", "himalayas"}
 # Enterprise HRIS — almost never SMB.
@@ -123,7 +127,7 @@ def is_smb(job, conn=None):
     src = (job.source or "").lower()
     if src in ENTERPRISE_HRIS:
         return False
-    if src in STARTUP_ATS or src in REMOTE_BOARDS:
+    if src in STARTUP_ATS or src in STARTUP_BOARDS or src in REMOTE_BOARDS:
         return True
     # Ambiguous (serpapi / unknown): use Hunter when a cache+conn is available.
     if conn is not None:
@@ -135,6 +139,8 @@ def is_smb(job, conn=None):
 
 def smb_hint(job, conn=None):
     src = (job.source or "").lower()
+    if src in STARTUP_BOARDS:
+        return "startup (funded or accelerator-backed, listed on StartupMap)"
     if src in STARTUP_ATS:
         return "startup/scaleup (startup ATS)"
     if src in REMOTE_BOARDS:
