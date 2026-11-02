@@ -335,6 +335,28 @@ def submit_rejected(page) -> bool:
         return False
 
 
+# Only the challenge dialog, never the widget or the always-present badge. A
+# solved or passive reCAPTCHA leaves these frames in the DOM with a hidden
+# wrapper, which is why captcha_challenge_open checks visibility.
+_CAPTCHA_CHALLENGE_SELECTOR = "iframe[src*='bframe'], iframe[title*='challenge' i]"
+CAPTCHA_CHALLENGE_REASON = "captcha"
+
+
+def captcha_challenge_open(page) -> bool:
+    """True when a CAPTCHA challenge is on screen after the submit click.
+
+    Run only once the confirmation wait has run out. A challenge still open at
+    that point means the form was never posted (live natter and Hostinger,
+    2026-10, no-confirmation.png), so "captcha" is the honest reason and its
+    pre-inserted ledger row gets rolled back. Never raises: a locator error
+    reads as "no challenge", which keeps the row, the safe direction."""
+    try:
+        frames = page.locator(_CAPTCHA_CHALLENGE_SELECTOR)
+        return any(frames.nth(i).is_visible() for i in range(frames.count()))
+    except PlaywrightError:
+        return False
+
+
 def capture_evidence(page, evidence_dir, stage: str) -> None:
     """Best-effort: write `<stage>.png` (full-page screenshot) and overwrite
     `form_state.json` with the current named-field name->value snapshot.

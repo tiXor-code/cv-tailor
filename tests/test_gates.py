@@ -293,6 +293,32 @@ def test_hand_coding_titles_without_ai_native_signal_are_dropped():
         assert passes_gate1_tracks(_job(title, REMOTE_EU, desc + " agentic"), TRACKS) is None, title
 
 
+def test_engineering_titles_he_does_not_do_are_dropped():
+    """Autopilot attempted all of these in 2026-10 because the title pattern
+    only knew software/backend/python and friends."""
+    desc = "Build our product. We use AI tools every day. agentic"
+    for title in ("Senior Fullstack Engineer", "Full-Stack Developer", "Full Stack Engineer",
+                  "Fullstack Engineer, AI Implementation", "Senior Web Engineer (React)",
+                  "Frontend Engineer", "Senior IT Engineer", "Senior Software/AI Engineer",
+                  "Tech Lead", "Head of Engineering", "AI Lead / Engineering Manager",
+                  "AI Engineering Lead"):
+        assert is_hand_coding_role(title, desc) is True, title
+
+
+def test_builder_and_ambiguous_titles_are_not_caught_by_the_wider_pattern():
+    desc = "Build AI workflows."
+    for title in ("AI Builder", "Agentic Product Engineer | AI Builder", "AI Engineer",
+                  "Forward Deployed Engineer", "Full Stack AI Engineer", "GTM Engineer",
+                  "Head of AI Ops", "AI Automation Specialist", "Solutions Engineer",
+                  "Audit Engineer", "Product Engineer"):
+        assert is_hand_coding_role(title, desc) is False, title
+
+
+def test_no_coding_statement_still_rescues_the_new_titles():
+    desc = "No coding background is required: you direct AI tools."
+    assert is_hand_coding_role("Fullstack Engineer, AI Implementation", desc) is False
+
+
 def test_ai_tool_mentions_do_not_rescue_a_hand_coding_title():
     # Real 2026 postings list Claude Code / Cursor as engineers' tooling.
     desc = ("Remote. Proficiency with AI-assisted development tools such as Cursor, "

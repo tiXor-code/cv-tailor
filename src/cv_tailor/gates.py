@@ -220,7 +220,13 @@ def requires_excluded_language(title: str, description: str) -> bool:
 _HAND_CODING_TITLE_RE = re.compile(
     r"\b(?:software|backend|back-end|python|java|golang|platform|infrastructure|devops|"
     r"ml|machine\s+learning|data)\s+(?:engineer|developer)\b|"
-    r"\bsoftware\s+development\s+engineer\b|\bsde\b",
+    r"\bsoftware\s+development\s+engineer\b|\bsde\b|"
+    # Attempted by autopilot in 2026-10 (natter, Qonto, Typeform, saas.group,
+    # eggai) because this pattern stopped at the titles above. "Full Stack AI
+    # Engineer" stays ambiguous: the AI between the words keeps it out.
+    r"\b(?:full[- ]?stack|front[- ]?end|web|it)\s+(?:engineer|developer)\b|"
+    r"\bsoftware\s*/\s*ai\s+engineer\b|\btech(?:nical)?\s+lead\b|"
+    r"\bhead\s+of\s+engineering\b|\bengineering\s+(?:manager|lead)\b",
     re.I)
 _NO_CODING_NEEDED_RE = re.compile(
     r"not\s+a\s+traditional\s+(?:coding|engineering|developer|software)\s+role|"

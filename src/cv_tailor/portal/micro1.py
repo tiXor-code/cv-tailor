@@ -126,6 +126,8 @@ from cv_tailor.portal.base import (
     verify_file_attached,
     verify_filled,
     screening_context,
+    CAPTCHA_CHALLENGE_REASON,
+    captcha_challenge_open,
     submit_rejected,
     SUBMIT_REJECTED_REASON,
 )
@@ -462,6 +464,10 @@ class Micro1Adapter(PortalAdapter):
         if submit_rejected(page):
             capture_evidence(page, evidence_dir, "submit-rejected")
             return PortalResult(status="needs_human", reason=SUBMIT_REJECTED_REASON,
+                                 evidence_dir=str(evidence_dir))
+        if captcha_challenge_open(page):
+            capture_evidence(page, evidence_dir, "captcha")
+            return PortalResult(status="needs_human", reason=CAPTCHA_CHALLENGE_REASON,
                                  evidence_dir=str(evidence_dir))
 
         capture_evidence(page, evidence_dir, "no-confirmation")

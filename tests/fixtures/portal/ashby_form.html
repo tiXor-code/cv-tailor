@@ -74,6 +74,13 @@
     banner and the run can only time out. Exercises the explicit-refusal
     classification: the portal SAYS nothing was sent, so the result must
     prove no submission (and must never retry the submit).
+  - ?variant=captchachallenge -- on submit an image challenge opens and stays
+    open, so nothing is posted (live natter and Hostinger evidence, 2026-10,
+    no-confirmation.png). Modelled as reCAPTCHA renders it: a visible bframe
+    iframe over a form that is still there.
+  - ?variant=captchaidle -- on submit the same bframe exists but its wrapper is
+    visibility:hidden, as reCAPTCHA leaves it when no challenge is showing.
+    Proves nothing, so the result must stay the ambiguous no-confirmation.
   - ?variant=formidmismatch -- the form element's id is renamed away from
     "application-form" (the adapter's id, copied from one real posting and
     never verified against every board config) right after the script
@@ -620,6 +627,19 @@
       done.id = "alt-confirmation";
       done.textContent = "All set on our end.";
       formPanelEl.appendChild(done);
+    });
+  } else if (variant === "captchachallenge" || variant === "captchaidle") {
+    appForm.addEventListener("submit", function (ev) {
+      ev.preventDefault();
+      var wrap = document.createElement("div");
+      wrap.style.visibility = variant === "captchaidle" ? "hidden" : "visible";
+      var frame = document.createElement("iframe");
+      frame.src = "about:blank#recaptcha/api2/bframe";
+      frame.title = "recaptcha challenge expires in two minutes";
+      frame.width = "400";
+      frame.height = "580";
+      wrap.appendChild(frame);
+      document.body.appendChild(wrap);
     });
   } else if (variant === "spamrejected") {
     // Live RobCo evidence (2026-09-16): the submit is REFUSED -- the form is

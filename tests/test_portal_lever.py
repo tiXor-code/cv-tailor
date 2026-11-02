@@ -340,6 +340,9 @@ class _FakeSubmitLocator:
     def click(self):
         self.clicked = True
 
+    def count(self):
+        return 0
+
 
 class _FakeTextLocator:
     """Stands in for page.get_by_text(...). Reports no match by default, so

@@ -462,6 +462,43 @@ def test_apply_armed_explicit_refusal_proves_nothing_was_submitted(
     assert not result.reason.startswith("no-confirmation")
 
 
+def test_apply_armed_open_captcha_challenge_proves_nothing_was_submitted(
+        chromium_page, package, monkeypatch):
+    """Live natter and Hostinger 2026-10: Submit opened an image challenge that
+    nobody could solve, and the run reported the ambiguous no-confirmation. Its
+    ledger row survived, so the job read as applied for an application that was
+    never posted. An open challenge at the end of the wait is proof, so the
+    reason must be one that rolls the row back."""
+    from cv_tailor.apply_policy import proves_no_submission
+
+    monkeypatch.setattr(ashby, "CONFIRMATION_TIMEOUT_MS", 500)
+    with serve_fixtures() as base_url:
+        _goto(chromium_page, base_url, variant="captchachallenge")
+        result = AshbyAdapter().apply(chromium_page, {"id": "job-1"}, package, _PROFILE, _ANSWERS,
+                                      dry_run=False)
+
+    assert result.status == "needs_human"
+    assert result.reason == "captcha"
+    assert proves_no_submission(result.reason)
+
+
+def test_apply_armed_hidden_captcha_frame_stays_ambiguous(chromium_page, package, monkeypatch):
+    """reCAPTCHA leaves its bframe in the DOM, hidden, when no challenge shows.
+    That proves nothing, so the row must be kept: deleting it could let a
+    duplicate application go out for a submit that really landed."""
+    from cv_tailor.apply_policy import proves_no_submission
+
+    monkeypatch.setattr(ashby, "CONFIRMATION_TIMEOUT_MS", 500)
+    with serve_fixtures() as base_url:
+        _goto(chromium_page, base_url, variant="captchaidle")
+        result = AshbyAdapter().apply(chromium_page, {"id": "job-1"}, package, _PROFILE, _ANSWERS,
+                                      dry_run=False)
+
+    assert result.status == "needs_human"
+    assert result.reason.startswith("no-confirmation")
+    assert not proves_no_submission(result.reason)
+
+
 def test_apply_armed_form_id_mismatch_never_false_reports_submitted(chromium_page, package, monkeypatch):
     """Phase C fix: signal 3 (form-vanish) assumed #application-form is the
     real Ashby id, never verified against a live posting. If the real id
